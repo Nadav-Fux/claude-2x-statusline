@@ -36,8 +36,8 @@ BG_GRAY = "\033[48;5;236m"
 # ══════════════════════════════════════════════════════════════════════════════
 TIER_PRESETS = {
     "minimal": ["promo_2x", "git_branch", "git_dirty"],
-    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
-    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
+    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost"],
+    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost"],
 }
 
 DEFAULT_CONFIG = {
@@ -208,7 +208,7 @@ def seg_promo_2x(ctx):
         else:
             bg = BG_RED
         wknd = f" {DIM}weekend{RST}" if reason == "weekend" else ""
-        return f"{bg} \u26a1 2x {RST} {WHITE}{t} left{RST}{wknd}"
+        return f"{bg} 2x ACTIVE {RST} {WHITE}{t} left{RST}{wknd}"
     else:
         t = fmt_duration(mins_until)
         return f"{BG_GRAY} PEAK {RST} {DIM}\u2192 2x in {t}{RST}"
@@ -223,6 +223,13 @@ def seg_model(ctx):
     return f"{BLUE}{short}{RST}"
 
 
+def _fmt_tokens(n):
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n // 1_000}K"
+    return str(n)
+
 def seg_context(ctx):
     cw = ctx["stdin"].get("context_window", {})
     size = cw.get("context_window_size", 0)
@@ -236,7 +243,7 @@ def seg_context(ctx):
     )
     pct = current * 100 // size if size > 0 else 0
     color = color_for_pct(pct)
-    return f"{DIM}ctx{RST} {color}{pct}%{RST}"
+    return f"{color}{_fmt_tokens(current)}/{_fmt_tokens(size)}{RST} {color}{pct}%{RST}"
 
 
 def seg_git_branch(ctx):
