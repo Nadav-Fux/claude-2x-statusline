@@ -478,7 +478,7 @@ def build_rate_limits_line(ctx):
     sd_time = _format_reset(sd_reset, "date")
 
     arrow = f" {GREEN}\u25b8{RST} "
-    current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}current{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
+    current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}5h{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}weekly{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST}{frozen} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
 
     return f"{current} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
