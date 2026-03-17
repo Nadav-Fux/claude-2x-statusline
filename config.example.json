@@ -1,0 +1,24 @@
+{
+  "tier": "standard",
+  "segments": {
+    "time": true,
+    "promo_2x": true,
+    "model": true,
+    "context": true,
+    "git_branch": true,
+    "git_dirty": true,
+    "git_ahead_behind": false,
+    "cost": false,
+    "duration": false,
+    "lines": false,
+    "ts_errors": false,
+    "rate_limits": false
+  },
+  "timezone": "auto",
+  "promo_start": 20260313,
+  "promo_end": 20260327,
+  "separator": " │ ",
+  "mode": "minimal",
+  "full_mode_rate_limits": true,
+  "full_mode_timeline": true
+}
