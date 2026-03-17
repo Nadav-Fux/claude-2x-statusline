@@ -26,7 +26,7 @@ BLUE = "\033[34m"
 MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 WHITE = "\033[38;2;220;220;220m"
-BG_GREEN = "\033[38;5;16;48;5;46m"
+BG_GREEN = "\033[38;5;16;48;5;35m"
 BG_YELLOW = "\033[38;5;16;48;5;220m"
 BG_RED = "\033[38;5;255;48;5;124m"
 BG_GRAY = "\033[48;5;236m"
@@ -35,9 +35,9 @@ BG_GRAY = "\033[48;5;236m"
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
 TIER_PRESETS = {
-    "minimal": ["time", "promo_2x", "git_branch", "git_dirty"],
-    "standard": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
-    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration", "rate_limits"],
+    "minimal": ["promo_2x", "git_branch", "git_dirty"],
+    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
+    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration", "rate_limits"],
 }
 
 DEFAULT_CONFIG = {
@@ -208,7 +208,7 @@ def seg_promo_2x(ctx):
         else:
             bg = BG_RED
         wknd = f" {DIM}weekend{RST}" if reason == "weekend" else ""
-        return f"{bg} \u26a1 2x {RST} {DIM}{t} left{RST}{wknd}"
+        return f"{bg} \u26a1 2x {RST} {WHITE}{t} left{RST}{wknd}"
     else:
         t = fmt_duration(mins_until)
         return f"{BG_GRAY} PEAK {RST} {DIM}\u2192 2x in {t}{RST}"
