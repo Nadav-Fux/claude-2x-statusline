@@ -8,7 +8,7 @@ A minimal, Israel-timezone status line for **Claude Code** that shows when the d
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-compatible-blueviolet?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMkM2LjQ4IDIgMiA2LjQ4IDIgMTJzNC40OCAxMCAxMCAxMCAxMC00LjQ4IDEwLTEwUzE3LjUyIDIgMTIgMnoiIGZpbGw9IiNmZmYiLz48L3N2Zz4=)](https://claude.ai)
-[![Shell](https://img.shields.io/badge/Shell-bash%20%2B%20python3-green)](#requirements)
+[![Cross-platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#requirements)
 
 ---
 
@@ -73,7 +73,7 @@ Here's what it looks like in your Claude Code terminal:
  └──────────────────────────────────────────────────────────┘
 ```
 
-Pure Python, zero dependencies. Calculates Israel timezone from UTC (handles DST), checks the current promotion window, and outputs a single ANSI-colored line.
+Pure Python (bash/Linux/macOS) or PowerShell (Windows), zero external dependencies. Calculates Israel timezone from UTC (handles DST), checks the current promotion window, and outputs a single ANSI-colored line.
 
 | Color | Meaning | Time left |
 |:-----:|---------|-----------|
@@ -94,28 +94,22 @@ Based on the [Claude March 2026 promotion](https://support.claude.com/en/article
 | Weekdays peak | 1X | 14:00–20:00 |
 | Weekends | **2X** | Friday 9:00 → Monday 9:00 |
 
-**Active: March 13–27, 2026.** Edit `PROMO_START` / `PROMO_END` in `statusline.sh` for future promotions.
+**Active: March 13–27, 2026.** Edit `PROMO_START` / `PROMO_END` in the script for future promotions.
 
 ---
 
 ## Install
 
-### One-liner
+### macOS / Linux
 
+**One-liner:**
 ```bash
 git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline \
   && bash ~/.claude/cc-2x-statusline/install.sh
 ```
 
-### Manual
-
-1. Copy `statusline.sh` to `~/.claude/bin/`:
-```bash
-mkdir -p ~/.claude/bin
-cp statusline.sh ~/.claude/bin/statusline.sh
-chmod +x ~/.claude/bin/statusline.sh
-```
-
+**Manual:**
+1. Copy `statusline.sh` to `~/.claude/bin/`
 2. Add to `~/.claude/settings.json`:
 ```json
 {
@@ -125,15 +119,41 @@ chmod +x ~/.claude/bin/statusline.sh
   }
 }
 ```
+3. Restart Claude Code.
 
+### Windows (PowerShell)
+
+**One-liner:**
+```powershell
+irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
+```
+
+**Manual:**
+1. Copy `statusline.ps1` to `~\.claude\bin\`
+2. Add to `~\.claude\settings.json`:
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.claude\\bin\\statusline.ps1\""
+  }
+}
+```
 3. Restart Claude Code.
 
 ---
 
 ## Uninstall
 
+**macOS / Linux:**
 ```bash
 bash ~/.claude/cc-2x-statusline/uninstall.sh
+```
+
+**Windows:**
+```powershell
+Remove-Item "$env:USERPROFILE\.claude\bin\statusline.ps1" -Force
+# Then remove the statusLine entry from settings.json
 ```
 
 ---
@@ -142,7 +162,7 @@ bash ~/.claude/cc-2x-statusline/uninstall.sh
 
 | What | Where | Example |
 |------|-------|---------|
-| Timezone | `il_offset` in statusline.sh | Change to `1` for CET |
+| Timezone | `il_offset` in script | Change to `1` for CET |
 | Promo dates | `PROMO_START` / `PROMO_END` | `20260401` for April promo |
 | Peak hours | `peak_start` / `peak_end` (UTC) | `14` / `20` for different window |
 
@@ -150,9 +170,14 @@ bash ~/.claude/cc-2x-statusline/uninstall.sh
 
 ## Requirements
 
-- macOS or Linux
+**macOS / Linux:**
 - `python3` (no external packages)
 - Claude Code with status line support
+
+**Windows:**
+- PowerShell 5.1+ (built-in on Windows 10/11)
+- Claude Code with status line support
+- No Python needed!
 
 ---
 
