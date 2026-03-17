@@ -26,7 +26,7 @@ BLUE = "\033[34m"
 MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 WHITE = "\033[38;2;220;220;220m"
-BG_GREEN = "\033[38;5;255;48;5;22m"
+BG_GREEN = "\033[38;5;255;48;5;28m"
 BG_YELLOW = "\033[38;5;16;48;5;220m"
 BG_RED = "\033[38;5;255;48;5;124m"
 BG_GRAY = "\033[48;5;236m"
@@ -442,9 +442,7 @@ def build_timeline(ctx):
     if is_weekend:
         return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x all day{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
 
-    ps = f"{peak_start}:00"
-    pe = f"{peak_end}:00"
-    return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x{RST} {YELLOW}\u2501{RST}{DIM} 1x {ps}-{pe}{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
+    return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x{RST} {YELLOW}\u2501{RST}{DIM} 1x{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
 
 
 def build_rate_limits_line(ctx):
