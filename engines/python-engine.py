@@ -236,7 +236,7 @@ def seg_context(ctx):
     )
     pct = current * 100 // size if size > 0 else 0
     color = color_for_pct(pct)
-    return f"{color}{pct}%{RST}"
+    return f"{DIM}ctx{RST} {color}{pct}%{RST}"
 
 
 def seg_git_branch(ctx):
