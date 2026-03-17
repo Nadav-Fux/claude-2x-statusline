@@ -259,11 +259,30 @@ def seg_git_branch(ctx):
 
 
 def seg_git_dirty(ctx):
+    # Count files changed since last push to remote
+    branch = ctx.get("git_branch", "")
+
+    # Uncommitted changes
     porcelain = git_cmd("status", "--porcelain")
-    if not porcelain:
+    uncommitted = len(porcelain.splitlines()) if porcelain else 0
+
+    # Unpushed commits
+    unpushed = 0
+    if branch:
+        ahead = git_cmd("rev-list", "--count", "@{u}..HEAD")
+        if ahead and ahead != "0":
+            unpushed = int(ahead)
+
+    if not uncommitted and not unpushed:
         return ""
-    count = len(porcelain.splitlines())
-    return f"{YELLOW}~{count}{RST}"
+
+    total = uncommitted + unpushed
+    if uncommitted and unpushed:
+        return f"{YELLOW}{uncommitted} changed, {unpushed} unpushed{RST}"
+    elif uncommitted:
+        return f"{YELLOW}{uncommitted} unsaved{RST}"
+    else:
+        return f"{YELLOW}{unpushed} unpushed{RST}"
 
 
 def seg_git_ahead_behind(ctx):
