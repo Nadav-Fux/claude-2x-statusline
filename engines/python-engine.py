@@ -199,6 +199,10 @@ def seg_promo_2x(ctx):
     ctx["peak_start_local"] = peak_start
     ctx["peak_end_local"] = peak_end
 
+    # Days remaining in promo
+    days_left = (promo_end - il_date)
+    days_tag = f" {DIM}{days_left}d left{RST}" if days_left <= 14 else ""
+
     if doubled:
         t = fmt_duration(mins_left)
         if mins_left > 180:
@@ -208,10 +212,10 @@ def seg_promo_2x(ctx):
         else:
             bg = BG_RED
         wknd = f" {DIM}weekend{RST}" if reason == "weekend" else ""
-        return f"{bg} 2x ACTIVE {RST} {WHITE}{t} left{RST}{wknd}"
+        return f"{bg} 2x ACTIVE {RST} {WHITE}{t} left{RST}{wknd}{days_tag}"
     else:
         t = fmt_duration(mins_until)
-        return f"{BG_GRAY} PEAK {RST} {DIM}\u2192 2x in {t}{RST}"
+        return f"{BG_GRAY} PEAK {RST} {DIM}\u2192 2x in {t}{RST}{days_tag}"
 
 
 def seg_model(ctx):
