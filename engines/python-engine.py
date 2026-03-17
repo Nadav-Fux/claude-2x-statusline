@@ -37,7 +37,7 @@ BG_GRAY = "\033[48;5;236m"
 TIER_PRESETS = {
     "minimal": ["promo_2x", "git_branch", "git_dirty"],
     "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
-    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration", "rate_limits"],
+    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
 }
 
 DEFAULT_CONFIG = {
@@ -539,9 +539,10 @@ def main():
     }
 
     enabled = get_enabled_segments(config)
-    # In full mode, ensure rate_limits is enabled
-    if mode == "full" and "rate_limits" not in enabled:
-        enabled = list(enabled) + ["rate_limits"]
+
+    # In full mode, fetch rate limits data (for line 3) but don't show in line 1
+    if mode == "full":
+        seg_rate_limits(ctx)  # populates ctx["usage_data"]
 
     # Flow design: colored arrows as separators
     is_2x = ctx.get("is_2x", False)
