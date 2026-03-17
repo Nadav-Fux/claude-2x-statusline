@@ -37,7 +37,7 @@ BG_GRAY = "\033[48;5;236m"
 TIER_PRESETS = {
     "minimal": ["time", "promo_2x", "git_branch", "git_dirty"],
     "standard": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
-    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "git_ahead_behind", "cost", "duration", "lines", "rate_limits"],
+    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration", "rate_limits"],
 }
 
 DEFAULT_CONFIG = {
@@ -218,7 +218,9 @@ def seg_model(ctx):
     name = ctx["stdin"].get("model", {}).get("display_name", "")
     if not name:
         return ""
-    return f"{BLUE}{name}{RST}"
+    # Shorten: "Opus 4.6 (1M context)" -> "Opus 4.6"
+    short = name.split("(")[0].strip()
+    return f"{BLUE}{short}{RST}"
 
 
 def seg_context(ctx):
@@ -273,7 +275,7 @@ def seg_cost(ctx):
     cost = ctx["stdin"].get("cost", {}).get("total_cost_usd")
     if cost is None:
         return ""
-    return f"{MAGENTA}${cost:.3f}{RST}"
+    return f"{MAGENTA}${cost:.1f}{RST}"
 
 
 def seg_duration(ctx):
