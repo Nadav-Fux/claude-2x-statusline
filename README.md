@@ -181,13 +181,6 @@ Remove-Item "$env:USERPROFILE\.claude\bin\statusline.ps1" -Force
 
 ---
 
-## Credits
-
-- Inspired by [cc-promotion-statusline](https://github.com/alonw0/cc-promotion-statusline) by **Alon Wolenitz** — a feature-rich 2-line statusline with model info, context bar, cost tracking, and more
-- Promotion data from [isclaude2x.com](https://isclaude2x.com/) by **Mehul Mohan**
-
----
-
 <div align="center">
 
 **Made with Claude Code** | [MIT License](LICENSE)

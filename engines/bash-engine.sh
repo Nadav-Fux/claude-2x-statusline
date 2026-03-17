@@ -60,12 +60,12 @@ else
         elif [ "$mins_left" -gt 60 ]; then bg="$BG_YELLOW"
         else bg="$BG_RED"; fi
 
-        status="${bg}${BOLD} 2x ACTIVE ${RST} ${bg} ${t} left ${RST}"
+        status="${bg} ⚡ 2x ${RST} ${DIM}${t} left${RST}"
     else
         mins_until=$(( peak_e - now_mins ))
         h=$(( mins_until / 60 )); m=$(( mins_until % 60 ))
         [ "$h" -gt 0 ] && t="${h}h $(printf '%02d' $m)m" || t="${m}m"
-        status="${DIM}${BG_GRAY} PEAK ${RST} ${CYAN}2x returns in ${t}${RST}"
+        status="${BG_GRAY} PEAK ${RST} ${DIM}→ 2x in ${t}${RST}"
     fi
 fi
 
@@ -78,4 +78,6 @@ if [ -n "$branch" ]; then
     [ "$dirty" -gt 0 ] && gitinfo+="${DIM} +${dirty}${RST}"
 fi
 
-printf "${DIM}${il_time}${RST} ${status}${gitinfo}"
+WHITE='\033[38;2;220;220;220m'
+arrow='\033[33m▸\033[0m'
+printf "${WHITE}${BOLD}${il_time}${RST} ${arrow} ${status} ${arrow} ${gitinfo}"

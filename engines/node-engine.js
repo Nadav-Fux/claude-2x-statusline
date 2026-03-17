@@ -14,6 +14,7 @@ const path = require('path');
 const RST = '\x1b[0m', BOLD = '\x1b[1m', DIM = '\x1b[2m';
 const RED = '\x1b[31m', GREEN = '\x1b[32m', YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m', MAGENTA = '\x1b[35m', CYAN = '\x1b[36m';
+const WHITE = '\x1b[38;2;220;220;220m';
 const BG_GREEN = '\x1b[38;5;16;48;5;46m';
 const BG_YELLOW = '\x1b[38;5;16;48;5;220m';
 const BG_RED = '\x1b[38;5;255;48;5;124m';
@@ -56,7 +57,7 @@ const SEGMENTS = {
   time(ctx) {
     const h = String(ctx.il.getUTCHours()).padStart(2,'0');
     const m = String(ctx.il.getUTCMinutes()).padStart(2,'0');
-    return `${DIM}${h}:${m}${RST}`;
+    return `${WHITE}${BOLD}${h}:${m}${RST}`;
   },
   promo_2x(ctx) {
     const { il, offset, config } = ctx;
@@ -84,9 +85,9 @@ const SEGMENTS = {
       const t = fmtDur(minsLeft);
       const bg = minsLeft > 180 ? BG_GREEN : minsLeft > 60 ? BG_YELLOW : BG_RED;
       const wk = reason === 'weekend' ? ` ${DIM}weekend${RST}` : '';
-      return `${bg}${BOLD} 2x ACTIVE ${RST} ${bg} ${t} left ${RST}${wk}`;
+      return `${bg} \u26a1 2x ${RST} ${DIM}${t} left${RST}${wk}`;
     }
-    return `${DIM}${BG_GRAY} PEAK ${RST} ${CYAN}2x returns in ${fmtDur(minsUntil)}${RST}`;
+    return `${BG_GRAY} PEAK ${RST} ${DIM}\u2192 2x in ${fmtDur(minsUntil)}${RST}`;
   },
   model(ctx) {
     const n = (ctx.stdin.model || {}).display_name || '';
@@ -102,7 +103,7 @@ const SEGMENTS = {
     return `${colorPct(pct)}${pct}%${RST}`;
   },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
-  git_dirty(ctx) { const p = git('status','--porcelain'); if (!p) return ''; const c = p.split('\n').filter(Boolean).length; return `${DIM}+${c}${RST}`; },
+  git_dirty(ctx) { const p = git('status','--porcelain'); if (!p) return ''; const c = p.split('\n').filter(Boolean).length; return `${YELLOW}~${c}${RST}`; },
   cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(3)}${RST}` : ''; },
   duration(ctx) { const ms = (ctx.stdin.cost || {}).total_duration_ms; if (!ms) return ''; return `${BLUE}${fmtSecs(Math.floor(ms/1000))}${RST}`; },
   lines(ctx) { const a = (ctx.stdin.cost||{}).total_lines_added||0, r = (ctx.stdin.cost||{}).total_lines_removed||0; return (a||r) ? `${GREEN}+${a}${RST}/${RED}-${r}${RST}` : ''; },
@@ -120,8 +121,9 @@ function main() {
   const { il, offset } = getIsraelTime();
   const ctx = { config, stdin, il, offset, is2x: false };
   const enabled = getEnabled(config);
-  const sep = config.separator || ' │ ';
-  const dimSep = `${DIM}${sep}${RST}`;
+  const is2x = ctx.is2x;
+  const arrowColor = is2x ? GREEN : YELLOW;
+  const arrow = ` ${arrowColor}\u25b8${RST} `;
 
   const parts = [];
   const gitParts = [];
@@ -135,7 +137,7 @@ function main() {
   }
   if (gitParts.length) parts.push(gitParts.join(' '));
 
-  process.stdout.write(parts.join(dimSep));
+  process.stdout.write(parts.join(arrow));
 }
 
 main();

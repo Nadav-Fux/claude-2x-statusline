@@ -121,7 +121,9 @@ def build_usage_bar(pct, width=10):
     filled = pct * width // 100
     empty = width - filled
     color = color_for_pct(pct)
-    return f"{color}{'●' * filled}{DIM}{'○' * empty}{RST}"
+    filled_chars = "\u25b0" * filled
+    empty_chars = "\u25b1" * empty
+    return f"{color}{filled_chars}{DIM}{empty_chars}{RST}"
 
 
 def git_cmd(*args, timeout=2):
@@ -153,7 +155,7 @@ def get_israel_time():
 
 def seg_time(ctx):
     il = ctx["il_time"]
-    return f"{DIM}{il.strftime('%H:%M')}{RST}"
+    return f"{WHITE}{BOLD}{il.strftime('%H:%M')}{RST}"
 
 
 def seg_promo_2x(ctx):
@@ -206,10 +208,10 @@ def seg_promo_2x(ctx):
         else:
             bg = BG_RED
         wknd = f" {DIM}weekend{RST}" if reason == "weekend" else ""
-        return f"{bg}{BOLD} 2x ACTIVE {RST} {bg} {t} left {RST}{wknd}"
+        return f"{bg} \u26a1 2x {RST} {DIM}{t} left{RST}{wknd}"
     else:
         t = fmt_duration(mins_until)
-        return f"{DIM}{BG_GRAY} PEAK {RST} {CYAN}2x returns in {t}{RST}"
+        return f"{BG_GRAY} PEAK {RST} {DIM}\u2192 2x in {t}{RST}"
 
 
 def seg_model(ctx):
@@ -248,7 +250,7 @@ def seg_git_dirty(ctx):
     if not porcelain:
         return ""
     count = len(porcelain.splitlines())
-    return f"{DIM}+{count}{RST}"
+    return f"{YELLOW}~{count}{RST}"
 
 
 def seg_git_ahead_behind(ctx):
@@ -436,11 +438,11 @@ def build_timeline(ctx):
             bar += f"{YELLOW}━{RST}"
 
     if is_weekend:
-        return f"{DIM}today{RST}  {bar}  {GREEN}━{RST}{DIM} 2x all day{RST}  {WHITE}{BOLD}●{RST}{DIM} now{RST}"
+        return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x all day{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
 
     ps = f"{peak_start}:00"
     pe = f"{peak_end}:00"
-    return f"{DIM}today{RST}  {bar}  {GREEN}━{RST}{DIM} 2x{RST} {YELLOW}━{RST}{DIM} 1x {ps}-{pe}{RST}  {WHITE}{BOLD}●{RST}{DIM} now{RST}"
+    return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x{RST} {YELLOW}\u2501{RST}{DIM} 1x {ps}-{pe}{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
 
 
 def build_rate_limits_line(ctx):
@@ -468,11 +470,11 @@ def build_rate_limits_line(ctx):
     fh_time = _format_reset(fh_reset, "time")
     sd_time = _format_reset(sd_reset, "date")
 
-    sep = f" {DIM}│{RST} "
-    current = f"{WHITE}current{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}⟳{RST} {WHITE}{fh_time}{RST}"
-    weekly = f"{WHITE}weekly{RST}  {sd_bar} {sd_color}{sd_pct:3d}%{RST}{frozen} {DIM}⟳{RST} {WHITE}{sd_time}{RST}"
+    arrow = f" {GREEN}\u25b8{RST} "
+    current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}current{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
+    weekly = f"{WHITE}weekly{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST}{frozen} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
 
-    return f"{current}{sep}{weekly}"
+    return f"{current} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
 
 
 def _format_reset(iso_str, style="time"):
@@ -541,8 +543,10 @@ def main():
     if mode == "full" and "rate_limits" not in enabled:
         enabled = list(enabled) + ["rate_limits"]
 
-    sep = config.get("separator", " │ ")
-    dim_sep = f"{DIM}{sep}{RST}"
+    # Flow design: colored arrows as separators
+    is_2x = ctx.get("is_2x", False)
+    arrow_color = GREEN if is_2x else YELLOW
+    arrow = f" {arrow_color}\u25b8{RST} "
 
     # Build line 1 — merge git_branch + git_dirty into one segment
     parts = []
@@ -564,7 +568,7 @@ def main():
     if git_parts:
         parts.append(" ".join(git_parts))
 
-    line1 = dim_sep.join(parts)
+    line1 = arrow.join(parts)
     print(line1, end="")
 
     # Full mode: additional lines
