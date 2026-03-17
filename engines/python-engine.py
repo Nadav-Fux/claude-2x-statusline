@@ -447,9 +447,9 @@ def build_timeline(ctx):
             bar += f"{YELLOW}━{RST}"
 
     if is_weekend:
-        return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x all day{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
+        return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x all day{RST}"
 
-    return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x{RST} {YELLOW}\u2501{RST}{DIM} 1x{RST}  {WHITE}{BOLD}\u25cf{RST}{DIM} now{RST}"
+    return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501{RST}{DIM} 2x{RST} {YELLOW}\u2501{RST}{DIM} peak{RST}"
 
 
 def build_rate_limits_line(ctx):
