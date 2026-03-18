@@ -41,9 +41,9 @@ BG_GRAY = "\033[48;5;236m"
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
 TIER_PRESETS = {
-    "minimal": ["promo_2x", "model", "context", "git_branch", "git_dirty", "rate_limits"],
-    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "rate_limits"],
-    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost"],
+    "minimal": ["promo_2x", "model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
+    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "rate_limits", "env"],
+    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -298,7 +298,7 @@ def seg_git_dirty(ctx):
             unpushed = int(ahead)
 
     if not uncommitted and not unpushed:
-        return ""
+        return f"{GREEN}saved{RST}"
 
     total = uncommitted + unpushed
     if uncommitted and unpushed:
@@ -367,6 +367,13 @@ def seg_ts_errors(ctx):
     except Exception:
         pass
     return ""
+
+
+def seg_env(ctx):
+    """Show LOCAL or REMOTE based on SSH session detection."""
+    if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CONNECTION"):
+        return f"{MAGENTA}REMOTE{RST}"
+    return f"{CYAN}LOCAL{RST}"
 
 
 def seg_rate_limits(ctx):
@@ -566,6 +573,7 @@ SEGMENTS = {
     "lines": seg_lines,
     "ts_errors": seg_ts_errors,
     "rate_limits": seg_rate_limits,
+    "env": seg_env,
 }
 
 
