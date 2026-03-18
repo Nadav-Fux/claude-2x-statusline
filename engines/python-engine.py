@@ -400,9 +400,9 @@ def seg_rate_limits(ctx):
     # Build compact display for line 1
     fh = usage_data.get("five_hour", {})
     fh_pct = int(fh.get("utilization", 0))
-    frozen = " ❄" if ctx.get("is_2x") else ""
+    doubled = f" {GREEN}2x{RST}" if ctx.get("is_2x") else ""
 
-    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}{frozen}"
+    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}{doubled}"
 
 
 def _get_oauth_token():
@@ -494,7 +494,7 @@ def build_rate_limits_line(ctx):
     sd_bar = build_usage_bar(sd_pct, bw)
     sd_color = color_for_pct(sd_pct)
 
-    frozen = f" {CYAN}❄{RST}" if ctx.get("is_2x") else ""
+    doubled = f" {GREEN}2x{RST}" if ctx.get("is_2x") else ""
 
     # Format reset times
     fh_time = _format_reset(fh_reset, "time")
@@ -502,7 +502,7 @@ def build_rate_limits_line(ctx):
 
     arrow = f" {GREEN}\u25b8{RST} "
     current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}5h{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
-    weekly = f"{WHITE}weekly{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST}{frozen} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
+    weekly = f"{WHITE}weekly{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST}{doubled} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
 
     return f"{current} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
 
