@@ -9,7 +9,7 @@ $RST="$E[0m"; $BOLD="$E[1m"; $DIM="$E[2m"
 $RED="$E[31m"; $GREEN="$E[32m"; $YELLOW="$E[33m"
 $BLUE="$E[34m"; $MAGENTA="$E[35m"; $CYAN="$E[36m"
 $WHITE="$E[38;2;220;220;220m"
-$BGG="$E[38;5;16;48;5;46m"; $BGY="$E[38;5;16;48;5;220m"
+$BGG="$E[38;5;255;48;5;28m"; $BGY="$E[38;5;16;48;5;220m"
 $BGR="$E[38;5;255;48;5;124m"; $BGGRAY="$E[48;5;236m"
 
 # Tiers
@@ -72,7 +72,7 @@ $ctx = @{ is2x=$false; isPromo=$false; gitBranch=''; usageData=$null }
 
 # -- Segments --
 
-function Seg_time { "${DIM}$($il.ToString('HH:mm'))${RST}" }
+function Seg_time { "${WHITE}${BOLD}$($il.ToString('HH:mm'))${RST}" }
 
 function Seg_promo_2x {
     $ps = $config['promo_start']; $pe = $config['promo_end']
@@ -120,7 +120,7 @@ function Seg_context {
 }
 
 function Seg_git_branch { $b = GitCmd 'branch','--show-current'; $ctx.gitBranch=$b; if($b){"${DIM}${b}${RST}"}else{''} }
-function Seg_git_dirty { $p = GitCmd 'status','--porcelain'; if(-not $p){return ''}; $c=@($p -split "`n" | Where-Object{$_}).Count; "${DIM}+${c}${RST}" }
+function Seg_git_dirty { $p = GitCmd 'status','--porcelain'; if(-not $p){return ''}; $c=@($p -split "`n" | Where-Object{$_}).Count; "${YELLOW}${c} unsaved${RST}" }
 
 function Seg_git_ahead_behind {
     if(-not $ctx.gitBranch){return ''}
@@ -135,7 +135,7 @@ function Seg_git_ahead_behind {
 function Seg_cost {
     $c = $stdinData.cost.total_cost_usd
     if ($null -eq $c) { return '' }
-    $f = '{0:F3}' -f [double]$c
+    $f = '{0:F2}' -f [double]$c
     return "${MAGENTA}`$$f${RST}"
 }
 

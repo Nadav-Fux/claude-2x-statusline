@@ -20,7 +20,7 @@ Write-Host "Downloaded statusline.ps1 to $scriptPath" -ForegroundColor Green
 if (Test-Path $settingsFile) {
     $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json
 } else {
-    $settings = @{}
+    $settings = [PSCustomObject]@{}
 }
 
 $settings | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue @{

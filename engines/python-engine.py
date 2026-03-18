@@ -41,9 +41,9 @@ BG_GRAY = "\033[48;5;236m"
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
 TIER_PRESETS = {
-    "minimal": ["promo_2x", "git_branch", "git_dirty"],
-    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost"],
-    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost"],
+    "minimal": ["time", "promo_2x", "git_branch", "git_dirty"],
+    "standard": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
+    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "git_ahead_behind", "cost", "duration", "lines", "rate_limits"],
 }
 
 DEFAULT_CONFIG = {
@@ -326,7 +326,7 @@ def seg_cost(ctx):
     cost = ctx["stdin"].get("cost", {}).get("total_cost_usd")
     if cost is None:
         return ""
-    return f"{MAGENTA}${cost:.1f}{RST}"
+    return f"{MAGENTA}${cost:.2f}{RST}"
 
 
 def seg_duration(ctx):
@@ -596,9 +596,9 @@ def main():
 
     enabled = get_enabled_segments(config)
 
-    # Only full tier gets multiline (timeline + rate limits)
+    # Only full tier/mode gets multiline (timeline + rate limits)
     tier = config.get("tier", "standard")
-    is_full_tier = tier == "full"
+    is_full_tier = tier == "full" or mode == "full"
     if is_full_tier:
         seg_rate_limits(ctx)  # populates ctx["usage_data"]
 

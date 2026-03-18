@@ -40,6 +40,10 @@ else
         il_date=$(printf "%04d%02d%02d" "$utc_year" "$utc_month" "$utc_day")
     fi
     dow=$(date -u +%u)
+    # Adjust DOW for Israel day rollover
+    if [ "$il_total_hour" -ge 24 ]; then
+        dow=$(( (dow % 7) + 1 ))
+    fi
 fi
 
 # ── Promo check ──

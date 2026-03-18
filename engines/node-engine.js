@@ -6,7 +6,7 @@
  * Does NOT support: rate_limits, ts_errors (use Python for those).
  */
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,9 +22,9 @@ const BG_GRAY = '\x1b[48;5;236m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['promo_2x', 'git_branch', 'git_dirty'],
-  standard: ['promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost'],
-  full: ['promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost'],
+  minimal: ['time', 'promo_2x', 'git_branch', 'git_dirty'],
+  standard: ['time', 'promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost', 'duration'],
+  full: ['time', 'promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost', 'duration', 'lines'],
 };
 
 function loadConfig() {
@@ -42,7 +42,7 @@ function getEnabled(config) {
 function fmtDur(mins) { const h = Math.floor(mins/60), m = mins%60; return h > 0 ? `${h}h ${String(m).padStart(2,'0')}m` : `${m}m`; }
 function fmtSecs(s) { const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60; return h>0?`${h}h${String(m).padStart(2,'0')}m`:m>0?`${m}m${String(sec).padStart(2,'0')}s`:`${sec}s`; }
 function colorPct(p) { return p >= 80 ? RED : p >= 50 ? YELLOW : GREEN; }
-function git(...args) { try { return execSync(`git ${args.join(' ')}`, { timeout: 2000, encoding: 'utf8' }).trim(); } catch { return ''; } }
+function git(...args) { try { return execFileSync('git', args, { timeout: 2000, encoding: 'utf8' }).trim(); } catch { return ''; } }
 
 function getIsraelTime() {
   const utc = new Date();
@@ -116,7 +116,7 @@ const SEGMENTS = {
     if (uncommitted) return `${YELLOW}${uncommitted} unsaved${RST}`;
     return `${YELLOW}${unpushed} unpushed${RST}`;
   },
-  cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(1)}${RST}` : ''; },
+  cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(2)}${RST}` : ''; },
   duration(ctx) { const ms = (ctx.stdin.cost || {}).total_duration_ms; if (!ms) return ''; return `${BLUE}${fmtSecs(Math.floor(ms/1000))}${RST}`; },
   lines(ctx) { const a = (ctx.stdin.cost||{}).total_lines_added||0, r = (ctx.stdin.cost||{}).total_lines_removed||0; return (a||r) ? `${GREEN}+${a}${RST}/${RED}-${r}${RST}` : ''; },
 };
