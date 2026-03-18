@@ -570,8 +570,10 @@ def main():
 
     enabled = get_enabled_segments(config)
 
-    # In full mode, fetch rate limits data (for line 3) but don't show in line 1
-    if mode == "full":
+    # Only full tier gets multiline (timeline + rate limits)
+    tier = config.get("tier", "standard")
+    is_full_tier = tier == "full"
+    if is_full_tier:
         seg_rate_limits(ctx)  # populates ctx["usage_data"]
 
     # Flow design: colored arrows as separators
@@ -602,8 +604,8 @@ def main():
     line1 = arrow.join(parts)
     print(line1, end="")
 
-    # Full mode: additional lines
-    if mode == "full":
+    # Full tier: additional lines
+    if is_full_tier:
         timeline = build_timeline(ctx)
         rate_line = build_rate_limits_line(ctx)
         if timeline:
