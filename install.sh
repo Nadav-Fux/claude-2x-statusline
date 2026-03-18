@@ -88,35 +88,11 @@ else
     echo "  ✓ Created settings.json"
 fi
 
-# ── Step 5: Register as plugin (enables /minimal, /standard, /full commands) ──
-PLUGINS_JSON="$HOME/.claude/plugins/installed_plugins.json"
-if [ -n "$PY" ]; then
-    "$PY" -c "
-import json, os, sys
-from datetime import datetime
-path = sys.argv[1]
-install_dir = sys.argv[2]
-settings_path = sys.argv[3]
-if not os.path.exists(path):
-    data = {'version': 2, 'plugins': {}}
-else:
-    with open(path) as f:
-        data = json.load(f)
-data['plugins']['claude-2x-statusline@local'] = [{'scope':'user','installPath':install_dir,'version':'2.0.0','installedAt':datetime.utcnow().isoformat()+'Z','lastUpdated':datetime.utcnow().isoformat()+'Z'}]
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path,'w') as f:
-    json.dump(data, f, indent=2)
-with open(settings_path) as f:
-    s = json.load(f)
-s.setdefault('enabledPlugins',{})['claude-2x-statusline@local'] = True
-with open(settings_path,'w') as f:
-    json.dump(s, f, indent=2)
-" "$PLUGINS_JSON" "$INSTALL_DIR" "$SETTINGS"
-    echo "  ✓ Plugin registered (/minimal /standard /full enabled)"
-else
-    echo "  ⚠ No python — slash commands unavailable"
-    echo "    Register manually after installing python"
-fi
+# ── Step 5: Install slash commands ──
+mkdir -p "$HOME/.claude/commands"
+cp "$SCRIPT_DIR/commands/statusline-"*.md "$HOME/.claude/commands/" 2>/dev/null && \
+    echo "  ✓ Slash commands installed (/statusline-minimal, /statusline-standard, /statusline-full)" || \
+    echo "  ⚠ Could not install slash commands"
 
 # ── Done ──
 echo ""
@@ -124,7 +100,9 @@ echo "  ╭───────────────────────
 echo "  │  ✓ Installed! Restart Claude Code.       │"
 echo "  │                                          │"
 echo "  │  To change tier:                         │"
-echo "  │    /statusline-tier minimal              │"
+echo "  │    /statusline-minimal                   │"
+echo "  │    /statusline-standard                  │"
+echo "  │    /statusline-full                      │"
 echo "  │                                          │"
 echo "  │  Or re-run: bash install.sh              │"
 echo "  ╰──────────────────────────────────────────╯"
