@@ -576,12 +576,7 @@ def main():
     if is_full_tier:
         seg_rate_limits(ctx)  # populates ctx["usage_data"]
 
-    # Flow design: colored arrows as separators
-    is_2x = ctx.get("is_2x", False)
-    arrow_color = GREEN if is_2x else YELLOW
-    arrow = f" {arrow_color}\u25b8{RST} "
-
-    # Build line 1 — merge git_branch + git_dirty into one segment
+    # Build line 1 — run all segments first
     parts = []
     git_parts = []
     for name in enabled:
@@ -601,6 +596,9 @@ def main():
     if git_parts:
         parts.append(" ".join(git_parts))
 
+    # Flow design: colored arrows (green=2x, yellow=peak)
+    arrow_color = GREEN if ctx.get("is_2x") else YELLOW
+    arrow = f" {arrow_color}\u25b8{RST} "
     line1 = arrow.join(parts)
     print(line1, end="")
 

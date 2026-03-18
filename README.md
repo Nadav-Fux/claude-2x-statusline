@@ -80,13 +80,13 @@ Choose your tier during install, or edit `~/.claude/statusline-config.json` anyt
 Add `--full` to your statusline command for the expanded dashboard:
 
 ```
-│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━ │  ━ 2x ━ 1x 14:00-20:00  ● now
-│ ▸ current ▰▰▱▱▱▱▱▱▱▱ 15% ⟳ 10pm · weekly ▰▰▰▱▱▱▱▱▱▱ 31% ❄ ⟳ mar 20 │
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━ │  ━ 2x ━ peak
+│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 15% ⟳ 10pm · weekly ▰▰▰▱▱▱▱▱▱▱ 32% 2x ⟳ mar 20 │
 ```
 
-- **Timeline bar** — 48-char visualization of today's 2x/1x hours with current position
-- **Rate limits** — Current (5-hour) and weekly utilization with reset times
-- **Freeze indicator** — Shows when usage doesn't count toward weekly limit
+- **Timeline bar** — 48-char visualization of today's 2x/peak hours with current position
+- **Rate limits** — 5-hour and weekly utilization with reset times
+- **2x indicator** — Shows when usage is doubled
 
 ---
 
@@ -105,17 +105,37 @@ The wrapper auto-detects: Python > Node.js > pure bash. Windows uses PowerShell 
 
 ## Install
 
-### macOS / Linux
+### Option 1: Claude Code Plugin (recommended)
 
+If you have Claude Code plugins enabled:
+```
+/plugin
+```
+Then select `Nadav-Fux/claude-2x-statusline`. After install, use `/statusline setup` to pick your tier.
+
+### Option 2: npx (one command)
+
+```bash
+npx claude-2x-statusline
+```
+
+### Option 3: Git clone
+
+**macOS / Linux:**
 ```bash
 git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline \
   && bash ~/.claude/cc-2x-statusline/install.sh
 ```
 
-### Windows (PowerShell)
-
+**Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
+```
+
+### Option 4: curl (one-liner)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.sh | bash
 ```
 
 ### Manual

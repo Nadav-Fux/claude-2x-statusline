@@ -1,0 +1,15 @@
+{
+  "name": "claude-2x-statusline",
+  "version": "2.0.0",
+  "description": "Modular statusline for Claude Code — 2X promotion tracker, model info, context %, rate limits",
+  "bin": {
+    "claude-2x-statusline": "install.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nadav-Fux/claude-2x-statusline"
+  },
+  "author": "Nadav Fux",
+  "license": "MIT",
+  "keywords": ["claude", "claude-code", "statusline", "2x", "promotion"]
+}
