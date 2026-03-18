@@ -22,9 +22,9 @@ const BG_GRAY = '\x1b[48;5;236m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['time', 'promo_2x', 'git_branch', 'git_dirty'],
-  standard: ['time', 'promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost', 'duration'],
-  full: ['time', 'promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost', 'duration', 'lines'],
+  minimal: ['promo_2x', 'git_branch', 'git_dirty'],
+  standard: ['promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost'],
+  full: ['promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost'],
 };
 
 function loadConfig() {

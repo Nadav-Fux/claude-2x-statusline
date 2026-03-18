@@ -41,9 +41,9 @@ BG_GRAY = "\033[48;5;236m"
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
 TIER_PRESETS = {
-    "minimal": ["time", "promo_2x", "git_branch", "git_dirty"],
-    "standard": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
-    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "git_ahead_behind", "cost", "duration", "lines"],
+    "minimal": ["promo_2x", "model", "context", "git_branch", "git_dirty", "rate_limits"],
+    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "rate_limits"],
+    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost"],
 }
 
 DEFAULT_CONFIG = {
@@ -268,6 +268,9 @@ def seg_context(ctx):
     )
     pct = current * 100 // size if size > 0 else 0
     color = color_for_pct(pct)
+    tier = ctx.get("config", {}).get("tier", "standard")
+    if tier == "minimal":
+        return f"{DIM}CTX{RST} {color}{pct}%{RST}"
     return f"{color}{_fmt_tokens(current)}/{_fmt_tokens(size)}{RST} {color}{pct}%{RST}"
 
 
@@ -423,9 +426,10 @@ def seg_rate_limits(ctx):
     # Build compact display for line 1
     fh = usage_data.get("five_hour", {})
     fh_pct = int(fh.get("utilization", 0))
-    doubled = f" {GREEN}2x{RST}" if ctx.get("is_2x") else ""
-
-    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}{doubled}"
+    tier = ctx.get("config", {}).get("tier", "standard")
+    if tier == "minimal":
+        return f"{color_for_pct(fh_pct)}{fh_pct}%{RST} {DIM}5H{RST}"
+    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}"
 
 
 def _get_oauth_token():
@@ -581,7 +585,10 @@ def main():
         elif arg == "--minimal":
             mode = "minimal"
         elif arg.startswith("--tier="):
-            config["tier"] = arg.split("=", 1)[1]
+            t = arg.split("=", 1)[1]
+            config["tier"] = t
+            if t != "full":
+                mode = "minimal"
 
     il, offset = get_israel_time()
     ctx = {
