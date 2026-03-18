@@ -42,11 +42,12 @@ echo ""
 
 # ── Step 2: Copy files ──
 echo "  Installing files..."
-mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills"
+mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills" "$INSTALL_DIR/.claude-plugin"
 cp "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/statusline.ps1" "$INSTALL_DIR/" 2>/dev/null || true
 cp "$SCRIPT_DIR/engines/"* "$INSTALL_DIR/engines/"
 cp "$SCRIPT_DIR/plugin.json" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/.claude-plugin/plugin.json" "$INSTALL_DIR/.claude-plugin/"
 cp -r "$SCRIPT_DIR/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
 cp -r "$SCRIPT_DIR/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/statusline.sh"
@@ -88,13 +89,33 @@ else
 fi
 
 # ── Step 5: Register as plugin (enables /minimal, /standard, /full commands) ──
-if command -v claude &>/dev/null; then
-    claude plugins add "$INSTALL_DIR" 2>/dev/null && \
-        echo "  ✓ Plugin registered (slash commands enabled)" || \
-        echo "  ⚠ Plugin registration failed — slash commands unavailable"
+PLUGINS_JSON="$HOME/.claude/plugins/installed_plugins.json"
+if [ -n "$PY" ]; then
+    "$PY" -c "
+import json, os, sys
+from datetime import datetime
+path = sys.argv[1]
+install_dir = sys.argv[2]
+settings_path = sys.argv[3]
+if not os.path.exists(path):
+    data = {'version': 2, 'plugins': {}}
+else:
+    with open(path) as f:
+        data = json.load(f)
+data['plugins']['claude-2x-statusline@local'] = [{'scope':'user','installPath':install_dir,'version':'2.0.0','installedAt':datetime.utcnow().isoformat()+'Z','lastUpdated':datetime.utcnow().isoformat()+'Z'}]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path,'w') as f:
+    json.dump(data, f, indent=2)
+with open(settings_path) as f:
+    s = json.load(f)
+s.setdefault('enabledPlugins',{})['claude-2x-statusline@local'] = True
+with open(settings_path,'w') as f:
+    json.dump(s, f, indent=2)
+" "$PLUGINS_JSON" "$INSTALL_DIR" "$SETTINGS"
+    echo "  ✓ Plugin registered (/minimal /standard /full enabled)"
 else
-    echo "  ⚠ claude CLI not found — slash commands unavailable"
-    echo "    Run manually: claude plugins add $INSTALL_DIR"
+    echo "  ⚠ No python — slash commands unavailable"
+    echo "    Register manually after installing python"
 fi
 
 # ── Done ──

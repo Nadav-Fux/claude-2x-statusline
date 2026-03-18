@@ -1,0 +1,14 @@
+{
+  "name": "claude-2x-statusline",
+  "version": "2.0.0",
+  "description": "Modular statusline for Claude Code — 2X promotion tracker, model info, context %, rate limits, and more. Flow design with Israel timezone.",
+  "author": {
+    "name": "Nadav Fux",
+    "url": "https://github.com/Nadav-Fux"
+  },
+  "repository": "https://github.com/Nadav-Fux/claude-2x-statusline",
+  "license": "MIT",
+  "keywords": ["statusline", "2x", "promotion", "israel", "timezone", "rate-limits"],
+  "commands": "./commands/",
+  "skills": "./skills/"
+}
