@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="52" viewBox="0 0 780 52">
+  <rect width="780" height="52" rx="8" fill="#161b22"/>
+  <rect x="12" y="14" width="105" height="24" rx="4" fill="#da3633"/>
+  <text x="64" y="30" fill="#fff" font-family="JetBrains Mono,monospace" font-size="13" text-anchor="middle" font-weight="bold">2x ACTIVE</text>
+  <text x="128" y="30" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="13">15m left</text>
+  <text x="210" y="30" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="13">2d left</text>
+  <text x="262" y="30" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="13">&#9656;</text>
+  <text x="280" y="30" fill="#58a6ff" font-family="JetBrains Mono,monospace" font-size="13">Opus 4.6</text>
+  <text x="356" y="30" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="13">&#9656;</text>
+  <text x="374" y="30" fill="#f85149" font-family="JetBrains Mono,monospace" font-size="13">800K/1.0M 80%</text>
+  <text x="510" y="30" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="13">&#9656;</text>
+  <text x="528" y="30" fill="#d2a8ff" font-family="JetBrains Mono,monospace" font-size="13">$18.3</text>
+  <text x="580" y="30" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="13">&#9656;</text>
+  <text x="598" y="30" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="13">main</text>
+  <text x="640" y="30" fill="#d29922" font-family="JetBrains Mono,monospace" font-size="13">3 unsaved</text>
+</svg>

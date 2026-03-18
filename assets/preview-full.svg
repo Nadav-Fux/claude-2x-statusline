@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="120" viewBox="0 0 820 120">
+  <rect width="820" height="120" rx="8" fill="#161b22"/>
+  <!-- Line 1 -->
+  <rect x="12" y="10" width="105" height="24" rx="4" fill="#1a7f37"/>
+  <text x="64" y="26" fill="#fff" font-family="JetBrains Mono,monospace" font-size="12" text-anchor="middle" font-weight="bold">2x ACTIVE</text>
+  <text x="128" y="26" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="12">10h 50m left</text>
+  <text x="256" y="26" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">9d left</text>
+  <text x="310" y="26" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9656;</text>
+  <text x="326" y="26" fill="#58a6ff" font-family="JetBrains Mono,monospace" font-size="12">Opus 4.6</text>
+  <text x="398" y="26" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9656;</text>
+  <text x="414" y="26" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">350K/1.0M 35%</text>
+  <text x="544" y="26" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9656;</text>
+  <text x="560" y="26" fill="#d2a8ff" font-family="JetBrains Mono,monospace" font-size="12">$12.5</text>
+  <text x="606" y="26" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9656;</text>
+  <text x="622" y="26" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">main</text>
+
+  <!-- Line 2 - Timeline -->
+  <text x="12" y="60" fill="#484f58" font-family="JetBrains Mono,monospace" font-size="12">│</text>
+  <!-- 2x bars (green) -->
+  <text x="26" y="60" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">━━━━━━</text>
+  <text x="80" y="60" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="12" font-weight="bold">●</text>
+  <text x="92" y="60" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">━━━━━━━━━━━━━━━━━━━━━━</text>
+  <!-- peak bars (yellow) -->
+  <text x="274" y="60" fill="#d29922" font-family="JetBrains Mono,monospace" font-size="12">━━━━━━━━━━━━</text>
+  <!-- 2x again -->
+  <text x="374" y="60" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">━━━━━━━━</text>
+  <text x="442" y="60" fill="#484f58" font-family="JetBrains Mono,monospace" font-size="12">│</text>
+  <text x="462" y="60" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">━</text>
+  <text x="474" y="60" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">2x</text>
+  <text x="500" y="60" fill="#d29922" font-family="JetBrains Mono,monospace" font-size="12">━</text>
+  <text x="512" y="60" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">peak</text>
+
+  <!-- Line 3 - Rate limits -->
+  <text x="12" y="90" fill="#484f58" font-family="JetBrains Mono,monospace" font-size="12">│</text>
+  <text x="26" y="90" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9656;</text>
+  <text x="40" y="90" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="12">5h</text>
+  <text x="62" y="90" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9648;&#9648;</text>
+  <text x="82" y="90" fill="#484f58" font-family="JetBrains Mono,monospace" font-size="12">&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</text>
+  <text x="164" y="90" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">20%</text>
+  <text x="196" y="90" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">&#10227;</text>
+  <text x="212" y="90" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="12">5:00am</text>
+  <text x="272" y="90" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">&#183;</text>
+  <text x="286" y="90" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="12">weekly</text>
+  <text x="342" y="90" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">&#9648;&#9648;&#9648;</text>
+  <text x="372" y="90" fill="#484f58" font-family="JetBrains Mono,monospace" font-size="12">&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</text>
+  <text x="444" y="90" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="12">33%</text>
+  <text x="476" y="90" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="12">&#10227;</text>
+  <text x="492" y="90" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="12">19/3 11:00pm</text>
+  <text x="620" y="90" fill="#484f58" font-family="JetBrains Mono,monospace" font-size="12">│</text>
+</svg>

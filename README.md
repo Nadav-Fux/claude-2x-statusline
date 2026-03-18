@@ -25,38 +25,17 @@
 
 ## תצוגה חיה — איך זה נראה
 
-### שורה ראשית (כל הטירים)
+### 2X פעיל — הרבה זמן (ירוק)
+![2X Active](assets/preview-standard.svg)
 
-**2X פעיל — הרבה זמן** (ירוק)
-```
- 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
-```
+### 2X פעיל — נגמר בקרוב! (אדום)
+![2X Urgent](assets/preview-urgent.svg)
 
-**2X פעיל — נגמר בקרוב!** (אדום)
-```
- 2x ACTIVE  15m left 2d left ▸ Opus 4.6 ▸ 800K/1.0M 80% ▸ $18.3 ▸ main 3 unsaved
-```
-
-**שעות שיא — 1X** (אפור)
-```
- PEAK  → 2x in 4h 40m 9d left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $8.0 ▸ main
-```
-
-**סוף שבוע — 2X כל היום**
-```
- 2x ACTIVE  21h 00m left weekend 9d left ▸ Opus 4.6 ▸ 50K/1.0M 5% ▸ $1.2 ▸ main
-```
+### שעות שיא — 1X (אפור, חצים צהובים)
+![Peak](assets/preview-peak.svg)
 
 ### דשבורד מורחב (טיר Full בלבד)
-
-ב-Full מקבלים עוד 2 שורות מתחת:
-
-```
- 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
-
-│ ━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
-│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
-```
+![Full Dashboard](assets/preview-full.svg)
 
 **שורה 2 — Timeline:** פס צבעוני שמראה את שעות ה-2X (ירוק) מול שעות שיא (צהוב) לאורך היום. הנקודה הלבנה = עכשיו.
 
@@ -75,22 +54,13 @@
 | **Full** | + timeline + rate limits | Power users שרוצים הכל |
 
 ### Minimal
-```
- 2x ACTIVE  10h left 9d left ▸ main 2 unsaved
-```
+![Minimal](assets/preview-minimal.svg)
 
 ### Standard
-```
- 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
-```
+![Standard](assets/preview-standard.svg)
 
 ### Full
-```
- 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
-
-│ ━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
-│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
-```
+![Full](assets/preview-full.svg)
 
 ---
 
@@ -269,28 +239,17 @@ Track the 2X promotion, monitor usage, see rate limits — all in one line.
 
 ## Preview
 
-### Minimal
-```
- 2x ACTIVE  10h left 9d left ▸ main 2 unsaved
-```
-
 ### Standard
-```
- 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
-```
+![Standard](assets/preview-standard.svg)
 
 ### Full (with dashboard)
-```
- 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
-
-│ ━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
-│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
-```
+![Full](assets/preview-full.svg)
 
 ### During peak (1X)
-```
- PEAK  → 2x in 4h 40m 9d left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $8.0 ▸ main
-```
+![Peak](assets/preview-peak.svg)
+
+### Almost out of time!
+![Urgent](assets/preview-urgent.svg)
 
 ## Install
 

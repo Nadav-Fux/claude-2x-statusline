@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="52" viewBox="0 0 520 52">
+  <rect width="520" height="52" rx="8" fill="#161b22"/>
+  <rect x="12" y="14" width="105" height="24" rx="4" fill="#1a7f37"/>
+  <text x="64" y="30" fill="#fff" font-family="JetBrains Mono,monospace" font-size="13" text-anchor="middle" font-weight="bold">2x ACTIVE</text>
+  <text x="128" y="30" fill="#e6edf3" font-family="JetBrains Mono,monospace" font-size="13">10h left</text>
+  <text x="222" y="30" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="13">9d left</text>
+  <text x="282" y="30" fill="#3fb950" font-family="JetBrains Mono,monospace" font-size="13">&#9656;</text>
+  <text x="300" y="30" fill="#8b949e" font-family="JetBrains Mono,monospace" font-size="13">main</text>
+  <text x="342" y="30" fill="#d29922" font-family="JetBrains Mono,monospace" font-size="13">2 unsaved</text>
+</svg>
