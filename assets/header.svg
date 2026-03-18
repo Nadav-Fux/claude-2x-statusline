@@ -1,38 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 380" fill="none">
-  <rect width="820" height="380" rx="12" fill="#1a1a2e"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 280" fill="none">
+  <rect width="820" height="280" rx="12" fill="#1a1a2e"/>
 
-  <!-- STATUS block letters -->
-  <text font-family="monospace" font-size="11" font-weight="bold" fill="#e67e22">
-    <tspan x="90" y="30">███████╗╗████████╗╗ █████╗ ╗████████╗╗██╗   ██╗╗███████╗╗</tspan>
-    <tspan x="90" y="43">██╔════╝╝╚══██╔══╝╝██╔══██╗╗╚══██╔══╝╝██║   ██║║██╔════╝╝</tspan>
-    <tspan x="90" y="56">███████╗╗   ██║║   ███████║║   ██║║   ██║   ██║║███████╗╗</tspan>
-    <tspan x="90" y="69">╚════██║║   ██║║   ██╔══██║║   ██║║   ██║   ██║║╚════██║║</tspan>
-    <tspan x="90" y="82">███████║║   ██║║   ██║  ██║║   ██║║   ╚██████╔╝╝███████║║</tspan>
-    <tspan x="90" y="95">╚══════╝╝   ╚═╝╝   ╚═╝  ╚═╝╝   ╚═╝╝    ╚═════╝╝ ╚══════╝╝</tspan>
-  </text>
+  <!-- STATUS LINE as clean bold text -->
+  <text x="410" y="52" font-family="'Courier New', monospace" font-size="52" font-weight="900" fill="#e67e22" text-anchor="middle" letter-spacing="8">STATUS</text>
+  <text x="410" y="100" font-family="'Courier New', monospace" font-size="52" font-weight="900" fill="#e67e22" text-anchor="middle" letter-spacing="8">LINE</text>
 
-  <!-- LINE block letters -->
-  <text font-family="monospace" font-size="11" font-weight="bold" fill="#e67e22">
-    <tspan x="200" y="118">██╗     ██╗╗███╗   ██╗╗███████╗╗</tspan>
-    <tspan x="200" y="131">██║     ██║║████╗  ██║║██╔════╝╝</tspan>
-    <tspan x="200" y="144">██║     ██║║██╔██╗ ██║║█████╗╗</tspan>
-    <tspan x="200" y="157">██║     ██║║██║╚██╗██║║██╔══╝╝</tspan>
-    <tspan x="200" y="170">███████╗██║║██║ ╚████║║███████╗╗</tspan>
-    <tspan x="200" y="183">╚══════╝╚═╝╝╚═╝  ╚═══╝╝╚══════╝╝</tspan>
-  </text>
-
-  <!-- "for Claude Code" -->
-  <text x="410" y="208" font-family="sans-serif" font-size="15" fill="#6b7280" text-anchor="middle">for Claude Code</text>
+  <!-- Subtitle -->
+  <text x="410" y="128" font-family="sans-serif" font-size="15" fill="#6b7280" text-anchor="middle">for Claude Code</text>
 
   <!-- Statusline box -->
-  <rect x="60" y="222" width="700" height="120" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="60" y="144" width="700" height="100" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
 
   <!-- Line 1 - Badge -->
-  <rect x="76" y="236" width="90" height="22" rx="3" fill="#ca8a04"/>
-  <text x="84" y="252" font-family="monospace" font-size="13" fill="#1a1a2e" font-weight="bold">2x ACTIVE</text>
+  <rect x="76" y="156" width="90" height="22" rx="3" fill="#ca8a04"/>
+  <text x="84" y="172" font-family="monospace" font-size="13" fill="#1a1a2e" font-weight="bold">2x ACTIVE</text>
 
   <!-- Line 1 - Rest -->
-  <text font-family="monospace" font-size="13" y="252">
+  <text font-family="monospace" font-size="13" y="172">
     <tspan x="174" fill="#e2e8f0"> 5h left</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
     <tspan fill="#60a5fa">Opus 4.6</tspan>
@@ -50,7 +34,7 @@
   </text>
 
   <!-- Line 2 - Timeline -->
-  <text font-family="monospace" font-size="12" y="282">
+  <text font-family="monospace" font-size="12" y="198">
     <tspan x="76" fill="#6b7280">│</tspan>
     <tspan fill="#16a34a"> ━━━━━━━━━━━━━━━━━━━━━</tspan>
     <tspan fill="#e2e8f0" font-weight="bold">●</tspan>
@@ -64,7 +48,7 @@
   </text>
 
   <!-- Line 3 - Rate limits -->
-  <text font-family="monospace" font-size="12" y="312">
+  <text font-family="monospace" font-size="12" y="228">
     <tspan x="76" fill="#6b7280">│</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
     <tspan fill="#e2e8f0">5h</tspan>
@@ -82,7 +66,7 @@
   </text>
 
   <!-- Bottom tagline -->
-  <text x="410" y="366" font-family="sans-serif" font-size="13" fill="#6b7280" text-anchor="middle">
+  <text x="410" y="270" font-family="sans-serif" font-size="13" fill="#6b7280" text-anchor="middle">
     Track 2X promo · model · context · cost · rate limits · git — all in one line
   </text>
 </svg>
