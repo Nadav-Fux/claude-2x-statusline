@@ -521,7 +521,7 @@ def build_rate_limits_line(ctx):
 
     # Format reset times
     fh_time = _format_reset(fh_reset, "time")
-    sd_time = _format_reset(sd_reset, "date")
+    sd_time = _format_reset(sd_reset, "datetime")
 
     arrow = f" {GREEN}\u25b8{RST} "
     current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}5h{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
@@ -536,11 +536,12 @@ def _format_reset(iso_str, style="time"):
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         local = dt.astimezone()
+        h = local.hour % 12 or 12
+        ampm = 'am' if local.hour < 12 else 'pm'
         if style == "time":
-            h = local.hour % 12 or 12
-            return f"{h}:{local.minute:02d}{'am' if local.hour < 12 else 'pm'}"
+            return f"{h}:{local.minute:02d}{ampm}"
         else:
-            return f"{local.strftime('%b')} {local.day}".lower()
+            return f"{local.day}/{local.month} {h}:{local.minute:02d}{ampm}"
     except Exception:
         return ""
 
