@@ -525,7 +525,7 @@ def build_rate_limits_line(ctx):
 
     arrow = f" {GREEN}\u25b8{RST} "
     current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}5h{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
-    weekly = f"{WHITE}weekly{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST}{doubled} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
+    weekly = f"{WHITE}weekly{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
 
     return f"{current} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
 
