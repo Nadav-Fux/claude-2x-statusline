@@ -91,6 +91,11 @@ def read_stdin():
             if data:
                 parsed = json.loads(data)
                 debug(f"stdin: {list(parsed.keys())}")
+                # Temp debug: dump full stdin to file
+                try:
+                    Path("/tmp/statusline-stdin-dump.json").write_text(json.dumps(parsed, indent=2, default=str))
+                except Exception:
+                    pass
                 return parsed
     except Exception as e:
         debug(f"stdin error: {e}")

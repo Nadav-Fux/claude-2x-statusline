@@ -22,78 +22,41 @@
 - כמה **tokens** ניצלת מה-context window
 - כמה **עלה** הסשן הנוכחי בדולרים
 - מצב ה-**git** — קבצים שלא נשמרו / לא נדחפו
+- **LOCAL** / **REMOTE** — רואים אם רצים מקומית או על שרת
 
 ## תצוגה חיה — איך זה נראה
 
-### 2X פעיל — הרבה זמן (ירוק)
-![2X Active](assets/preview-standard.svg)
-
-### 2X פעיל — נגמר בקרוב! (אדום)
-![2X Urgent](assets/preview-urgent.svg)
-
-### שעות שיא — 1X (אפור, חצים צהובים)
-![Peak](assets/preview-peak.svg)
-
-### דשבורד מורחב (טיר Full בלבד)
-![Full Dashboard](assets/preview-full.svg)
-
-**שורה 2 — Timeline:** פס צבעוני שמראה את שעות ה-2X (ירוק) מול שעות שיא (צהוב) לאורך היום. הנקודה הלבנה = עכשיו.
-
-**שורה 3 — Rate Limits:**
-- `5h ▰▰▱▱▱▱▱▱▱▱ 20%` = כמה מהמכסה של 5 שעות ניצלת, מתאפס ב-5:00am
-- `weekly ▰▰▰▱▱▱▱▱▱▱ 33%` = מכסה שבועית, מתאפסת ב-19/3 בשעה 11:00pm
-
----
-
-## 3 טירים — בחר מה שמתאים לך
-
-| טיר | מה מוצג | למי זה |
-|-----|---------|--------|
-| **Minimal** | 2X סטטוס + git | מי שרוצה נקי ומינימלי |
-| **Standard** | + מודל + tokens + עלות | שימוש יומיומי (ברירת מחדל) |
-| **Full** | + timeline + rate limits | Power users שרוצים הכל |
-
-### Minimal
-![Minimal](assets/preview-minimal.svg)
-
-### Standard
+### Standard (מומלץ)
 ![Standard](assets/preview-standard.svg)
 
-### Full
-![Full](assets/preview-full.svg)
+### Full — עם דשבורד מורחב
+![Full Dashboard](assets/preview-full.svg)
+
+### שעות שיא — 1X
+![Peak](assets/preview-peak.svg)
+
+### נגמר בקרוב!
+![Urgent](assets/preview-urgent.svg)
 
 ---
 
-## התקנה
+## התקנה — 30 שניות
 
-### אפשרות 1: פשוט תגיד ל-Claude (הכי קל)
+### הדרך הכי קלה: תגיד ל-Claude
 
-ב-Claude Code, כתוב בצ'אט:
+פשוט תדביק ב-Claude Code:
+
 ```
-תתקין לי את claude-2x-statusline מ-GitHub של Nadav-Fux
-```
-Claude ידע להתקין את הפלאגין, להגדיר את ה-statusline ולהציע לך טיר.
-
-### אפשרות 2: פלאגין ל-Claude Code
-
-ב-Claude Code, הקלד:
-```
-/plugin
-```
-בחר את `Nadav-Fux/claude-2x-statusline`. אחרי ההתקנה, הקלד `/statusline setup` לבחור טיר.
-
-### אפשרות 2: npx (פקודה אחת)
-
-```bash
-npx claude-2x-statusline
+תתקין לי את claude-2x-statusline מ-github.com/Nadav-Fux/claude-2x-statusline
 ```
 
-### אפשרות 3: Git clone
+Claude יריץ clone, install, יגדיר הכל וישאל איזה טיר אתה רוצה.
+
+### או: שורה אחת בטרמינל
 
 **macOS / Linux:**
 ```bash
-git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline \
-  && bash ~/.claude/cc-2x-statusline/install.sh
+git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline && bash ~/.claude/cc-2x-statusline/install.sh
 ```
 
 **Windows (PowerShell):**
@@ -101,33 +64,52 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
 ```
 
-### אפשרות 4: curl (שורה אחת)
+ה-installer שואל איזה טיר, מגדיר את ה-statusline, ומתקין slash commands. **רק צריך לאתחל את Claude Code.**
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.sh | bash
+---
+
+## 3 טירים — בחר מה שמתאים לך
+
+> **המלצה:** התחל עם **Full** — מקבלים הכל כולל דשבורד עם timeline ו-rate limits. תמיד אפשר להוריד.
+
+| טיר | מה מוצג | למי זה |
+|-----|---------|--------|
+| **Minimal** | 2X + מודל + CTX% + 5H% + git | מי שרוצה נקי ומינימלי |
+| **Standard** | + tokens מפורט + עלות + בר rate limit | שימוש יומיומי |
+| **Full** ⭐ | + timeline + rate limits דשבורד | **מומלץ** — רואים הכל |
+
+### Minimal
+```
+⚡ 2x ACTIVE 5h left ▸ Opus 4.6 ▸ CTX 27% ▸ 17% 5H ▸ LOCAL ▸ main saved
+```
+
+### Standard
+```
+⚡ 2x ACTIVE 5h left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $7.96 ▸ ▰▱▱▱▱▱▱▱▱▱ 17% ▸ LOCAL ▸ main 2 unsaved
+```
+
+### Full (מומלץ)
+```
+⚡ 2x ACTIVE 5h left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $7.96 ▸ LOCAL ▸ main 2 unsaved
+│ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
+│ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 17% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 19/3 11:00pm │
 ```
 
 ---
 
-## שינוי טיר
+## שינוי טיר — Slash Commands
 
-אחרי התקנה כפלאגין, אפשר להחליף בכל רגע:
+אחרי התקנה, אפשר להחליף בכל רגע מתוך Claude Code:
 
 | פקודה | מה עושה |
 |-------|---------|
-| `/statusline setup` | בוחר טיר עם שאלה אינטראקטיבית |
-| `/statusline minimal` | עובר ל-Minimal |
-| `/statusline standard` | עובר ל-Standard |
-| `/statusline full` | עובר ל-Full עם דשבורד |
+| `/statusline-minimal` | עובר ל-Minimal |
+| `/statusline-standard` | עובר ל-Standard |
+| `/statusline-full` | עובר ל-Full עם דשבורד |
 
-או לערוך ישירות את `~/.claude/statusline-config.json`:
-
-```json
-{
-  "tier": "full",
-  "promo_start": 20260313,
-  "promo_end": 20260327
-}
+או לערוך ישירות:
+```bash
+~/.claude/statusline-config.json
 ```
 
 ---
@@ -137,8 +119,8 @@ curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main
 ### שורה ראשית
 
 ```
- 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main 2 unsaved
- ╰── 2X ──╯ ╰── זמן ──╯ ╰ימים╯   ╰ מודל ╯   ╰── tokens ──╯   ╰$$$╯   ╰── git ──╯
+ 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.50 ▸ LOCAL ▸ main 2 unsaved
+ ╰── 2X ──╯ ╰── זמן ──╯ ╰ימים╯   ╰ מודל ╯   ╰── tokens ──╯  ╰$$╯    ╰סביבה╯  ╰── git ──╯
 ```
 
 | חלק | משמעות |
@@ -149,9 +131,10 @@ curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main
 | `▸` | חץ מפריד — **ירוק** כש-2X, **צהוב** ב-peak |
 | `Opus 4.6` | המודל שרץ עכשיו |
 | `350K/1.0M 35%` | ניצלת 350K tokens מתוך 1M (35%) |
-| `$12.5` | עלות הסשן הנוכחי |
+| `$12.50` | עלות הסשן הנוכחי |
+| `LOCAL` / `REMOTE` | רץ מקומית (תכלת) או על שרת (סגול) |
 | `main` | branch ב-git |
-| `2 unsaved` | 2 קבצים ששונו ולא נדחפו ל-GitHub |
+| `2 unsaved` / `saved` | מצב git — קבצים שלא נשמרו, או הכל שמור (ירוק) |
 
 ### צבעי 2X
 
@@ -162,7 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main
 | אדום | אחרון! תנצל עכשיו | פחות משעה |
 | אפור (PEAK) | שעות שיא — 1X | — |
 
-### שורת Rate Limits (Full בלבד)
+### דשבורד Rate Limits (Full בלבד)
 
 ```
 │ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
@@ -192,6 +175,11 @@ curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main
 
 ---
 
+## דרישות
+
+- Claude Code עם תמיכה ב-statusline
+- **אחד מ:** Python 3 | Node.js | PowerShell 5.1+ | bash
+
 ## מנועים (זיהוי אוטומטי)
 
 | מנוע | פלטפורמה | תלויות |
@@ -203,17 +191,11 @@ curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main
 
 ה-wrapper מזהה אוטומטית: Python → Node.js → bash. על Windows משתמש ב-PowerShell.
 
----
-
 ## דיבאג
-
-משהו לא עובד? הפעל מצב debug:
 
 ```bash
 STATUSLINE_DEBUG=1 echo '{}' | bash ~/.claude/cc-2x-statusline/statusline.sh
 ```
-
----
 
 ## הסרה
 
@@ -231,54 +213,29 @@ bash ~/.claude/cc-2x-statusline/uninstall.sh
 
 ---
 
-# claude-2x-statusline
+# claude-2x-statusline (English)
 
 ### Modular statusline for Claude Code
 
 Track the 2X promotion, monitor usage, see rate limits — all in one line.
 
-## Preview
+## Install — 30 seconds
 
-### Standard
-![Standard](assets/preview-standard.svg)
+### Easiest: Just ask Claude
 
-### Full (with dashboard)
-![Full](assets/preview-full.svg)
-
-### During peak (1X)
-![Peak](assets/preview-peak.svg)
-
-### Almost out of time!
-![Urgent](assets/preview-urgent.svg)
-
-## Install
-
-### Option 1: Just ask Claude (easiest)
-
-In Claude Code, type:
-```
-Install the claude-2x-statusline plugin from Nadav-Fux on GitHub
-```
-Claude will install the plugin, configure the statusline, and offer you a tier.
-
-### Option 2: Claude Code Plugin
+Paste in Claude Code:
 
 ```
-/plugin
-```
-Select `Nadav-Fux/claude-2x-statusline`. Then use `/statusline setup` to pick your tier.
-
-### Option 2: npx
-```bash
-npx claude-2x-statusline
+Install the claude-2x-statusline plugin from github.com/Nadav-Fux/claude-2x-statusline
 ```
 
-### Option 3: Git clone
+Claude will clone, install, configure everything, and ask which tier you want.
+
+### Or: One-liner
 
 **macOS / Linux:**
 ```bash
-git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline \
-  && bash ~/.claude/cc-2x-statusline/install.sh
+git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline && bash ~/.claude/cc-2x-statusline/install.sh
 ```
 
 **Windows (PowerShell):**
@@ -286,28 +243,23 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
 ```
 
-### Option 4: curl
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.sh | bash
-```
+## 3 Tiers
 
-## Switch Tier
+> **Recommendation:** Start with **Full** — you get everything including timeline and rate limits dashboard. You can always switch down.
 
-| Command | What |
-|---------|------|
-| `/statusline setup` | Interactive tier picker |
-| `/statusline minimal` | Switch to minimal |
-| `/statusline standard` | Switch to standard |
-| `/statusline full` | Switch to full + dashboard |
+| Tier | What you see | Best for |
+|------|-------------|----------|
+| **Minimal** | 2X + model + CTX% + 5H% + git | Clean and minimal |
+| **Standard** | + detailed tokens + cost + rate limit bar | Daily use |
+| **Full** ⭐ | + timeline + rate limits dashboard | **Recommended** — see everything |
 
-Or edit `~/.claude/statusline-config.json`:
-```json
-{
-  "tier": "full",
-  "promo_start": 20260313,
-  "promo_end": 20260327
-}
-```
+## Switch Tier — Slash Commands
+
+| Command | What it does |
+|---------|-------------|
+| `/statusline-minimal` | Switch to Minimal |
+| `/statusline-standard` | Switch to Standard |
+| `/statusline-full` | Switch to Full with dashboard |
 
 ## What Everything Means
 
@@ -319,19 +271,10 @@ Or edit `~/.claude/statusline-config.json`:
 | `▸` | Arrow separator — green during 2X, yellow during peak |
 | `Opus 4.6` | Active model |
 | `350K/1.0M 35%` | 350K of 1M tokens used (35%) |
-| `$12.5` | Current session cost |
+| `$12.50` | Current session cost |
+| `LOCAL` / `REMOTE` | Running locally (cyan) or via SSH (magenta) |
 | `main` | Git branch |
-| `2 unsaved` | Files changed but not pushed to GitHub |
-
-### Rate Limits (Full tier, line 3)
-
-| Part | Meaning |
-|------|---------|
-| `5h` | 5-hour usage window |
-| `▰▰▱▱▱▱▱▱▱▱ 20%` | 20% of limit used |
-| `⟳ 5:00am` | Resets at 5:00am |
-| `weekly ▰▰▰▱▱▱▱▱▱▱ 33%` | Weekly limit 33% used |
-| `⟳ 19/3 11:00pm` | Resets March 19 at 11:00pm |
+| `2 unsaved` / `saved` | Git status — unsaved changes, or all clean (green) |
 
 ## Promotion Schedule (Israel Time)
 
