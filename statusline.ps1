@@ -59,7 +59,7 @@ $hour = $il.Hour; $minute = $il.Minute
 $weekday = [int]$il.DayOfWeek; if ($weekday -eq 0) { $weekday = 7 }
 $ilDate = [int]$il.ToString('yyyyMMdd')
 $nowMins = $hour * 60 + $minute
-$peakS = 12 + $ilOffset; $peakE = 18 + $ilOffset
+$peakS = 14; $peakE = 20  # Israel local time (8AM-2PM ET)
 
 # Helpers
 function FmtDur($mins) { $h=[Math]::Floor($mins/60); $m=$mins%60; if($h -gt 0){"${h}h $("{0:D2}" -f $m)m"}else{"${m}m"} }
@@ -91,14 +91,18 @@ function Seg_promo_2x {
     if (-not $doubled) { $minsUntil = $pkE - $nowMins }
     $ctx.is2x = $doubled
 
+    # Days remaining
+    $daysLeft = $pe - $ilDate
+    $daysTag = if ($daysLeft -le 14) { " ${DIM}${daysLeft}d left${RST}" } else { '' }
+
     if ($doubled) {
         $t = FmtDur $minsLeft
         $bg = if($minsLeft -gt 180){$BGG}elseif($minsLeft -gt 60){$BGY}else{$BGR}
         $wk = if($reason -eq 'weekend'){" ${DIM}weekend${RST}"}else{''}
-        return "${bg}${BOLD} 2x ACTIVE ${RST} ${bg} $t left ${RST}${wk}"
+        return "${bg} 2x ACTIVE ${RST} ${WHITE}$t left${RST}${wk}${daysTag}"
     } else {
         $t = FmtDur $minsUntil
-        return "${DIM}${BGGRAY} PEAK ${RST} ${CYAN}2x returns in ${t}${RST}"
+        return "${BGGRAY} PEAK ${RST} ${DIM}-> 2x in ${t}${RST}${daysTag}"
     }
 }
 
@@ -233,9 +237,9 @@ if ($mode -eq 'full' -and $ctx.isPromo) {
         else { $bar += "${YELLOW}-${RST}" }
     }
     if ($isWeekend) {
-        Write-Host "`n`n${DIM}today${RST}  ${bar}  ${GREEN}-${RST}${DIM} 2x all day${RST}  ${WHITE}${BOLD}o${RST}${DIM} now${RST}" -NoNewline
+        Write-Host "`n`n${DIM}|${RST}  ${bar}  ${DIM}|${RST}  ${GREEN}-${RST}${DIM} 2x all day${RST}" -NoNewline
     } else {
-        Write-Host "`n`n${DIM}today${RST}  ${bar}  ${GREEN}-${RST}${DIM} 2x${RST} ${YELLOW}-${RST}${DIM} 1x ${peakS}:00-${peakE}:00${RST}  ${WHITE}${BOLD}o${RST}${DIM} now${RST}" -NoNewline
+        Write-Host "`n`n${DIM}|${RST}  ${bar}  ${DIM}|${RST}  ${GREEN}-${RST}${DIM} 2x${RST} ${YELLOW}-${RST}${DIM} peak${RST}" -NoNewline
     }
 
     if ($ctx.usageData) {

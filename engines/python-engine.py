@@ -215,9 +215,14 @@ def seg_promo_2x(ctx):
     ctx["peak_start_local"] = peak_start
     ctx["peak_end_local"] = peak_end
 
-    # Days remaining in promo
-    days_left = (promo_end - il_date)
-    days_tag = f" {DIM}{days_left}d left{RST}" if days_left <= 14 else ""
+    # Days remaining in promo (proper date diff, safe across month boundaries)
+    try:
+        from datetime import date as _date
+        end_date = _date(promo_end // 10000, (promo_end % 10000) // 100, promo_end % 100)
+        days_left = (end_date - il.date()).days
+    except Exception:
+        days_left = promo_end - il_date  # fallback
+    days_tag = f" {DIM}{days_left}d left{RST}" if 0 < days_left <= 14 else ""
 
     if doubled:
         t = fmt_duration(mins_left)

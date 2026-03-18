@@ -103,7 +103,19 @@ const SEGMENTS = {
     return `${colorPct(pct)}${pct}%${RST}`;
   },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
-  git_dirty(ctx) { const p = git('status','--porcelain'); if (!p) return ''; const c = p.split('\n').filter(Boolean).length; return `${YELLOW}~${c}${RST}`; },
+  git_dirty(ctx) {
+    const p = git('status','--porcelain');
+    const uncommitted = p ? p.split('\n').filter(Boolean).length : 0;
+    let unpushed = 0;
+    if (ctx.gitBranch) {
+      const a = git('rev-list','--count','@{u}..HEAD');
+      if (a && a !== '0') unpushed = parseInt(a);
+    }
+    if (!uncommitted && !unpushed) return '';
+    if (uncommitted && unpushed) return `${YELLOW}${uncommitted} changed, ${unpushed} unpushed${RST}`;
+    if (uncommitted) return `${YELLOW}${uncommitted} unsaved${RST}`;
+    return `${YELLOW}${unpushed} unpushed${RST}`;
+  },
   cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(1)}${RST}` : ''; },
   duration(ctx) { const ms = (ctx.stdin.cost || {}).total_duration_ms; if (!ms) return ''; return `${BLUE}${fmtSecs(Math.floor(ms/1000))}${RST}`; },
   lines(ctx) { const a = (ctx.stdin.cost||{}).total_lines_added||0, r = (ctx.stdin.cost||{}).total_lines_removed||0; return (a||r) ? `${GREEN}+${a}${RST}/${RED}-${r}${RST}` : ''; },

@@ -69,9 +69,14 @@ else
         doubled=1; mins_left=$(( peak_s - now_mins ))
     fi
 
-    # Days left
-    days_left=$(( promo_end - il_date ))
-    [ "$days_left" -le 14 ] && days_tag=" ${DIM}${days_left}d left${RST}" || days_tag=""
+    # Days left (use date arithmetic if available, fallback to integer diff)
+    if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+        PY_CMD=$(command -v python3 2>/dev/null || command -v python 2>/dev/null)
+        days_left=$("$PY_CMD" -c "from datetime import date;e=$promo_end;t=$il_date;print((date(e//10000,(e%10000)//100,e%100)-date(t//10000,(t%10000)//100,t%100)).days)" 2>/dev/null || echo $(( promo_end - il_date )))
+    else
+        days_left=$(( promo_end - il_date ))
+    fi
+    [ "$days_left" -gt 0 ] && [ "$days_left" -le 14 ] && days_tag=" ${DIM}${days_left}d left${RST}" || days_tag=""
 
     if [ "$doubled" -eq 1 ]; then
         h=$(( mins_left / 60 )); m=$(( mins_left % 60 ))
