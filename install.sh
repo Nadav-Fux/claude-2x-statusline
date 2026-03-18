@@ -124,7 +124,7 @@ echo "  ╭───────────────────────
 echo "  │  ✓ Installed! Restart Claude Code.       │"
 echo "  │                                          │"
 echo "  │  To change tier:                         │"
-echo "  │    /minimal  /standard  /full            │"
+echo "  │    /statusline-tier minimal              │"
 echo "  │                                          │"
 echo "  │  Or re-run: bash install.sh              │"
 echo "  ╰──────────────────────────────────────────╯"
