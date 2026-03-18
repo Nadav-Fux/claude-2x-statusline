@@ -1,17 +1,6 @@
 <div align="center">
 
-```
-     ___  __  __     ___  ___  ___  ___     ___   ___   ___   ___
-    / __|| | / _ \  | _ || _ \| __|  _ \   / __| / _ \ |   \ | __|
-   | (__ | || (_) | |   ||   /| _| | |_)  | (__ | (_) || |) || _|
-    \___||_| \___/  |_|_||_|_\|___||___/   \___| \___/ |___/ |___|
-
-    ╔══════════════════════════════════════════════════════════════╗
-    ║  ⚡ 2x ACTIVE  5h left ▸ Opus 4.6 ▸ 27% ▸ $7.96 ▸ main   ║
-    ║  │ ━━━━━━━━━━━━━●━━━━━━━━━━━━ │  ━ 2x ━ peak              ║
-    ║  │ ▸ 5h 17%  ·  weekly 34%   │                            ║
-    ╚══════════════════════════════════════════════════════════════╝
-```
+![claude-2x-statusline](assets/header.svg)
 
 # claude-2x-statusline
 
@@ -92,21 +81,13 @@ irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/instal
 | **Full** ⭐ | + timeline + rate limits דשבורד | **מומלץ** — רואים הכל |
 
 ### Minimal
-```
-⚡ 2x ACTIVE 5h left ▸ Opus 4.6 ▸ CTX 27% ▸ 17% 5H ▸ LOCAL ▸ main saved
-```
+![Minimal](assets/tier-minimal.svg)
 
 ### Standard
-```
-⚡ 2x ACTIVE 5h left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $7.96 ▸ ▰▱▱▱▱▱▱▱▱▱ 17% ▸ LOCAL ▸ main 2 unsaved
-```
+![Standard](assets/tier-standard.svg)
 
 ### Full (מומלץ)
-```
-⚡ 2x ACTIVE 5h left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $7.96 ▸ LOCAL ▸ main 2 unsaved
-│ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
-│ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 17% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 19/3 11:00pm │
-```
+![Full](assets/tier-full.svg)
 
 ---
 

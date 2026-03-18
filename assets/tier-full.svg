@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 110" fill="none">
+  <rect width="880" height="110" rx="6" fill="#0d1117"/>
+
+  <!-- Line 1 -->
+  <rect x="8" y="10" width="90" height="22" rx="3" fill="#ca8a04"/>
+  <text x="16" y="26" font-family="monospace" font-size="13" fill="#1a1a2e" font-weight="bold">2x ACTIVE</text>
+  <text font-family="monospace" font-size="13" y="26">
+    <tspan x="106" fill="#e2e8f0"> 5h left</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#60a5fa">Opus 4.6</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#4ade80">270K/1.0M 27%</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#c084fc">$7.96</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#4ade80">HI</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#22d3ee">LOCAL</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#6b7280">main</tspan>
+    <tspan fill="#eab308"> 2 unsaved</tspan>
+  </text>
+
+  <!-- Line 2 - Timeline -->
+  <text font-family="monospace" font-size="13" y="56">
+    <tspan x="8" fill="#6b7280">│</tspan>
+    <tspan fill="#16a34a"> ━━━━━━━━━━━━━━━━━━━━</tspan>
+    <tspan fill="#e2e8f0" font-weight="bold">●</tspan>
+    <tspan fill="#eab308">━━━━━━━━━━━━━━━━</tspan>
+    <tspan fill="#16a34a">━━━━━━━━</tspan>
+    <tspan fill="#6b7280"> │</tspan>
+    <tspan fill="#16a34a">  ━</tspan>
+    <tspan fill="#6b7280"> 2x</tspan>
+    <tspan fill="#eab308"> ━</tspan>
+    <tspan fill="#6b7280"> peak</tspan>
+  </text>
+
+  <!-- Line 3 - Rate limits -->
+  <text font-family="monospace" font-size="13" y="86">
+    <tspan x="8" fill="#6b7280">│</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#e2e8f0">5h</tspan>
+    <tspan fill="#4ade80"> ▰▰</tspan>
+    <tspan fill="#6b7280">▱▱▱▱▱▱▱▱</tspan>
+    <tspan fill="#4ade80">  17%</tspan>
+    <tspan fill="#6b7280"> ⟳ 3:00pm</tspan>
+    <tspan fill="#6b7280"> · </tspan>
+    <tspan fill="#e2e8f0">weekly</tspan>
+    <tspan fill="#4ade80"> ▰▰▰</tspan>
+    <tspan fill="#6b7280">▱▱▱▱▱▱▱</tspan>
+    <tspan fill="#4ade80">  34%</tspan>
+    <tspan fill="#6b7280"> ⟳ 19/3 11pm</tspan>
+    <tspan fill="#6b7280"> │</tspan>
+  </text>
+</svg>
