@@ -91,9 +91,10 @@ function Seg_promo_2x {
     if (-not $doubled) { $minsUntil = $pkE - $nowMins }
     $ctx.is2x = $doubled
 
-    # Days remaining
-    $daysLeft = $pe - $ilDate
-    $daysTag = if ($daysLeft -le 14) { " ${DIM}${daysLeft}d left${RST}" } else { '' }
+    # Days remaining (proper date diff, safe across month boundaries)
+    $endDate = [DateTime]::new([int]($pe / 10000), [int](($pe % 10000) / 100), [int]($pe % 100))
+    $daysLeft = ($endDate.Date - $il.Date).Days
+    $daysTag = if ($daysLeft -gt 0 -and $daysLeft -le 14) { " ${DIM}${daysLeft}d left${RST}" } else { '' }
 
     if ($doubled) {
         $t = FmtDur $minsLeft
