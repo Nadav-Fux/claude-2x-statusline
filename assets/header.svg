@@ -3,10 +3,10 @@
 
   <!-- CLAUDE CODE ASCII art in orange -->
   <text font-family="monospace" font-size="16" font-weight="bold">
-    <tspan x="120" y="40" fill="#e67e22">     ___  __  __     ___  ___  ___  ___     ___   ___   ___   ___</tspan>
-    <tspan x="120" y="58" fill="#e67e22">    / __|| | / _ \  | _ || _ \| __|  _ \   / __| / _ \ |   \ | __|</tspan>
-    <tspan x="120" y="76" fill="#e67e22">   | (__ | || (_) | |   ||   /| _| | |_)  | (__ | (_) || |) || _|</tspan>
-    <tspan x="120" y="94" fill="#e67e22">    \___||_| \___/  |_|_||_|_\|___||___/   \___| \___/ |___/ |___|</tspan>
+    <tspan x="100" y="40" fill="#e67e22">  ___ _____ _ _____ _   _ ___     _    ___ _  _ ___</tspan>
+    <tspan x="100" y="58" fill="#e67e22"> / __|_   _/_\_   _| | | / __|   | |  |_ _| \| | __|</tspan>
+    <tspan x="100" y="76" fill="#e67e22"> \__ \ | |/ _ \| | | |_| \__ \   | |__ | || .` | _|</tspan>
+    <tspan x="100" y="94" fill="#e67e22"> |___/ |_/_/ \_\_|  \___/|___/   |____|___|_|\_|___|</tspan>
   </text>
 
   <!-- Statusline box -->
