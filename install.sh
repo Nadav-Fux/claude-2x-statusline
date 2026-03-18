@@ -66,13 +66,13 @@ STATUSLINE_CMD="bash $INSTALL_DIR/statusline.sh"
 
 if [ -f "$SETTINGS" ] && [ -n "$PY" ]; then
     "$PY" -c "
-import json
-with open('$SETTINGS') as f:
+import json, sys
+with open(sys.argv[1]) as f:
     s = json.load(f)
-s['statusLine'] = {'type': 'command', 'command': '$STATUSLINE_CMD'}
-with open('$SETTINGS', 'w') as f:
+s['statusLine'] = {'type': 'command', 'command': sys.argv[2]}
+with open(sys.argv[1], 'w') as f:
     json.dump(s, f, indent=2)
-"
+" "$SETTINGS" "$STATUSLINE_CMD"
     echo "  ✓ Updated settings.json"
 elif [ -f "$SETTINGS" ]; then
     echo "  ⚠ Could not auto-update settings.json (no python)"

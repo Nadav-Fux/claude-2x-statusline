@@ -138,15 +138,22 @@ def git_cmd(*args, timeout=2):
 
 
 def get_israel_time():
-    utc = datetime.now(timezone.utc)
-    m, d = utc.month, utc.day
-    # Israel DST: ~March 27 → ~October 25
-    if (m > 3 or (m == 3 and d >= 27)) and (m < 10 or (m == 10 and d < 25)):
-        offset = 3  # IDT
-    else:
-        offset = 2  # IST
-    il = utc + timedelta(hours=offset)
-    return il, offset
+    try:
+        from zoneinfo import ZoneInfo
+        il_tz = ZoneInfo("Asia/Jerusalem")
+        il = datetime.now(il_tz)
+        offset = il.utcoffset().total_seconds() / 3600
+        return il, int(offset)
+    except Exception:
+        # Fallback for Python < 3.9
+        utc = datetime.now(timezone.utc)
+        m, d = utc.month, utc.day
+        if (m > 3 or (m == 3 and d >= 27)) and (m < 10 or (m == 10 and d < 25)):
+            offset = 3
+        else:
+            offset = 2
+        il = utc + timedelta(hours=offset)
+        return il, offset
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -173,8 +180,9 @@ def seg_promo_2x(ctx):
     weekday = il.isoweekday()  # 1=Mon, 7=Sun
     now_mins = hour * 60 + minute
 
-    peak_start = 12 + offset
-    peak_end = 18 + offset
+    # Peak hours in Israel local time (8AM-2PM ET = 14:00-20:00 IL always)
+    peak_start = 14
+    peak_end = 20
 
     doubled, reason, mins_left, mins_until = False, "", 0, 0
 
@@ -328,8 +336,9 @@ def seg_ts_errors(ctx):
     cwd = ctx["stdin"].get("cwd", "")
     if not cwd:
         return ""
+    import tempfile as _tf
     h = hashlib.md5(cwd.encode()).hexdigest()
-    cache = Path(f"/tmp/tsc-errors-{h}.txt")
+    cache = Path(_tf.gettempdir()) / f"tsc-errors-{h}.txt"
     if not cache.exists():
         return ""
     try:
@@ -346,8 +355,9 @@ def seg_ts_errors(ctx):
 
 def seg_rate_limits(ctx):
     """Fetch rate limits from Claude OAuth API (cached 60s)."""
-    cache_dir = Path("/tmp/claude")
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    import tempfile
+    cache_dir = Path(tempfile.gettempdir()) / "claude"
+    cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     cache_file = cache_dir / "statusline-usage-cache.json"
 
     usage_data = None
@@ -514,9 +524,10 @@ def _format_reset(iso_str, style="time"):
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         local = dt.astimezone()
         if style == "time":
-            return local.strftime("%-I:%M%p").lower()
+            h = local.hour % 12 or 12
+            return f"{h}:{local.minute:02d}{'am' if local.hour < 12 else 'pm'}"
         else:
-            return local.strftime("%b %-d").lower()
+            return f"{local.strftime('%b')} {local.day}".lower()
     except Exception:
         return ""
 

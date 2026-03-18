@@ -24,6 +24,7 @@ if (Test-Path $settingsFile) {
 }
 
 $settings | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue @{
+    type = "command"
     command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
 } -Force
 

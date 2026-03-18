@@ -15,16 +15,16 @@ const RST = '\x1b[0m', BOLD = '\x1b[1m', DIM = '\x1b[2m';
 const RED = '\x1b[31m', GREEN = '\x1b[32m', YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m', MAGENTA = '\x1b[35m', CYAN = '\x1b[36m';
 const WHITE = '\x1b[38;2;220;220;220m';
-const BG_GREEN = '\x1b[38;5;16;48;5;46m';
+const BG_GREEN = '\x1b[38;5;255;48;5;28m';
 const BG_YELLOW = '\x1b[38;5;16;48;5;220m';
 const BG_RED = '\x1b[38;5;255;48;5;124m';
 const BG_GRAY = '\x1b[48;5;236m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['time', 'promo_2x', 'git_branch', 'git_dirty'],
-  standard: ['time', 'promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost', 'duration'],
-  full: ['time', 'promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost', 'duration', 'lines'],
+  minimal: ['promo_2x', 'git_branch', 'git_dirty'],
+  standard: ['promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost'],
+  full: ['promo_2x', 'model', 'context', 'git_branch', 'git_dirty', 'cost'],
 };
 
 function loadConfig() {
@@ -68,7 +68,7 @@ const SEGMENTS = {
     const hour = il.getUTCHours(), minute = il.getUTCMinutes();
     const dow = il.getUTCDay(); // 0=Sun
     const nowMins = hour * 60 + minute;
-    const peakS = 12 + offset, peakE = 18 + offset;
+    const peakS = 14, peakE = 20; // Israel local time
 
     let doubled = false, reason = '', minsLeft = 0, minsUntil = 0;
     // Weekend: Sat(6) 09:00 → Mon(1) 09:00
@@ -104,7 +104,7 @@ const SEGMENTS = {
   },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
   git_dirty(ctx) { const p = git('status','--porcelain'); if (!p) return ''; const c = p.split('\n').filter(Boolean).length; return `${YELLOW}~${c}${RST}`; },
-  cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(3)}${RST}` : ''; },
+  cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(1)}${RST}` : ''; },
   duration(ctx) { const ms = (ctx.stdin.cost || {}).total_duration_ms; if (!ms) return ''; return `${BLUE}${fmtSecs(Math.floor(ms/1000))}${RST}`; },
   lines(ctx) { const a = (ctx.stdin.cost||{}).total_lines_added||0, r = (ctx.stdin.cost||{}).total_lines_removed||0; return (a||r) ? `${GREEN}+${a}${RST}/${RED}-${r}${RST}` : ''; },
 };
@@ -114,16 +114,13 @@ function main() {
   const config = loadConfig();
   let stdin = {};
   try {
-    const raw = fs.readFileSync('/dev/stdin', 'utf8').trim();
+    const raw = fs.readFileSync(0, 'utf8').trim();
     if (raw) stdin = JSON.parse(raw);
   } catch {}
 
   const { il, offset } = getIsraelTime();
   const ctx = { config, stdin, il, offset, is2x: false };
   const enabled = getEnabled(config);
-  const is2x = ctx.is2x;
-  const arrowColor = is2x ? GREEN : YELLOW;
-  const arrow = ` ${arrowColor}\u25b8${RST} `;
 
   const parts = [];
   const gitParts = [];
@@ -137,6 +134,8 @@ function main() {
   }
   if (gitParts.length) parts.push(gitParts.join(' '));
 
+  const arrowColor = ctx.is2x ? GREEN : YELLOW;
+  const arrow = ` ${arrowColor}\u25b8${RST} `;
   process.stdout.write(parts.join(arrow));
 }
 
