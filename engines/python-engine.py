@@ -41,9 +41,9 @@ BG_GRAY = "\033[48;5;236m"
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
 TIER_PRESETS = {
-    "minimal": ["promo_2x", "model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
-    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "rate_limits", "env"],
-    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "env"],
+    "minimal": ["promo_2x", "model", "context", "git_branch", "git_dirty", "rate_limits", "effort", "env"],
+    "standard": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "rate_limits", "effort", "env"],
+    "full": ["promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -91,11 +91,6 @@ def read_stdin():
             if data:
                 parsed = json.loads(data)
                 debug(f"stdin: {list(parsed.keys())}")
-                # Temp debug: dump full stdin to file
-                try:
-                    Path("/tmp/statusline-stdin-dump.json").write_text(json.dumps(parsed, indent=2, default=str))
-                except Exception:
-                    pass
                 return parsed
     except Exception as e:
         debug(f"stdin error: {e}")
@@ -374,6 +369,22 @@ def seg_ts_errors(ctx):
     return ""
 
 
+def seg_effort(ctx):
+    """Show thinking effort level from settings.json."""
+    try:
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+            level = settings.get("effortLevel", "")
+            if level:
+                label = {"low": "LO", "medium": "MED", "high": "HI"}.get(level, level.upper())
+                color = {"low": DIM, "medium": YELLOW, "high": GREEN}.get(level, DIM)
+                return f"{color}{label}{RST}"
+    except Exception:
+        pass
+    return ""
+
+
 def seg_env(ctx):
     """Show LOCAL or REMOTE based on SSH session detection."""
     if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CONNECTION"):
@@ -578,6 +589,7 @@ SEGMENTS = {
     "lines": seg_lines,
     "ts_errors": seg_ts_errors,
     "rate_limits": seg_rate_limits,
+    "effort": seg_effort,
     "env": seg_env,
 }
 
