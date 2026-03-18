@@ -2,119 +2,314 @@
 
 # claude-2x-statusline
 
-### Modular, multi-tier statusline for Claude Code
+### שורת סטטוס מודולרית ל-Claude Code
 
-Track the 2X promotion, monitor usage, see rate limits — all in one line.
+מעקב אחרי מבצע ה-2X, מידע על המודל, ניצול context, rate limits — הכל בשורה אחת.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-compatible-blueviolet)](#)
-[![Cross-platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#requirements)
-
-**[Live Preview & Tier Picker](https://statusline.nvision.me)**
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)](#)
+[![Cross-platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#דרישות)
 
 ---
 
 </div>
 
-## Preview
+## מה זה?
 
-### Minimal tier
-```
-22:44 ▸ ⚡ 2x  5h 37m left ▸ main ~3
-```
+תוסף ל-Claude Code שמציג שורת סטטוס חיה בתחתית הטרמינל. רואים במבט אחד:
+- האם מבצע ה-**2X** פעיל וכמה זמן נשאר
+- איזה **מודל** רץ (Opus, Sonnet...)
+- כמה **tokens** ניצלת מה-context window
+- כמה **עלה** הסשן הנוכחי בדולרים
+- מצב ה-**git** — קבצים שלא נשמרו / לא נדחפו
 
-### Standard tier
-```
-22:44 ▸ ⚡ 2x  5h 37m left ▸ Opus 4.6 ▸ 40% ▸ $0.420 ▸ 23m ▸ main ~3
-```
+## תצוגה חיה — איך זה נראה
 
-### Full tier
-```
-22:44 ▸ ⚡ 2x  5h 37m left ▸ Opus 4.6 ▸ ▰▰▰▰▱▱▱▱▱▱ 40% ▸ $0.42 ▸ main ~3 ↑1
+### שורה ראשית (כל הטירים)
 
-│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━ │  ━ 2x ━ 1x 14:00-20:00  ● now
-│ ▸ current ▰▰▱▱▱▱▱▱▱▱ 15% ⟳ 10pm · weekly ▰▰▰▱▱▱▱▱▱▱ 31% ❄ ⟳ mar 20 │
+**2X פעיל — הרבה זמן** (ירוק)
+```
+ 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
 ```
 
-### During peak hours (1X)
+**2X פעיל — נגמר בקרוב!** (אדום)
 ```
-16:30 ▸ PEAK → 2x in 4h 40m ▸ Opus 4.6 ▸ ▰▰▰▰▰▰▰▱▱▱ 72% ▸ $1.23 ▸ main
+ 2x ACTIVE  15m left 2d left ▸ Opus 4.6 ▸ 800K/1.0M 80% ▸ $18.3 ▸ main 3 unsaved
+```
+
+**שעות שיא — 1X** (אפור)
+```
+ PEAK  → 2x in 4h 40m 9d left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $8.0 ▸ main
+```
+
+**סוף שבוע — 2X כל היום**
+```
+ 2x ACTIVE  21h 00m left weekend 9d left ▸ Opus 4.6 ▸ 50K/1.0M 5% ▸ $1.2 ▸ main
+```
+
+### דשבורד מורחב (טיר Full בלבד)
+
+ב-Full מקבלים עוד 2 שורות מתחת:
+
+```
+ 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
+
+│ ━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
+│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
+```
+
+**שורה 2 — Timeline:** פס צבעוני שמראה את שעות ה-2X (ירוק) מול שעות שיא (צהוב) לאורך היום. הנקודה הלבנה = עכשיו.
+
+**שורה 3 — Rate Limits:**
+- `5h ▰▰▱▱▱▱▱▱▱▱ 20%` = כמה מהמכסה של 5 שעות ניצלת, מתאפס ב-5:00am
+- `weekly ▰▰▰▱▱▱▱▱▱▱ 33%` = מכסה שבועית, מתאפסת ב-19/3 בשעה 11:00pm
+
+---
+
+## 3 טירים — בחר מה שמתאים לך
+
+| טיר | מה מוצג | למי זה |
+|-----|---------|--------|
+| **Minimal** | 2X סטטוס + git | מי שרוצה נקי ומינימלי |
+| **Standard** | + מודל + tokens + עלות | שימוש יומיומי (ברירת מחדל) |
+| **Full** | + timeline + rate limits | Power users שרוצים הכל |
+
+### Minimal
+```
+ 2x ACTIVE  10h left 9d left ▸ main 2 unsaved
+```
+
+### Standard
+```
+ 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
+```
+
+### Full
+```
+ 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
+
+│ ━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
+│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
 ```
 
 ---
 
-## Tiers
+## התקנה
 
-| Tier | Segments | Best for |
-|------|----------|----------|
-| **Minimal** | Time + 2x promo + git | Clean, distraction-free |
-| **Standard** | + model + context % + cost + duration | Daily use (default) |
-| **Full** | + rate limits + timeline + lines changed | Power users |
-| **Custom** | Pick individual segments | Your choice |
+### אפשרות 1: פשוט תגיד ל-Claude (הכי קל)
 
-Choose your tier during install, or edit `~/.claude/statusline-config.json` anytime.
-
----
-
-## Segments
-
-| Segment | What it shows | Source | Tier |
-|---------|---------------|--------|------|
-| `time` | Israel time (auto DST) | Calculated | All |
-| `promo_2x` | 2X status + countdown | Calculated | All |
-| `git_branch` | Current branch | `git` | All |
-| `git_dirty` | Uncommitted changes | `git` | All |
-| `model` | Active model name | Claude Code stdin | Standard+ |
-| `context` | Context window usage % | Claude Code stdin | Standard+ |
-| `cost` | Session cost in USD | Claude Code stdin | Standard+ |
-| `duration` | Session duration | Claude Code stdin | Standard+ |
-| `git_ahead_behind` | Commits ahead/behind remote | `git` | Full |
-| `lines` | Lines added/removed | Claude Code stdin | Full |
-| `rate_limits` | Current + weekly utilization | OAuth API (cached 60s) | Full |
-| `ts_errors` | TypeScript errors (cached) | `/tmp/tsc-errors-*.txt` | Full |
-
----
-
-## Full mode (`--full`)
-
-Add `--full` to your statusline command for the expanded dashboard:
-
+ב-Claude Code, כתוב בצ'אט:
 ```
-│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━ │  ━ 2x ━ peak
-│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 15% ⟳ 10pm · weekly ▰▰▰▱▱▱▱▱▱▱ 32% 2x ⟳ mar 20 │
+תתקין לי את claude-2x-statusline מ-GitHub של Nadav-Fux
 ```
+Claude ידע להתקין את הפלאגין, להגדיר את ה-statusline ולהציע לך טיר.
 
-- **Timeline bar** — 48-char visualization of today's 2x/peak hours with current position
-- **Rate limits** — 5-hour and weekly utilization with reset times
-- **2x indicator** — Shows when usage is doubled
+### אפשרות 2: פלאגין ל-Claude Code
 
----
-
-## Engines (auto-detected)
-
-| Engine | Platform | Features | Dependencies |
-|--------|----------|----------|--------------|
-| **Python** | macOS, Linux, Windows | All segments + rate limits + full mode | Python 3 |
-| **PowerShell** | Windows | All segments + rate limits + full mode | PowerShell 5.1+ (built-in) |
-| **Node.js** | Any | All segments except rate limits | Node.js |
-| **Pure bash** | Any | Minimal tier only | None |
-
-The wrapper auto-detects: Python > Node.js > pure bash. Windows uses PowerShell directly.
-
----
-
-## Install
-
-### Option 1: Claude Code Plugin (recommended)
-
-If you have Claude Code plugins enabled:
+ב-Claude Code, הקלד:
 ```
 /plugin
 ```
-Then select `Nadav-Fux/claude-2x-statusline`. After install, use `/statusline setup` to pick your tier.
+בחר את `Nadav-Fux/claude-2x-statusline`. אחרי ההתקנה, הקלד `/statusline setup` לבחור טיר.
 
-### Option 2: npx (one command)
+### אפשרות 2: npx (פקודה אחת)
 
+```bash
+npx claude-2x-statusline
+```
+
+### אפשרות 3: Git clone
+
+**macOS / Linux:**
+```bash
+git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-statusline \
+  && bash ~/.claude/cc-2x-statusline/install.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
+```
+
+### אפשרות 4: curl (שורה אחת)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.sh | bash
+```
+
+---
+
+## שינוי טיר
+
+אחרי התקנה כפלאגין, אפשר להחליף בכל רגע:
+
+| פקודה | מה עושה |
+|-------|---------|
+| `/statusline setup` | בוחר טיר עם שאלה אינטראקטיבית |
+| `/statusline minimal` | עובר ל-Minimal |
+| `/statusline standard` | עובר ל-Standard |
+| `/statusline full` | עובר ל-Full עם דשבורד |
+
+או לערוך ישירות את `~/.claude/statusline-config.json`:
+
+```json
+{
+  "tier": "full",
+  "promo_start": 20260313,
+  "promo_end": 20260327
+}
+```
+
+---
+
+## הסברים — מה כל דבר אומר
+
+### שורה ראשית
+
+```
+ 2x ACTIVE  10h 50m left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main 2 unsaved
+ ╰── 2X ──╯ ╰── זמן ──╯ ╰ימים╯   ╰ מודל ╯   ╰── tokens ──╯   ╰$$$╯   ╰── git ──╯
+```
+
+| חלק | משמעות |
+|------|--------|
+| `2x ACTIVE` | מבצע ה-2X פעיל — מקבלים כפול שימוש |
+| `10h 50m left` | כמה זמן נשאר עד שהחלון הנוכחי נגמר |
+| `9d left` | כמה ימים נשארו למבצע כולו |
+| `▸` | חץ מפריד — **ירוק** כש-2X, **צהוב** ב-peak |
+| `Opus 4.6` | המודל שרץ עכשיו |
+| `350K/1.0M 35%` | ניצלת 350K tokens מתוך 1M (35%) |
+| `$12.5` | עלות הסשן הנוכחי |
+| `main` | branch ב-git |
+| `2 unsaved` | 2 קבצים ששונו ולא נדחפו ל-GitHub |
+
+### צבעי 2X
+
+| צבע | משמעות | זמן שנשאר |
+|-----|--------|-----------|
+| ירוק | בנוח, יש זמן | מעל 3 שעות |
+| צהוב | כדאי לתכנן | 1-3 שעות |
+| אדום | אחרון! תנצל עכשיו | פחות משעה |
+| אפור (PEAK) | שעות שיא — 1X | — |
+
+### שורת Rate Limits (Full בלבד)
+
+```
+│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
+```
+
+| חלק | משמעות |
+|------|--------|
+| `5h` | מכסה של 5 שעות (current window) |
+| `▰▰▱▱▱▱▱▱▱▱ 20%` | ניצלת 20% מהמכסה |
+| `⟳ 5:00am` | מתאפס ב-5 בבוקר |
+| `weekly` | מכסה שבועית |
+| `⟳ 19/3 11:00pm` | מתאפסת ב-19 במרץ ב-11 בלילה |
+
+---
+
+## לוח זמני המבצע
+
+המבצע של Claude — מרץ 2026: **כפול שימוש בשעות מחוץ לשיא**.
+
+| מתי | סטטוס | שעון ישראל |
+|------|:------:|-------------|
+| ימי חול מחוץ לשיא | **2X** | 00:00–14:00, 20:00–00:00 |
+| ימי חול שעות שיא | 1X | 14:00–20:00 |
+| סופשבוע | **2X** | שבת 9:00 → שני 9:00 |
+
+**תאריכים: 13–27 במרץ 2026.** אפשר לשנות ב-config לקידומים עתידיים.
+
+---
+
+## מנועים (זיהוי אוטומטי)
+
+| מנוע | פלטפורמה | תלויות |
+|------|----------|--------|
+| **Python** | macOS, Linux, Windows | Python 3 (ללא חבילות חיצוניות) |
+| **PowerShell** | Windows | PowerShell 5.1+ (מובנה) |
+| **Node.js** | הכל | Node.js |
+| **Pure bash** | הכל | שום דבר |
+
+ה-wrapper מזהה אוטומטית: Python → Node.js → bash. על Windows משתמש ב-PowerShell.
+
+---
+
+## דיבאג
+
+משהו לא עובד? הפעל מצב debug:
+
+```bash
+STATUSLINE_DEBUG=1 echo '{}' | bash ~/.claude/cc-2x-statusline/statusline.sh
+```
+
+---
+
+## הסרה
+
+```bash
+bash ~/.claude/cc-2x-statusline/uninstall.sh
+```
+
+---
+
+<div align="center">
+
+**[Live Preview & Tier Picker](https://statusline.nvision.me)** | [MIT License](LICENSE)
+
+</div>
+
+---
+
+# claude-2x-statusline
+
+### Modular statusline for Claude Code
+
+Track the 2X promotion, monitor usage, see rate limits — all in one line.
+
+## Preview
+
+### Minimal
+```
+ 2x ACTIVE  10h left 9d left ▸ main 2 unsaved
+```
+
+### Standard
+```
+ 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
+```
+
+### Full (with dashboard)
+```
+ 2x ACTIVE  10h left 9d left ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.5 ▸ main
+
+│ ━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ 2x ━ peak
+│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00am · weekly ▰▰▰▱▱▱▱▱▱▱ 33% ⟳ 19/3 11:00pm │
+```
+
+### During peak (1X)
+```
+ PEAK  → 2x in 4h 40m 9d left ▸ Opus 4.6 ▸ 270K/1.0M 27% ▸ $8.0 ▸ main
+```
+
+## Install
+
+### Option 1: Just ask Claude (easiest)
+
+In Claude Code, type:
+```
+Install the claude-2x-statusline plugin from Nadav-Fux on GitHub
+```
+Claude will install the plugin, configure the statusline, and offer you a tier.
+
+### Option 2: Claude Code Plugin
+
+```
+/plugin
+```
+Select `Nadav-Fux/claude-2x-statusline`. Then use `/statusline setup` to pick your tier.
+
+### Option 2: npx
 ```bash
 npx claude-2x-statusline
 ```
@@ -132,92 +327,67 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
 ```
 
-### Option 4: curl (one-liner)
-
+### Option 4: curl
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.sh | bash
 ```
 
-### Manual
+## Switch Tier
 
-1. Clone or download to `~/.claude/cc-2x-statusline/`
-2. Add to `~/.claude/settings.json`:
+| Command | What |
+|---------|------|
+| `/statusline setup` | Interactive tier picker |
+| `/statusline minimal` | Switch to minimal |
+| `/statusline standard` | Switch to standard |
+| `/statusline full` | Switch to full + dashboard |
 
+Or edit `~/.claude/statusline-config.json`:
 ```json
 {
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/cc-2x-statusline/statusline.sh"
-  }
-}
-```
-
-For full mode:
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/cc-2x-statusline/statusline.sh --full"
-  }
-}
-```
-
-3. Restart Claude Code.
-
----
-
-## Configuration
-
-Create `~/.claude/statusline-config.json` to customize:
-
-```json
-{
-  "tier": "standard",
-  "mode": "minimal",
+  "tier": "full",
   "promo_start": 20260313,
   "promo_end": 20260327
 }
 ```
 
-### Custom tier
+## What Everything Means
 
-Pick exactly which segments you want:
+| Part | Meaning |
+|------|---------|
+| `2x ACTIVE` | 2X promotion is active — doubled usage |
+| `10h left` | Time until current 2X window ends |
+| `9d left` | Days remaining in the promotion |
+| `▸` | Arrow separator — green during 2X, yellow during peak |
+| `Opus 4.6` | Active model |
+| `350K/1.0M 35%` | 350K of 1M tokens used (35%) |
+| `$12.5` | Current session cost |
+| `main` | Git branch |
+| `2 unsaved` | Files changed but not pushed to GitHub |
 
-```json
-{
-  "tier": "custom",
-  "segments": {
-    "time": true,
-    "promo_2x": true,
-    "model": true,
-    "context": true,
-    "git_branch": true,
-    "git_dirty": true,
-    "git_ahead_behind": false,
-    "cost": true,
-    "duration": false,
-    "lines": false,
-    "ts_errors": false,
-    "rate_limits": true
-  }
-}
-```
+### Rate Limits (Full tier, line 3)
 
-See `config.example.json` for all options.
+| Part | Meaning |
+|------|---------|
+| `5h` | 5-hour usage window |
+| `▰▰▱▱▱▱▱▱▱▱ 20%` | 20% of limit used |
+| `⟳ 5:00am` | Resets at 5:00am |
+| `weekly ▰▰▰▱▱▱▱▱▱▱ 33%` | Weekly limit 33% used |
+| `⟳ 19/3 11:00pm` | Resets March 19 at 11:00pm |
 
----
+## Promotion Schedule (Israel Time)
 
-## Promotion schedule
-
-| When | Status | Israel Time |
-|------|:------:|-------------|
+| When | Status | Hours |
+|------|:------:|-------|
 | Weekdays off-peak | **2X** | 00:00–14:00, 20:00–00:00 |
 | Weekdays peak | 1X | 14:00–20:00 |
-| Weekends | **2X** | Friday 9:00 → Monday 9:00 |
+| Weekends | **2X** | Saturday 9:00 → Monday 9:00 |
 
-**Active: March 13–27, 2026.** Edit `promo_start` / `promo_end` in config for future promotions.
+**Active: March 13–27, 2026.**
 
----
+## Requirements
+
+- Claude Code with statusline support
+- **One of:** Python 3 | Node.js | PowerShell 5.1+ | bash
 
 ## Uninstall
 
@@ -227,16 +397,8 @@ bash ~/.claude/cc-2x-statusline/uninstall.sh
 
 ---
 
-## Requirements
-
-- Claude Code with status line support
-- **One of:** Python 3 | Node.js | PowerShell 5.1+ | bash (minimal only)
-- No external packages needed for any engine
-
----
-
 <div align="center">
 
-**Made with Claude Code** | [MIT License](LICENSE)
+**[Live Preview](https://statusline.nvision.me)** | [MIT License](LICENSE)
 
 </div>
