@@ -42,10 +42,13 @@ echo ""
 
 # ── Step 2: Copy files ──
 echo "  Installing files..."
-mkdir -p "$INSTALL_DIR/engines"
+mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills"
 cp "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/statusline.ps1" "$INSTALL_DIR/" 2>/dev/null || true
 cp "$SCRIPT_DIR/engines/"* "$INSTALL_DIR/engines/"
+cp "$SCRIPT_DIR/plugin.json" "$INSTALL_DIR/"
+cp -r "$SCRIPT_DIR/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
+cp -r "$SCRIPT_DIR/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/statusline.sh"
 echo "  ✓ Copied to $INSTALL_DIR"
 
@@ -84,13 +87,23 @@ else
     echo "  ✓ Created settings.json"
 fi
 
+# ── Step 5: Register as plugin (enables /minimal, /standard, /full commands) ──
+if command -v claude &>/dev/null; then
+    claude plugins add "$INSTALL_DIR" 2>/dev/null && \
+        echo "  ✓ Plugin registered (slash commands enabled)" || \
+        echo "  ⚠ Plugin registration failed — slash commands unavailable"
+else
+    echo "  ⚠ claude CLI not found — slash commands unavailable"
+    echo "    Run manually: claude plugins add $INSTALL_DIR"
+fi
+
 # ── Done ──
 echo ""
 echo "  ╭──────────────────────────────────────────╮"
 echo "  │  ✓ Installed! Restart Claude Code.       │"
 echo "  │                                          │"
-echo "  │  To change tier later, edit:             │"
-echo "  │  ~/.claude/statusline-config.json        │"
+echo "  │  To change tier:                         │"
+echo "  │    /minimal  /standard  /full            │"
 echo "  │                                          │"
 echo "  │  Or re-run: bash install.sh              │"
 echo "  ╰──────────────────────────────────────────╯"
