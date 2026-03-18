@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "description": "Modular statusline for Claude Code — 2X promotion tracker, model info, context %, rate limits",
   "bin": {
-    "claude-2x-statusline": "install.sh"
+    "claude-2x-statusline": "bin.js"
   },
   "repository": {
     "type": "git",

@@ -13,6 +13,12 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+DEBUG = os.environ.get("STATUSLINE_DEBUG") == "1"
+
+def debug(msg):
+    if DEBUG:
+        print(f"[statusline] {msg}", file=sys.stderr)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ANSI COLORS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -83,9 +89,11 @@ def read_stdin():
         if not sys.stdin.isatty():
             data = sys.stdin.read().strip()
             if data:
-                return json.loads(data)
-    except Exception:
-        pass
+                parsed = json.loads(data)
+                debug(f"stdin: {list(parsed.keys())}")
+                return parsed
+    except Exception as e:
+        debug(f"stdin error: {e}")
     return {}
 
 
@@ -556,6 +564,7 @@ SEGMENTS = {
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
     config = load_config()
+    debug(f"config: tier={config.get('tier')}")
     stdin_data = read_stdin()
 
     # Mode from args or config

@@ -8,5 +8,6 @@
   },
   "repository": "https://github.com/Nadav-Fux/claude-2x-statusline",
   "license": "MIT",
-  "keywords": ["statusline", "2x", "promotion", "israel", "timezone", "rate-limits"]
+  "keywords": ["statusline", "2x", "promotion", "israel", "timezone", "rate-limits"],
+  "skills": "./skills/"
 }
