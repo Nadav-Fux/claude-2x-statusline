@@ -43,7 +43,7 @@ BG_GRAY = "\033[48;5;236m"
 TIER_PRESETS = {
     "minimal": ["time", "promo_2x", "git_branch", "git_dirty"],
     "standard": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "cost", "duration"],
-    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "git_ahead_behind", "cost", "duration", "lines", "rate_limits"],
+    "full": ["time", "promo_2x", "model", "context", "git_branch", "git_dirty", "git_ahead_behind", "cost", "duration", "lines"],
 }
 
 DEFAULT_CONFIG = {
