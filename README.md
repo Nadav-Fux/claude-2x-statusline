@@ -72,21 +72,19 @@ irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/instal
 
 ## 3 טירים — בחר מה שמתאים לך
 
-> **המלצה:** התחל עם **Full** — מקבלים הכל כולל דשבורד עם timeline ו-rate limits. תמיד אפשר להוריד.
-
 | טיר | מה מוצג | למי זה |
 |-----|---------|--------|
 | **Minimal** | 2X + מודל + CTX% + 5H% + git | מי שרוצה נקי ומינימלי |
-| **Standard** | + tokens מפורט + עלות + בר rate limit | שימוש יומיומי |
-| **Full** ⭐ | + timeline + rate limits דשבורד | **מומלץ** — רואים הכל |
+| **Standard** ⭐ | + tokens מפורט + עלות + בר rate limit | **מומלץ** — שימוש יומיומי |
+| **Full** | + timeline + rate limits דשבורד | Power users שרוצים הכל |
 
-### Minimal
+### Minimal — נקי ומהיר
 ![Minimal](assets/tier-minimal.svg)
 
-### Standard
+### Standard — מומלץ לרוב המשתמשים
 ![Standard](assets/tier-standard.svg)
 
-### Full (מומלץ)
+### Full — הכל כולל דשבורד
 ![Full](assets/tier-full.svg)
 
 ---
