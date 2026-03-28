@@ -40,35 +40,19 @@ Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash;
 
 ![Minimal](assets/tier-minimal.svg)
 
-```
-Off-Peak ▸ Opus 4.6 ▸ CTX 36% ▸ 11% 5H ▸ REMOTE ▸ main saved
-```
+פיק/לא-פיק, מודל, אחוז context, אחוז מכסה 5 שעות, סביבה, git.
 
-שורה אחת עם העיקר: פיק/לא-פיק, מודל, אחוז context, אחוז מכסה 5 שעות, סביבה, git.
-
-**Standard** &mdash; 2 שורות, כולל עלות ו-rate limits עם ברים גרפיים:
+**Standard** &mdash; 2 שורות, כולל עלות ו-rate limits:
 
 ![Standard](assets/tier-standard.svg)
 
-```
-Off-Peak ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
-│ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 11% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 4/4 11:00pm │
-```
-
 טוקנים מפורטים, עלות סשן, ושורה שנייה עם ברי rate limit גרפיים וזמני איפוס.
 
-**Full** (מומלץ) &mdash; 4 שורות, דשבורד מלא עם timeline, burn rate, ו-cache:
+**Full** (מומלץ) &mdash; 4 שורות, דשבורד מלא:
 
 ![Full](assets/tier-full.svg)
 
-```
-Off-Peak ▸ peak in 3h 22m ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
-│ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
-│ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 11% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 4/4 11:00pm        │
-│ spending $3.2/hr · ctx full ~47m · cache 82%                                   │
-```
-
-שורה 1: סטטוס נקי. שורה 2: ציר זמן ויזואלי של פיק/לא-פיק. שורה 3: ברי rate limit. שורה 4: קצב שריפה ($/שעה), זמן עד שה-context ייגמר, ואחוז cache.
+שורה 1: סטטוס נקי. שורה 2: ציר זמן ויזואלי. שורה 3: ברי rate limit. שורה 4: קצב שריפה, זמן עד שה-context ייגמר, ואחוז cache.
 
 </div>
 
@@ -161,46 +145,21 @@ A modular statusline plugin for Claude Code that shows a **live dashboard** at t
 
 ![Minimal](assets/tier-minimal.svg)
 
-```
-Off-Peak ▸ Opus 4.6 ▸ CTX 36% ▸ 11% 5H ▸ REMOTE ▸ main saved
-```
-
-One line with the essentials: peak status, model, context percentage, 5-hour limit percentage, environment, and git.
+Peak status, model, context %, 5-hour limit %, environment, and git.
 
 ### Standard &mdash; 2 lines
 
 ![Standard](assets/tier-standard.svg)
 
-```
-Off-Peak ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
-│ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 11% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 4/4 11:00pm │
-```
-
-Full token counts, session cost, and a second line with graphical rate limit bars and reset times for both the 5-hour window and weekly limit.
+Full token counts, session cost, and a second line with graphical rate limit bars and reset times.
 
 ### Full &mdash; 4 lines (recommended)
 
 ![Full](assets/tier-full.svg)
 
-```
-Off-Peak ▸ peak in 3h 22m ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
-│ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
-│ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 11% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 4/4 11:00pm        │
-│ spending $3.2/hr · ctx full ~47m · cache 82%                                   │
-```
+Line 1: Clean status bar. Line 2: Visual timeline of peak/off-peak. Line 3: Rate limit bars with resets. Line 4: Burn rate ($/hr), context depletion estimate, and cache hit ratio.
 
-Line 1: Clean status bar. Line 2: Visual timeline of today's peak/off-peak windows. Line 3: Rate limit bars with reset countdowns. Line 4: Burn rate ($/hr), estimated time until context is full, and cache hit ratio.
-
-### During Peak Hours
-
-```
- Peak  → ends in 2h 15m ▸ Opus 4.6 ▸ 350K/1.0M 35% ▸ $12.50 ▸ LOCAL ▸ main saved
-│ ━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
-│ ▸ 5h ▰▰▰▰▱▱▱▱▱▱ 42% ⟳ 5:15pm ⚡ peak · weekly ▰▰▰▰▰▱▱▱▱▱ 51% ⟳ 4/4 11:00pm │
-│ spending $8.1/hr · ctx full ~22m · cache 74%                                    │
-```
-
-The Peak badge turns **red** (lots of peak time left), **yellow** (1-2 hours remaining), or **green** (under 30 minutes &mdash; almost over). A countdown shows exactly when peak ends.
+The **Peak** badge turns **red** (lots of peak time left), **yellow** (1-2 hours remaining), or **green** (under 30 min &mdash; almost over), with a countdown showing exactly when peak ends.
 
 ---
 
