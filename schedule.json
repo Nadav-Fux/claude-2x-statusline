@@ -1,0 +1,32 @@
+{
+  "v": 3,
+  "updated": "2026-03-28",
+  "mode": "peak_hours",
+  "default_tier": "full",
+  "peak": {
+    "enabled": true,
+    "tz": "America/Los_Angeles",
+    "days": [1, 2, 3, 4, 5],
+    "start": 5,
+    "end": 11,
+    "label_peak": "Peak",
+    "label_offpeak": "Off-Peak",
+    "note": "Session limits consumed faster during peak hours. Weekly limits unchanged."
+  },
+  "labels": {
+    "five_hour": "5h",
+    "weekly": "weekly",
+    "five_hour_note": "",
+    "weekly_note": ""
+  },
+  "banner": {
+    "text": "",
+    "expires": "",
+    "color": "yellow"
+  },
+  "features": {
+    "show_peak_segment": true,
+    "show_rate_limits": true,
+    "show_timeline": true
+  }
+}

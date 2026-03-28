@@ -10,7 +10,7 @@ The user wants to switch their statusline tier. The argument tells you which tie
 
 ## Tiers
 
-- **minimal** — promo + model + CTX % + 5H % + git
+- **minimal** — peak status + model + CTX% + rate limit + git
 - **standard** — + detailed tokens + cost + rate limit bar
 - **full** — + multiline dashboard with timeline and rate limits
 

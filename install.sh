@@ -17,23 +17,23 @@ echo ""
 # ── Step 1: Choose tier ──
 echo "  Choose your tier:"
 echo ""
-echo "    1) Minimal   — time + 2x promo + git"
-echo "       22:44 ▸ ⚡ 2x  5h left ▸ main ~3"
+echo "    1) Minimal   — peak status + model + git + rate limits"
+echo "       OFF-PEAK ▸ Opus 4.6 ▸ CTX 40% ▸ main saved ▸ 15% 5H"
 echo ""
-echo "    2) Standard  — + model + context + cost + duration"
-echo "       22:44 ▸ ⚡ 2x  5h left ▸ Opus 4.6 ▸ 40% ▸ \$0.42 ▸ 23m ▸ main ~3"
+echo "    2) Standard  — + cost + full context"
+echo "       OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ main saved ▸ \$0.42 ▸ ▰▰▱▱▱▱▱▱▱▱ 15%"
 echo ""
-echo "    3) Full      — + rate limits + timeline dashboard"
-echo "       22:44 ▸ ⚡ 2x  5h left ▸ Opus 4.6 ▸ ▰▰▰▰▱▱▱▱▱▱ 40% ▸ main ~3"
+echo "    3) Full      — + multiline timeline + rate limit dashboard (recommended)"
+echo "       OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ main saved ▸ \$0.42"
 echo "       │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━ │"
-echo "       │ ▸ current ▰▰▱▱▱▱▱▱▱▱ 15% · weekly ▰▰▰▱▱▱▱▱▱▱ 31% ❄ │"
+echo "       │ ▸ 5h ▰▰▱▱▱▱▱▱▱▱  15% · weekly ▰▰▰▱▱▱▱▱▱▱  31% │"
 echo ""
 
-read -rp "  Pick a tier [1/2/3] (default: 2): " tier_choice
+read -rp "  Pick a tier [1/2/3] (default: 3): " tier_choice
 case "$tier_choice" in
     1) TIER="minimal"; MODE="minimal" ;;
-    3) TIER="full"; MODE="full" ;;
-    *) TIER="standard"; MODE="minimal" ;;
+    2) TIER="standard"; MODE="minimal" ;;
+    *) TIER="full"; MODE="full" ;;
 esac
 
 echo ""
@@ -58,8 +58,8 @@ cat > "$CONFIG" << CONF
 {
   "tier": "$TIER",
   "mode": "$MODE",
-  "promo_start": 20260313,
-  "promo_end": 20260327
+  "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
+  "schedule_cache_hours": 6
 }
 CONF
 echo "  ✓ Config saved to $CONFIG"
@@ -94,10 +94,29 @@ cp "$SCRIPT_DIR/commands/statusline-"*.md "$HOME/.claude/commands/" 2>/dev/null 
     echo "  ✓ Slash commands installed (/statusline-minimal, /statusline-standard, /statusline-full)" || \
     echo "  ⚠ Could not install slash commands"
 
+# ── Step 6: Fetch initial schedule ──
+echo "  Fetching peak hours schedule..."
+SCHEDULE_URL="https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json"
+SCHEDULE_CACHE="$HOME/.claude/statusline-schedule.json"
+if command -v curl >/dev/null 2>&1; then
+    curl -s --max-time 5 "$SCHEDULE_URL" -o "$SCHEDULE_CACHE" 2>/dev/null && \
+        echo "  ✓ Schedule downloaded (auto-updates every 6 hours)" || \
+        echo "  ⚠ Could not fetch schedule (will use defaults)"
+elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=5 "$SCHEDULE_URL" -O "$SCHEDULE_CACHE" 2>/dev/null && \
+        echo "  ✓ Schedule downloaded (auto-updates every 6 hours)" || \
+        echo "  ⚠ Could not fetch schedule (will use defaults)"
+else
+    echo "  ⚠ No curl/wget — schedule will be fetched on first run"
+fi
+
 # ── Done ──
 echo ""
 echo "  ╭──────────────────────────────────────────╮"
 echo "  │  ✓ Installed! Restart Claude Code.       │"
+echo "  │                                          │"
+echo "  │  Peak hours schedule updates             │"
+echo "  │  automatically from GitHub.              │"
 echo "  │                                          │"
 echo "  │  To change tier:                         │"
 echo "  │    /statusline-minimal                   │"

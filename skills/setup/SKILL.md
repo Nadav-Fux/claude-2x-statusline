@@ -11,17 +11,17 @@ Install and configure the claude-2x-statusline for Claude Code.
 ## Steps
 
 1. Ask the user which tier they want using AskUserQuestion with these options:
-   - **Minimal** — Time + 2x promo + git (`22:44 ▸ ⚡ 2x 5h left ▸ main ~3`)
-   - **Standard** — + model + context + cost + duration (`22:44 ▸ ⚡ 2x 5h left ▸ Opus 4.6 ▸ 40% ▸ $0.42 ▸ 23m ▸ main ~3`)
-   - **Full** — + rate limits + timeline dashboard (adds `▰▰▰▰▱▱▱▱▱▱ 40%` bar + timeline + weekly limits)
+   - **Minimal** — Peak status + model + CTX% + rate limit + git
+   - **Standard** — + detailed tokens + cost + rate limit bar
+   - **Full** (recommended) — + timeline + rate limits dashboard
 
 2. Write the config file at `~/.claude/statusline-config.json`:
 ```json
 {
   "tier": "<chosen_tier>",
   "mode": "<minimal for minimal/standard, full for full>",
-  "promo_start": 20260313,
-  "promo_end": 20260327
+  "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
+  "schedule_cache_hours": 6
 }
 ```
 
@@ -40,4 +40,9 @@ find ~/.claude -name "python-engine.py" -path "*/engines/*" 2>/dev/null | head -
 }
 ```
 
-5. Tell the user to restart Claude Code to see the new statusline.
+5. Fetch the initial schedule:
+```bash
+curl -s https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json -o ~/.claude/statusline-schedule.json
+```
+
+6. Tell the user to restart Claude Code to see the new statusline. Peak hours auto-update from GitHub every 6 hours.

@@ -1,14 +1,16 @@
 {
-  "tier": "standard",
+  "tier": "full",
   "segments": {
-    "promo_2x": true,
+    "peak_hours": true,
     "model": true,
     "context": true,
     "git_branch": true,
     "git_dirty": true,
     "cost": true,
-    "rate_limits": false
+    "rate_limits": true,
+    "effort": true,
+    "env": true
   },
-  "promo_start": 20260313,
-  "promo_end": 20260327
+  "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
+  "schedule_cache_hours": 6
 }

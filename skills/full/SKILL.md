@@ -10,10 +10,10 @@ Switch the statusline to full mode with rate limits dashboard and timeline.
 
 Preview:
 ```
-22:44 ▸ ⚡ 2x 5h left ▸ Opus 4.6 ▸ ▰▰▰▰▱▱▱▱▱▱ 40% ▸ $0.42 ▸ main ~3 ↑1
+OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ Cache:94% ▸ $4.2/hr ▸ $7.96 ▸ main saved
 
-│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━ │
-│ ▸ current ▰▰▱▱▱▱▱▱▱▱ 15% ⟳ 10pm · weekly ▰▰▰▱▱▱▱▱▱▱ 31% ❄ │
+│ ━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak ━ peak (3pm-9pm)
+│ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 15% ⟳ 5pm ✓ · weekly ▰▰▰▱▱▱▱▱▱▱ 31% ⟳ 4/4 │
 ```
 
 ## Steps

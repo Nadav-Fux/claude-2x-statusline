@@ -6,9 +6,9 @@ allowed-tools: ["Bash", "Read", "Write", "Edit"]
 
 # Switch to Minimal Tier
 
-Switch the statusline to minimal mode: time + 2x promo + git only.
+Switch the statusline to minimal mode: peak status + model + CTX% + rate limit + git.
 
-Preview: `22:44 ▸ ⚡ 2x 5h left ▸ main ~3`
+Preview: `OFF-PEAK ▸ Opus 4.6 ▸ CTX 40% ▸ 15% 5H ▸ main saved`
 
 ## Steps
 

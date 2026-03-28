@@ -1,4 +1,5 @@
 # claude-2x-statusline - modular statusline for Claude Code (PowerShell)
+# v2.1 — Peak hours with auto-timezone and remote schedule
 # https://github.com/Nadav-Fux/claude-2x-statusline
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -14,14 +15,14 @@ $BGR="$E[38;5;255;48;5;124m"; $BGGRAY="$E[48;5;236m"
 
 # Tiers
 $TIERS = @{
-    minimal  = @('time','promo_2x','git_branch','git_dirty')
-    standard = @('time','promo_2x','model','context','git_branch','git_dirty','cost','duration')
-    full     = @('time','promo_2x','model','context','git_branch','git_dirty','git_ahead_behind','cost','duration','lines','rate_limits')
+    minimal  = @('peak_hours','model','context','git_branch','git_dirty','rate_limits','effort','env')
+    standard = @('peak_hours','model','context','git_branch','git_dirty','cost','rate_limits','effort','env')
+    full     = @('peak_hours','model','context','git_branch','git_dirty','cost','effort','env')
 }
 
 # Config
 $configPath = Join-Path $env:USERPROFILE '.claude\statusline-config.json'
-$config = @{ tier='standard'; separator=' | '; mode='minimal'; promo_start=20260313; promo_end=20260327 }
+$config = @{ tier='full'; separator=' | '; mode='full'; schedule_url='https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json'; schedule_cache_hours=6 }
 if (Test-Path $configPath) {
     try {
         $userCfg = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -29,19 +30,75 @@ if (Test-Path $configPath) {
     } catch {}
 }
 
+# Schedule (remote with cache)
+function Load-Schedule {
+    $cachePath = Join-Path $env:USERPROFILE '.claude\statusline-schedule.json'
+    $cacheHours = $config['schedule_cache_hours']
+    $url = $config['schedule_url']
+
+    # Check cache
+    if (Test-Path $cachePath) {
+        try {
+            $age = ((Get-Date) - (Get-Item $cachePath).LastWriteTime).TotalHours
+            if ($age -lt $cacheHours) {
+                return Get-Content $cachePath -Raw | ConvertFrom-Json
+            }
+        } catch {}
+    }
+
+    # Fetch remote
+    if ($url) {
+        try {
+            $resp = Invoke-WebRequest -Uri $url -TimeoutSec 5 -UseBasicParsing
+            $resp.Content | Set-Content $cachePath
+            return $resp.Content | ConvertFrom-Json
+        } catch {}
+    }
+
+    # Stale cache
+    if (Test-Path $cachePath) {
+        try { return Get-Content $cachePath -Raw | ConvertFrom-Json } catch {}
+    }
+
+    # Default
+    return @{
+        v=2; mode='peak_hours'; default_tier='full'
+        peak=@{ enabled=$true; tz='America/Los_Angeles'; days=@(1,2,3,4,5); start=5; end=11; label_peak='Peak'; label_offpeak='Off-Peak' }
+        banner=@{ text=''; expires=''; color='yellow' }
+        labels=@{ five_hour='5h'; weekly='weekly' }
+        features=@{ show_peak_segment=$true; show_rate_limits=$true; show_timeline=$true }
+    }
+}
+
+$schedule = Load-Schedule
+
+# Apply remote default tier if user hasn't set one
+if (Test-Path $configPath) {
+    try {
+        $userKeys = (Get-Content $configPath -Raw | ConvertFrom-Json).PSObject.Properties.Name
+        if ($userKeys -notcontains 'tier' -and $schedule.default_tier) {
+            $config['tier'] = $schedule.default_tier
+        }
+    } catch {}
+} elseif ($schedule.default_tier) {
+    $config['tier'] = $schedule.default_tier
+}
+
 $tier = $config['tier']
 if ($tier -eq 'custom') {
-    $enabled = @($config['segments'].PSObject.Properties | Where-Object { $_.Value -eq $true } | ForEach-Object { $_.Name })
+    $enabled = @($config['segments'].PSObject.Properties | Where-Object { $_.Value -eq $true } | ForEach-Object {
+        if ($_.Name -eq 'promo_2x') { 'peak_hours' } else { $_.Name }
+    })
 } elseif ($TIERS.ContainsKey($tier)) {
     $enabled = $TIERS[$tier]
 } else {
-    $enabled = $TIERS['standard']
+    $enabled = $TIERS['full']
 }
 
 # Mode
-$mode = if ($config['mode']) { $config['mode'] } else { 'minimal' }
+$mode = if ($config['mode']) { $config['mode'] } else { 'full' }
 if ($args -contains '--full') { $mode = 'full' }
-if ($mode -eq 'full' -and $enabled -notcontains 'rate_limits') { $enabled += 'rate_limits' }
+if ($args -contains '--minimal') { $mode = 'minimal' }
 
 # Stdin
 $stdinData = @{}
@@ -50,64 +107,130 @@ try {
     if ($raw.Trim()) { $stdinData = $raw | ConvertFrom-Json }
 } catch {}
 
-# Israel Time
-$utc = [DateTime]::UtcNow
-$mo = $utc.Month; $dy = $utc.Day
-$ilOffset = if (($mo -gt 3 -or ($mo -eq 3 -and $dy -ge 27)) -and ($mo -lt 10 -or ($mo -eq 10 -and $dy -lt 25))) { 3 } else { 2 }
-$il = $utc.AddHours($ilOffset)
-$hour = $il.Hour; $minute = $il.Minute
-$weekday = [int]$il.DayOfWeek; if ($weekday -eq 0) { $weekday = 7 }
-$ilDate = [int]$il.ToString('yyyyMMdd')
+# Timezone — auto-detect local
+$now = Get-Date
+$utcNow = $now.ToUniversalTime()
+$localOffset = [Math]::Floor(($now - $utcNow).TotalHours)
+$hour = $now.Hour; $minute = $now.Minute
+# PS DayOfWeek: Sunday=0; convert to ISO: Mon=1..Sun=7
+$weekday = [int]$now.DayOfWeek; if ($weekday -eq 0) { $weekday = 7 }
 $nowMins = $hour * 60 + $minute
-$peakS = 14; $peakE = 20  # Israel local time (8AM-2PM ET)
+
+# Pacific Time offset (DST-aware)
+function Get-PacificOffset {
+    $year = $utcNow.Year
+    # Second Sunday of March
+    $mar1 = [DateTime]::new($year, 3, 1)
+    $dstStart = $mar1.AddDays((14 - [int]$mar1.DayOfWeek) % 7 + 7)
+    $dstStartUtc = $dstStart.AddHours(10)  # 2AM PST = 10 UTC
+    # First Sunday of November
+    $nov1 = [DateTime]::new($year, 11, 1)
+    $dstEnd = $nov1.AddDays((7 - [int]$nov1.DayOfWeek) % 7)
+    $dstEndUtc = $dstEnd.AddHours(9)  # 2AM PDT = 9 UTC
+    if ($utcNow -ge $dstStartUtc -and $utcNow -lt $dstEndUtc) { return -7 }
+    return -8
+}
+$ptOffset = Get-PacificOffset
+
+# Convert peak hours to local time
+$peak = $schedule.peak
+$peakStart = if ($peak.start) { [int]$peak.start } else { 5 }
+$peakEnd = if ($peak.end) { [int]$peak.end } else { 11 }
+$peakDays = if ($peak.days) { @($peak.days) } else { @(1,2,3,4,5) }
+
+$peakStartLocal = (($peakStart - $ptOffset + $localOffset) % 24 + 24) % 24
+$peakEndLocal = (($peakEnd - $ptOffset + $localOffset) % 24 + 24) % 24
 
 # Helpers
 function FmtDur($mins) { $h=[Math]::Floor($mins/60); $m=$mins%60; if($h -gt 0){"${h}h $("{0:D2}" -f $m)m"}else{"${m}m"} }
 function FmtSecs($s) { $h=[Math]::Floor($s/3600); $m=[Math]::Floor(($s%3600)/60); $sec=$s%60; if($h -gt 0){"${h}h$("{0:D2}" -f $m)m"}elseif($m -gt 0){"${m}m$("{0:D2}" -f $sec)s"}else{"${sec}s"} }
 function ColorPct($p) { if($p -ge 80){$script:RED}elseif($p -ge 50){$script:YELLOW}else{$script:GREEN} }
 function GitCmd { param([string[]]$a) try { $r = & git @a 2>$null; if($r){$r.Trim()}else{''} } catch { '' } }
+function FmtHour($h) { $h = ($h % 24 + 24) % 24; $ampm = if($h -lt 12){'am'}else{'pm'}; $d = $h % 12; if($d -eq 0){$d=12}; "${d}${ampm}" }
 
 # Context
-$ctx = @{ is2x=$false; isPromo=$false; gitBranch=''; usageData=$null }
+$ctx = @{ isPeak=$false; gitBranch=''; usageData=$null }
 
 # -- Segments --
 
-function Seg_time { "${WHITE}${BOLD}$($il.ToString('HH:mm'))${RST}" }
+function Seg_banner {
+    $b = $schedule.banner
+    if (-not $b -or -not $b.text) { return '' }
+    if ($b.expires) {
+        try { if ((Get-Date) -gt [DateTime]::Parse($b.expires)) { return '' } } catch {}
+    }
+    $colors = @{ yellow=$BGY; red=$BGR; green=$BGG; gray=$BGGRAY }
+    $bg = if ($colors[$b.color]) { $colors[$b.color] } else { $BGY }
+    return "${bg} $($b.text) ${RST}"
+}
 
-function Seg_promo_2x {
-    $ps = $config['promo_start']; $pe = $config['promo_end']
-    if ($ilDate -lt $ps -or $ilDate -gt $pe) { return "${DIM}Promo ended${RST}" }
-    $ctx.isPromo = $true
+function Seg_peak_hours {
+    # mode=normal → segment disappears
+    if ($schedule.mode -eq 'normal') { return '' }
 
-    $pkS = $peakS * 60; $pkE = $peakE * 60
-    $doubled = $false; $reason = ''; $minsLeft = 0; $minsUntil = 0
+    $peakEnabled = if ($peak.enabled -ne $null) { $peak.enabled } else { $true }
+    if (-not $peakEnabled) { return "${BGG} Off-Peak${RST}" }
 
-    if ($weekday -eq 6 -and $nowMins -ge 540) { $doubled=$true; $reason='weekend'; $minsLeft=(1440-$nowMins)+1440+540 }
-    elseif ($weekday -eq 7) { $doubled=$true; $reason='weekend'; $minsLeft=(1440-$nowMins)+540 }
-    elseif ($weekday -eq 1 -and $nowMins -lt 540) { $doubled=$true; $reason='weekend'; $minsLeft=540-$nowMins }
-    elseif ($nowMins -ge $pkE) { $doubled=$true; $reason='off-peak'; $minsLeft=(1440-$nowMins)+$pkS }
-    elseif ($nowMins -lt $pkS) { $doubled=$true; $reason='off-peak'; $minsLeft=$pkS-$nowMins }
+    $isPeakDay = $weekday -in $peakDays
 
-    if (-not $doubled) { $minsUntil = $pkE - $nowMins }
-    $ctx.is2x = $doubled
+    $isPeak = $false; $minsLeft = 0; $minsUntil = 0
+    $peakSMins = $peakStartLocal * 60; $peakEMins = $peakEndLocal * 60
 
-    # Days remaining (proper date diff, safe across month boundaries)
-    $endDate = [DateTime]::new([int]($pe / 10000), [int](($pe % 10000) / 100), [int]($pe % 100))
-    $daysLeft = ($endDate.Date - $il.Date).Days
-    $daysTag = if ($daysLeft -gt 0 -and $daysLeft -le 14) { " ${DIM}${daysLeft}d left${RST}" } else { '' }
-
-    if ($doubled) {
-        $t = FmtDur $minsLeft
-        $bg = if($minsLeft -gt 180){$BGG}elseif($minsLeft -gt 60){$BGY}else{$BGR}
-        $wk = if($reason -eq 'weekend'){" ${DIM}weekend${RST}"}else{''}
-        return "${bg} 2x ACTIVE ${RST} ${WHITE}$t left${RST}${wk}${daysTag}"
+    if ($isPeakDay) {
+        if ($peakEMins -gt $peakSMins) {
+            # Normal case
+            if ($nowMins -ge $peakSMins -and $nowMins -lt $peakEMins) {
+                $isPeak = $true; $minsLeft = $peakEMins - $nowMins
+            } elseif ($nowMins -lt $peakSMins) {
+                $minsUntil = $peakSMins - $nowMins
+            } else {
+                $minsUntil = MinsUntilNextPeak
+            }
+        } else {
+            # Crosses midnight
+            if ($nowMins -ge $peakSMins -or $nowMins -lt $peakEMins) {
+                $isPeak = $true
+                $minsLeft = if ($nowMins -ge $peakSMins) { (1440 - $nowMins) + $peakEMins } else { $peakEMins - $nowMins }
+            } elseif ($nowMins -lt $peakSMins) {
+                $minsUntil = $peakSMins - $nowMins
+            } else {
+                $minsUntil = MinsUntilNextPeak
+            }
+        }
     } else {
-        $t = FmtDur $minsUntil
-        return "${BGGRAY} PEAK ${RST} ${DIM}-> 2x in ${t}${RST}${daysTag}"
+        $minsUntil = MinsUntilNextPeak
+    }
+
+    $ctx.isPeak = $isPeak
+    $labelPeak = if ($peak.label_peak) { $peak.label_peak } else { 'Peak' }
+    $labelOff = if ($peak.label_offpeak) { $peak.label_offpeak } else { 'Off-Peak' }
+
+    if ($isPeak) {
+        $t = FmtDur $minsLeft
+        $bg = if ($minsLeft -le 30) { $BGG } elseif ($minsLeft -le 120) { $BGY } else { $BGR }
+        $range = "${DIM}$(FmtHour $peakStartLocal)-$(FmtHour $peakEndLocal)${RST}"
+        return "${bg} ${labelPeak} ${RST} ${WHITE}-> ends in ${t}${RST} ${range}"
+    } else {
+        if ($minsUntil -gt 0) {
+            $t = FmtDur $minsUntil
+            return "${BGG} ${labelOff} ${RST} ${DIM}peak in ${t}${RST}"
+        }
+        return "${BGG} ${labelOff} ${RST}"
     }
 }
 
-function Seg_model { $n = $stdinData.model.display_name; if($n){"${BLUE}${n}${RST}"}else{''} }
+function MinsUntilNextPeak {
+    $h = $hour + $minute / 60.0
+    for ($offset = 1; $offset -le 7; $offset++) {
+        $nextDay = (($weekday - 1 + $offset) % 7) + 1
+        if ($nextDay -in $peakDays) {
+            return [Math]::Floor((24 - $h) * 60) + ($offset - 1) * 1440 + [Math]::Floor($peakStartLocal * 60)
+        }
+    }
+    return 0
+}
+
+function Seg_model { $n = $stdinData.model.display_name; if($n){ $short = ($n -split '\(')[0].Trim(); "${BLUE}${short}${RST}" }else{''} }
 
 function Seg_context {
     $cw = $stdinData.context_window; if(-not $cw){return ''}
@@ -116,41 +239,49 @@ function Seg_context {
     $cur = [int]$u.input_tokens + [int]$u.cache_creation_input_tokens + [int]$u.cache_read_input_tokens
     $pct = [Math]::Floor($cur * 100 / $size)
     $c = ColorPct $pct
-    return "${c}${pct}%${RST}"
+    if ($tier -eq 'minimal') { return "${DIM}CTX${RST} ${c}${pct}%${RST}" }
+    $curK = if ($cur -ge 1000000) { "{0:F1}M" -f ($cur/1000000) } elseif ($cur -ge 1000) { "{0}K" -f [Math]::Floor($cur/1000) } else { "$cur" }
+    $sizeK = if ($size -ge 1000000) { "{0:F1}M" -f ($size/1000000) } else { "{0}K" -f [Math]::Floor($size/1000) }
+    return "${c}${curK}/${sizeK}${RST} ${c}${pct}%${RST}"
 }
 
 function Seg_git_branch { $b = GitCmd 'branch','--show-current'; $ctx.gitBranch=$b; if($b){"${DIM}${b}${RST}"}else{''} }
-function Seg_git_dirty { $p = GitCmd 'status','--porcelain'; if(-not $p){return ''}; $c=@($p -split "`n" | Where-Object{$_}).Count; "${YELLOW}${c} unsaved${RST}" }
 
-function Seg_git_ahead_behind {
-    if(-not $ctx.gitBranch){return ''}
-    $a = GitCmd 'rev-list','--count','@{u}..HEAD'
-    $b = GitCmd 'rev-list','--count','HEAD..@{u}'
-    $p = ''
-    if ($a -and $a -ne '0') { $p += "^$a" }
-    if ($b -and $b -ne '0') { $p += "v$b" }
-    if ($p) { "${DIM}${p}${RST}" } else { '' }
+function Seg_git_dirty {
+    $p = GitCmd 'status','--porcelain'
+    $uncommitted = if ($p) { @($p -split "`n" | Where-Object{$_}).Count } else { 0 }
+    $unpushed = 0
+    if ($ctx.gitBranch) { $a = GitCmd 'rev-list','--count','@{u}..HEAD'; if ($a -and $a -ne '0') { $unpushed = [int]$a } }
+    if (-not $uncommitted -and -not $unpushed) { return "${GREEN}saved${RST}" }
+    if ($uncommitted -and $unpushed) { return "${YELLOW}${uncommitted} changed, ${unpushed} unpushed${RST}" }
+    if ($uncommitted) { return "${YELLOW}${uncommitted} unsaved${RST}" }
+    return "${YELLOW}${unpushed} unpushed${RST}"
 }
 
-function Seg_cost {
-    $c = $stdinData.cost.total_cost_usd
-    if ($null -eq $c) { return '' }
-    $f = '{0:F2}' -f [double]$c
-    return "${MAGENTA}`$$f${RST}"
+function Seg_cost { $c = $stdinData.cost.total_cost_usd; if ($null -eq $c) { return '' }; $f = '{0:F2}' -f [double]$c; "${MAGENTA}`$$f${RST}" }
+function Seg_duration { $ms = $stdinData.cost.total_duration_ms; if (-not $ms) { return '' }; $s = [Math]::Floor([double]$ms / 1000); "${BLUE}$(FmtSecs $s)${RST}" }
+
+function Seg_effort {
+    try {
+        $sp = Join-Path $env:USERPROFILE '.claude\settings.json'
+        if (Test-Path $sp) {
+            $s = Get-Content $sp -Raw | ConvertFrom-Json
+            $level = $s.effortLevel
+            if ($level) {
+                $labels = @{ low='LO'; medium='MED'; high='HI' }
+                $colors = @{ low=$DIM; medium=$YELLOW; high=$GREEN }
+                $l = if ($labels[$level]) { $labels[$level] } else { $level.ToUpper() }
+                $c = if ($colors[$level]) { $colors[$level] } else { $DIM }
+                return "${c}${l}${RST}"
+            }
+        }
+    } catch {}
+    return ''
 }
 
-function Seg_duration {
-    $ms = $stdinData.cost.total_duration_ms
-    if (-not $ms) { return '' }
-    $s = [Math]::Floor([double]$ms / 1000)
-    return "${BLUE}$(FmtSecs $s)${RST}"
-}
-
-function Seg_lines {
-    $a = [int]$stdinData.cost.total_lines_added
-    $r = [int]$stdinData.cost.total_lines_removed
-    if (-not $a -and -not $r) { return '' }
-    return "${GREEN}+${a}${RST}/${RED}-${r}${RST}"
+function Seg_env {
+    if ($env:SSH_CLIENT -or $env:SSH_TTY -or $env:SSH_CONNECTION) { return "${MAGENTA}REMOTE${RST}" }
+    return "${CYAN}LOCAL${RST}"
 }
 
 function Seg_rate_limits {
@@ -165,7 +296,6 @@ function Seg_rate_limits {
             try { $usageData = Get-Content $cacheFile -Raw | ConvertFrom-Json } catch {}
         }
     }
-
     if (-not $usageData) {
         $token = $env:CLAUDE_CODE_OAUTH_TOKEN
         if (-not $token) {
@@ -176,82 +306,99 @@ function Seg_rate_limits {
         }
         if ($token) {
             try {
-                $headers = @{
-                    Authorization = "Bearer $token"
-                    Accept = 'application/json'
-                    'Content-Type' = 'application/json'
-                    'anthropic-beta' = 'oauth-2025-04-20'
-                    'User-Agent' = 'claude-code/2.1.34'
-                }
+                $headers = @{ Authorization="Bearer $token"; Accept='application/json'; 'Content-Type'='application/json'; 'anthropic-beta'='oauth-2025-04-20'; 'User-Agent'='claude-code/2.1.34' }
                 $resp = Invoke-RestMethod -Uri 'https://api.anthropic.com/api/oauth/usage' -Headers $headers -TimeoutSec 5
-                $usageData = $resp
-                $resp | ConvertTo-Json -Depth 5 | Set-Content $cacheFile
+                $usageData = $resp; $resp | ConvertTo-Json -Depth 5 | Set-Content $cacheFile
             } catch {}
         }
         if (-not $usageData -and (Test-Path $cacheFile)) {
             try { $usageData = Get-Content $cacheFile -Raw | ConvertFrom-Json } catch {}
         }
     }
-
     if (-not $usageData) { return '' }
     $ctx.usageData = $usageData
 
     $fhPct = if ($usageData.five_hour.utilization) { [int]$usageData.five_hour.utilization } else { 0 }
-    $frozen = if ($ctx.is2x) { " ${CYAN}*${RST}" } else { '' }
+    $peakTag = if ($ctx.isPeak) { " ${YELLOW}*${RST}" } else { '' }
     $fhColor = ColorPct $fhPct
-    return "${fhColor}${fhPct}%${RST}${frozen}"
+
+    $labels = $schedule.labels
+    $fhLabel = if ($labels.five_hour) { $labels.five_hour } else { '5h' }
+
+    if ($tier -eq 'minimal') { return "${fhColor}${fhPct}%${RST} ${DIM}${fhLabel}${RST}${peakTag}" }
+
+    $bw = 10; $filled = [Math]::Floor($fhPct * $bw / 100); $empty = $bw - $filled
+    $bar = "${fhColor}$([string]::new([char]0x25B0, $filled))${DIM}$([string]::new([char]0x25B1, $empty))${RST}"
+    return "${bar} ${fhColor}${fhPct}%${RST}${peakTag}"
 }
 
-# -- Assemble --
+# Segment registry
 $segFns = @{
-    time='Seg_time'; promo_2x='Seg_promo_2x'; model='Seg_model'; context='Seg_context'
-    git_branch='Seg_git_branch'; git_dirty='Seg_git_dirty'; git_ahead_behind='Seg_git_ahead_behind'
-    cost='Seg_cost'; duration='Seg_duration'; lines='Seg_lines'; rate_limits='Seg_rate_limits'
+    banner='Seg_banner'; peak_hours='Seg_peak_hours'; promo_2x='Seg_peak_hours'
+    model='Seg_model'; context='Seg_context'; git_branch='Seg_git_branch'; git_dirty='Seg_git_dirty'
+    cost='Seg_cost'; duration='Seg_duration'; rate_limits='Seg_rate_limits'; effort='Seg_effort'; env='Seg_env'
 }
 
-$sep = if ($config['separator']) { $config['separator'] } else { ' | ' }
-$dimSep = "${DIM}${sep}${RST}"
-
+# Inject banner
+$bannerResult = & Seg_banner
 $parts = @(); $gitParts = @()
+if ($bannerResult) { $parts += $bannerResult }
+
 foreach ($name in $enabled) {
     $fn = $segFns[$name]
     if (-not $fn) { continue }
     $r = & $fn
     if (-not $r) { continue }
-    if ($name -in 'git_branch','git_dirty','git_ahead_behind') { $gitParts += $r }
+    if ($name -in 'git_branch','git_dirty') { $gitParts += $r }
     else { $parts += $r }
 }
 if ($gitParts.Count -gt 0) { $parts += ($gitParts -join ' ') }
 
-$line1 = $parts -join $dimSep
+# Flow design: colored arrows
+$arrowColor = if ($ctx.isPeak) { $YELLOW } else { $GREEN }
+$arrow = " ${arrowColor}$([char]0x25B8)${RST} "
+$line1 = $parts -join $arrow
 Write-Host $line1 -NoNewline
 
-# Full mode
-if ($mode -eq 'full' -and $ctx.isPromo) {
-    $cursorPos = $hour * 2 + $(if($minute -ge 30){1}else{0})
-    $isWeekend = $weekday -ge 6
-    $bar = ''
-    for ($i = 0; $i -lt 48; $i++) {
-        $h = [Math]::Floor($i / 2)
-        if ($i -eq $cursorPos) { $bar += "${WHITE}${BOLD}o${RST}" }
-        elseif ($isWeekend -or $h -lt $peakS -or $h -ge $peakE) { $bar += "${GREEN}-${RST}" }
-        else { $bar += "${YELLOW}-${RST}" }
-    }
-    if ($isWeekend) {
-        Write-Host "`n`n${DIM}|${RST}  ${bar}  ${DIM}|${RST}  ${GREEN}-${RST}${DIM} 2x all day${RST}" -NoNewline
-    } else {
-        Write-Host "`n`n${DIM}|${RST}  ${bar}  ${DIM}|${RST}  ${GREEN}-${RST}${DIM} 2x${RST} ${YELLOW}-${RST}${DIM} peak${RST}" -NoNewline
+# Full mode: timeline + rate limits
+if ($mode -eq 'full' -and $tier -eq 'full') {
+    $showTimeline = if ($schedule.features -and $schedule.features.show_timeline -ne $null) { $schedule.features.show_timeline } else { $true }
+    if ($showTimeline) {
+        $cursorPos = $hour * 2 + $(if($minute -ge 30){1}else{0})
+        $isPeakDay = $weekday -in $peakDays
+        $bar = ''
+        for ($i = 0; $i -lt 48; $i++) {
+            $h = $i / 2.0
+            if ($i -eq $cursorPos) { $bar += "${WHITE}${BOLD}o${RST}" }
+            elseif (-not $isPeakDay) { $bar += "${GREEN}-${RST}" }
+            else {
+                $inPeak = if ($peakEndLocal -gt $peakStartLocal) { $h -ge $peakStartLocal -and $h -lt $peakEndLocal } else { $h -ge $peakStartLocal -or $h -lt $peakEndLocal }
+                $bar += if ($inPeak) { "${YELLOW}-${RST}" } else { "${GREEN}-${RST}" }
+            }
+        }
+        if (-not $isPeakDay) {
+            Write-Host "`n`n${DIM}|${RST}  ${bar}  ${DIM}|${RST}  ${GREEN}-${RST}${DIM} off-peak all day${RST}" -NoNewline
+        } else {
+            Write-Host "`n`n${DIM}|${RST}  ${bar}  ${DIM}|${RST}  ${GREEN}-${RST}${DIM} off-peak${RST} ${YELLOW}-${RST}${DIM} peak ($(FmtHour $peakStartLocal)-$(FmtHour $peakEndLocal))${RST}" -NoNewline
+        }
     }
 
     if ($ctx.usageData) {
         $fhPct = if($ctx.usageData.five_hour.utilization){[int]$ctx.usageData.five_hour.utilization}else{0}
         $sdPct = if($ctx.usageData.seven_day.utilization){[int]$ctx.usageData.seven_day.utilization}else{0}
-        $frozen = if($ctx.is2x){" ${CYAN}*${RST}"}else{''}
-        $rlSep = " ${DIM}|${RST} "
-        $fhColor = ColorPct $fhPct
-        $sdColor = ColorPct $sdPct
-        $cur = "${WHITE}current${RST} ${fhColor}${fhPct}%${RST}"
-        $wk = "${WHITE}weekly${RST} ${sdColor}${sdPct}%${RST}${frozen}"
-        Write-Host "`n${cur}${rlSep}${wk}" -NoNewline
+        $peakTag = if($ctx.isPeak){" ${YELLOW}* peak${RST}"}else{" ${GREEN}+${RST}"}
+        $fhColor = ColorPct $fhPct; $sdColor = ColorPct $sdPct
+
+        $labels = $schedule.labels
+        $fhLabel = if ($labels.five_hour) { $labels.five_hour } else { '5h' }
+        $wkLabel = if ($labels.weekly) { $labels.weekly } else { 'weekly' }
+
+        $bw = 10
+        $fhFilled = [Math]::Floor($fhPct * $bw / 100); $fhEmpty = $bw - $fhFilled
+        $sdFilled = [Math]::Floor($sdPct * $bw / 100); $sdEmpty = $bw - $sdFilled
+        $fhBar = "${fhColor}$([string]::new([char]0x25B0, $fhFilled))${DIM}$([string]::new([char]0x25B1, $fhEmpty))${RST}"
+        $sdBar = "${sdColor}$([string]::new([char]0x25B0, $sdFilled))${DIM}$([string]::new([char]0x25B1, $sdEmpty))${RST}"
+
+        Write-Host "`n${DIM}|${RST} ${GREEN}>${RST} ${WHITE}${fhLabel}${RST} ${fhBar} ${fhColor}${fhPct}%${RST}${peakTag} ${DIM}.${RST} ${WHITE}${wkLabel}${RST} ${sdBar} ${sdColor}${sdPct}%${RST} ${DIM}|${RST}" -NoNewline
     }
 }

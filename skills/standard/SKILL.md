@@ -6,9 +6,9 @@ allowed-tools: ["Bash", "Read", "Write", "Edit"]
 
 # Switch to Standard Tier
 
-Switch the statusline to standard mode: time + 2x + model + context % + cost + duration + git.
+Switch the statusline to standard mode: peak status + model + context + cost + rate limit + git.
 
-Preview: `22:44 ▸ ⚡ 2x 5h left ▸ Opus 4.6 ▸ 40% ▸ $0.42 ▸ 23m ▸ main ~3`
+Preview: `OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ $0.42 ▸ ▰▰▱▱▱▱▱▱▱▱ 15% ▸ main saved`
 
 ## Steps
 
