@@ -1,29 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 280" fill="none">
-  <rect width="820" height="280" rx="12" fill="#1a1a2e"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 320" fill="none">
+  <rect width="820" height="320" rx="12" fill="#1a1a2e"/>
 
   <!-- STATUS LINE as clean bold text -->
   <text x="410" y="52" font-family="'Courier New', monospace" font-size="52" font-weight="900" fill="#e67e22" text-anchor="middle" letter-spacing="8">STATUS</text>
   <text x="410" y="100" font-family="'Courier New', monospace" font-size="52" font-weight="900" fill="#e67e22" text-anchor="middle" letter-spacing="8">LINE</text>
 
   <!-- Subtitle -->
-  <text x="410" y="128" font-family="sans-serif" font-size="15" fill="#6b7280" text-anchor="middle">for Claude Code</text>
+  <text x="410" y="130" font-family="sans-serif" font-size="15" fill="#6b7280" text-anchor="middle">v2.1 — for Claude Code</text>
 
   <!-- Statusline box -->
-  <rect x="60" y="144" width="700" height="100" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="40" y="148" width="740" height="130" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
 
   <!-- Line 1 - Badge -->
-  <rect x="76" y="156" width="90" height="22" rx="3" fill="#ca8a04"/>
-  <text x="84" y="172" font-family="monospace" font-size="13" fill="#1a1a2e" font-weight="bold">2x ACTIVE</text>
+  <rect x="56" y="160" width="80" height="22" rx="3" fill="#166534"/>
+  <text x="62" y="176" font-family="monospace" font-size="13" fill="#e2e8f0" font-weight="bold">Off-Peak</text>
 
   <!-- Line 1 - Rest -->
-  <text font-family="monospace" font-size="13" y="172">
-    <tspan x="174" fill="#e2e8f0"> 5h left</tspan>
+  <text font-family="monospace" font-size="13" y="176">
+    <tspan x="144" fill="#6b7280">peak in 3h</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
     <tspan fill="#60a5fa">Opus 4.6</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
-    <tspan fill="#4ade80">270K/1.0M 27%</tspan>
+    <tspan fill="#4ade80">360K/1.0M 36%</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
-    <tspan fill="#c084fc">$7.96</tspan>
+    <tspan fill="#c084fc">$4.20</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
     <tspan fill="#4ade80">HI</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
@@ -34,39 +34,55 @@
   </text>
 
   <!-- Line 2 - Timeline -->
-  <text font-family="monospace" font-size="12" y="198">
-    <tspan x="76" fill="#6b7280">│</tspan>
+  <text font-family="monospace" font-size="12" y="202">
+    <tspan x="56" fill="#6b7280">│</tspan>
     <tspan fill="#16a34a"> ━━━━━━━━━━━━━━━━━━━━━</tspan>
     <tspan fill="#e2e8f0" font-weight="bold">●</tspan>
-    <tspan fill="#eab308">━━━━━━━━━━━━━━━━</tspan>
-    <tspan fill="#16a34a">━━━━━━━</tspan>
+    <tspan fill="#eab308">━━━━━━━━━━━━━━</tspan>
+    <tspan fill="#16a34a">━━━━━━━━━</tspan>
     <tspan fill="#6b7280"> │</tspan>
     <tspan fill="#16a34a">  ━</tspan>
-    <tspan fill="#6b7280"> 2x</tspan>
+    <tspan fill="#6b7280"> off-peak</tspan>
     <tspan fill="#eab308"> ━</tspan>
-    <tspan fill="#6b7280"> peak</tspan>
+    <tspan fill="#6b7280"> peak (3pm-9pm)</tspan>
   </text>
 
   <!-- Line 3 - Rate limits -->
-  <text font-family="monospace" font-size="12" y="228">
-    <tspan x="76" fill="#6b7280">│</tspan>
+  <text font-family="monospace" font-size="12" y="232">
+    <tspan x="56" fill="#6b7280">│</tspan>
     <tspan fill="#4ade80"> ▸ </tspan>
     <tspan fill="#e2e8f0">5h</tspan>
     <tspan fill="#4ade80"> ▰▰</tspan>
     <tspan fill="#6b7280">▱▱▱▱▱▱▱▱</tspan>
-    <tspan fill="#4ade80">  17%</tspan>
+    <tspan fill="#4ade80">  11%</tspan>
     <tspan fill="#6b7280"> ⟳ 3:00pm</tspan>
+    <tspan fill="#4ade80"> ✓</tspan>
     <tspan fill="#6b7280"> · </tspan>
     <tspan fill="#e2e8f0">weekly</tspan>
     <tspan fill="#4ade80"> ▰▰▰</tspan>
     <tspan fill="#6b7280">▱▱▱▱▱▱▱</tspan>
     <tspan fill="#4ade80">  34%</tspan>
-    <tspan fill="#6b7280"> ⟳ 19/3 11pm</tspan>
+    <tspan fill="#6b7280"> ⟳ 4/4 11pm</tspan>
     <tspan fill="#6b7280"> │</tspan>
   </text>
 
+  <!-- Line 4 - Metrics -->
+  <text font-family="monospace" font-size="12" y="262">
+    <tspan x="56" fill="#6b7280">│</tspan>
+    <tspan fill="#4ade80"> ▸ </tspan>
+    <tspan fill="#e2e8f0">spending</tspan>
+    <tspan fill="#c084fc"> $3.2/hr</tspan>
+    <tspan fill="#6b7280"> · </tspan>
+    <tspan fill="#e2e8f0">ctx full ~47m</tspan>
+    <tspan fill="#6b7280"> · </tspan>
+    <tspan fill="#e2e8f0">cache</tspan>
+    <tspan fill="#4ade80"> 82%</tspan>
+    <tspan fill="#6b7280"> token reuse</tspan>
+    <tspan x="680" fill="#6b7280">│</tspan>
+  </text>
+
   <!-- Bottom tagline -->
-  <text x="410" y="270" font-family="sans-serif" font-size="13" fill="#6b7280" text-anchor="middle">
-    Track 2X promo · model · context · cost · rate limits · git — all in one line
+  <text x="410" y="308" font-family="sans-serif" font-size="13" fill="#6b7280" text-anchor="middle">
+    Peak hours · Rate limits · Burn rate · Context · Git — all live, all auto-updating
   </text>
 </svg>

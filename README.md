@@ -1,6 +1,6 @@
 <div align="center">
 
-<br>
+![claude-2x-statusline](assets/header.svg)
 
 # claude-2x-statusline
 
@@ -144,6 +144,8 @@ A modular statusline plugin for Claude Code that shows a **live dashboard** at t
 
 ### Minimal &mdash; 1 line
 
+![Minimal](assets/tier-minimal.svg)
+
 ```
 Off-Peak ▸ Opus 4.6 ▸ CTX 36% ▸ 11% 5H ▸ REMOTE ▸ main saved
 ```
@@ -151,6 +153,8 @@ Off-Peak ▸ Opus 4.6 ▸ CTX 36% ▸ 11% 5H ▸ REMOTE ▸ main saved
 One line with the essentials: peak status, model, context percentage, 5-hour limit percentage, environment, and git.
 
 ### Standard &mdash; 2 lines
+
+![Standard](assets/tier-standard.svg)
 
 ```
 Off-Peak ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
@@ -160,6 +164,8 @@ Off-Peak ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
 Full token counts, session cost, and a second line with graphical rate limit bars and reset times for both the 5-hour window and weekly limit.
 
 ### Full &mdash; 4 lines (recommended)
+
+![Full](assets/tier-full.svg)
 
 ```
 Off-Peak ▸ peak in 3h 22m ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
