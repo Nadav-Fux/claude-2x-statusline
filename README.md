@@ -11,7 +11,7 @@ Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash;
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)](#installation--30-seconds)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#engines-auto-detected)
-[![Works in](https://img.shields.io/badge/Works_in-CLI%20%7C%20VS_Code%20%7C%20JetBrains-blue)](#)
+[![Works in](https://img.shields.io/badge/Works_in-CLI%20%7C%20Terminal-blue)](#)
 [![Version](https://img.shields.io/badge/version-2.1.0-orange)](#)
 
 **[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
@@ -119,7 +119,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 <div dir="ltr" align="left">
 
-- Claude Code (CLI, VS Code, JetBrains, Desktop)
+- Claude Code (CLI / terminal)
 - **אחד מ:** Python 3 | Node.js | PowerShell 5.1+ | Bash
 
 </div>
@@ -390,7 +390,7 @@ The plugin ships with 4 engine implementations. The wrapper script auto-detects 
 
 Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is used directly. All engines produce identical output.
 
-**Works in all Claude Code environments:** CLI (terminal), VS Code extension, JetBrains extension, and Desktop app. They all share the same `~/.claude/settings.json`.
+**Confirmed for CLI / terminal.** VS Code and JetBrains extensions may also work (they share `~/.claude/settings.json`) but are not officially documented yet.
 
 ---
 
