@@ -37,23 +37,38 @@ Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash;
 <div dir="ltr" align="left">
 
 **Minimal** &mdash; שורה אחת, מינימלי ונקי:
+
+![Minimal](assets/tier-minimal.svg)
+
 ```
 Off-Peak ▸ Opus 4.6 ▸ CTX 36% ▸ 11% 5H ▸ REMOTE ▸ main saved
 ```
 
+שורה אחת עם העיקר: פיק/לא-פיק, מודל, אחוז context, אחוז מכסה 5 שעות, סביבה, git.
+
 **Standard** &mdash; 2 שורות, כולל עלות ו-rate limits עם ברים גרפיים:
+
+![Standard](assets/tier-standard.svg)
+
 ```
 Off-Peak ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
 │ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 11% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 4/4 11:00pm │
 ```
 
+טוקנים מפורטים, עלות סשן, ושורה שנייה עם ברי rate limit גרפיים וזמני איפוס.
+
 **Full** (מומלץ) &mdash; 4 שורות, דשבורד מלא עם timeline, burn rate, ו-cache:
+
+![Full](assets/tier-full.svg)
+
 ```
 Off-Peak ▸ peak in 3h 22m ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
 │ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
 │ ▸ 5h ▰▱▱▱▱▱▱▱▱▱ 11% ⟳ 3:00pm · weekly ▰▰▰▱▱▱▱▱▱▱ 34% ⟳ 4/4 11:00pm        │
 │ spending $3.2/hr · ctx full ~47m · cache 82%                                   │
 ```
+
+שורה 1: סטטוס נקי. שורה 2: ציר זמן ויזואלי של פיק/לא-פיק. שורה 3: ברי rate limit. שורה 4: קצב שריפה ($/שעה), זמן עד שה-context ייגמר, ואחוז cache.
 
 </div>
 
