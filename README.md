@@ -93,6 +93,33 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 
 </div>
 
+### תוסף VS Code
+
+ה-installer מזהה אוטומטית אם VS Code מותקן ומתקין תוסף לשורת הסטטוס של VS Code:
+
+<div dir="ltr" align="left">
+
+```
+🔥 Peak — 5h 30m left  |  💛 5h ██░░░░░░ 25%  |  📊 7d ███░░░░░ 34%  |  📏 53K/1.0M 5%  |  ⚙ HI
+```
+
+</div>
+
+- **שעות שיא** עם ספירה לאחור ואינדיקציה צבעונית
+- **Rate limits** עם ברי בטריה ויזואליים &mdash; 5 שעות ו-7 ימים בנפרד, כל אחד עם צבע משלו
+- **Context window** &mdash; קורא נתונים חיים מהטרמינל statusline
+- **Effort level** &mdash; HI / MED / LO עם צבע
+
+<div dir="ltr" align="left">
+
+| צבע | משמעות |
+|-----|--------|
+| **ירוק (teal)** | בריא &mdash; שימוש נמוך / מחוץ לשיא |
+| **צהוב** (רקע אזהרה) | בינוני &mdash; 50-79% שימוש או שעות שיא |
+| **אדום** (רקע שגיאה) | קריטי &mdash; 80%+ שימוש |
+
+</div>
+
 ### שעות עומס (Peak Hours)
 
 Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בשעות שיא. **שימו לב:** Peak = צריכה מהירה יותר של המכסה. Off-Peak = צריכה רגילה.
@@ -161,6 +188,32 @@ Full token counts, session cost, and a second line with graphical rate limit bar
 Line 1: Clean status bar. Line 2: Visual timeline of peak/off-peak. Line 3: Rate limit bars with resets. Line 4: Burn rate ($/hr), context depletion estimate, and cache hit ratio.
 
 The **Peak** badge turns **red** (lots of peak time left), **yellow** (1-2 hours remaining), or **green** (under 30 min &mdash; almost over), with a countdown showing exactly when peak ends.
+
+---
+
+## VS Code Extension
+
+The installer automatically detects VS Code and installs a companion status bar extension. It shows live data right in the VS Code status bar:
+
+```
+🔥 Peak — 5h 30m left  |  💛 5h ██░░░░░░ 25%  |  📊 7d ███░░░░░ 34%  |  📏 53K/1.0M 5%  |  ⚙ HI
+```
+
+**Features:**
+- **Peak/Off-Peak** with countdown and next-peak timer (color-coded)
+- **Rate limits** with battery bars — separate 5h and 7d, each with its own color
+- **Context window** — reads live data from the terminal statusline
+- **Effort level** — HI / MED / LO with color coding
+
+**Colors:**
+
+| Color | Meaning |
+|-------|---------|
+| **Teal** | Healthy — low usage / off-peak |
+| **Yellow** (warning bg) | Moderate — 50-79% usage or peak hours |
+| **Red** (error bg) | Critical — 80%+ usage |
+
+If VS Code is not installed, the extension step is simply skipped. You can install it later by running `npm run package` in the `vscode/` folder.
 
 ---
 

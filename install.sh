@@ -110,6 +110,29 @@ else
     echo "  ⚠ No curl/wget — schedule will be fetched on first run"
 fi
 
+# ── Step 7: VS Code extension (optional) ──
+if command -v code >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    echo ""
+    echo "  VS Code detected. Installing statusline extension..."
+    VSCODE_DIR="$INSTALL_DIR/vscode"
+    mkdir -p "$VSCODE_DIR"
+    cp "$SCRIPT_DIR/vscode/extension.ts" "$VSCODE_DIR/"
+    cp "$SCRIPT_DIR/vscode/package.json" "$VSCODE_DIR/"
+    cp "$SCRIPT_DIR/vscode/package-lock.json" "$VSCODE_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/vscode/tsconfig.json" "$VSCODE_DIR/"
+    cp "$SCRIPT_DIR/vscode/icon.png" "$VSCODE_DIR/"
+    cp "$SCRIPT_DIR/vscode/LICENSE" "$VSCODE_DIR/"
+
+    (cd "$VSCODE_DIR" && npm install --silent 2>/dev/null && npm run compile --silent 2>/dev/null && \
+        npx @vscode/vsce package --allow-missing-repository --out claude-statusline.vsix 2>/dev/null && \
+        code --install-extension claude-statusline.vsix --force 2>/dev/null && \
+        echo "  ✓ VS Code extension installed!") || \
+        echo "  ⚠ VS Code extension build failed (optional). Install manually from vscode/ folder."
+else
+    echo ""
+    echo "  VS Code not detected. Skipping extension (optional)."
+fi
+
 # ── Done ──
 echo ""
 echo "  ╭──────────────────────────────────────────╮"
@@ -122,6 +145,9 @@ echo "  │  To change tier:                         │"
 echo "  │    /statusline-minimal                   │"
 echo "  │    /statusline-standard                  │"
 echo "  │    /statusline-full                      │"
+echo "  │                                          │"
+echo "  │  VS Code: extension auto-installed       │"
+echo "  │  if VS Code + npm were detected.         │"
 echo "  │                                          │"
 echo "  │  Or re-run: bash install.sh              │"
 echo "  ╰──────────────────────────────────────────╯"

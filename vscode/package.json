@@ -1,0 +1,74 @@
+{
+  "name": "claude-statusline",
+  "displayName": "Claude Code Statusline",
+  "description": "Peak hours, rate limits, and session info for Claude Code — right in your VS Code status bar",
+  "version": "0.1.0",
+  "publisher": "nvision-digital",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "statusline",
+    "rate-limits",
+    "peak-hours",
+    "anthropic"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Nadav-Fux/claude-statusline-vscode"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Claude Code Statusline",
+      "properties": {
+        "claudeStatusline.tier": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "minimal", "standard", "full"],
+          "description": "Display tier. 'auto' reads from ~/.claude/statusline-config.json"
+        },
+        "claudeStatusline.refreshInterval": {
+          "type": "number",
+          "default": 30,
+          "description": "Refresh interval in seconds"
+        },
+        "claudeStatusline.showRateLimits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show rate limit usage from Anthropic OAuth API"
+        },
+        "claudeStatusline.showPeakHours": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show peak/off-peak status"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
