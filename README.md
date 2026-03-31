@@ -93,15 +93,23 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 
 </div>
 
-### תוסף VS Code
+### תוסף VS Code / Cursor / Windsurf / Antigravity
 
-ה-installer מזהה אוטומטית אם VS Code מותקן ומתקין תוסף לשורת הסטטוס של VS Code:
+ה-installer מזהה אוטומטית עורכים נתמכים ומתקין תוסף לשורת הסטטוס:
 
 <div dir="ltr" align="left">
 
-```
-🔥 Peak — 5h 30m left  |  💛 5h ██░░░░░░ 25%  |  📊 7d ███░░░░░ 34%  |  📏 53K/1.0M 5%  |  ⚙ HI
-```
+**Off-Peak &mdash; הכל ירוק:**
+
+![Off-Peak](assets/vscode-offpeak.svg)
+
+**Peak &mdash; שעות שיא:**
+
+![Peak](assets/vscode-peak.svg)
+
+**שימוש גבוה &mdash; אזהרה:**
+
+![High Usage](assets/vscode-high.svg)
 
 </div>
 
@@ -119,6 +127,8 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 | **אדום** (רקע שגיאה) | קריטי &mdash; 80%+ שימוש |
 
 </div>
+
+**עורכים נתמכים:** VS Code, Cursor, Windsurf, Antigravity (Google). כל עורך מבוסס VS Code נתמך.
 
 ### שעות עומס (Peak Hours)
 
@@ -191,29 +201,39 @@ The **Peak** badge turns **red** (lots of peak time left), **yellow** (1-2 hours
 
 ---
 
-## VS Code Extension
+## Editor Extension (VS Code / Cursor / Windsurf / Antigravity)
 
-The installer automatically detects VS Code and installs a companion status bar extension. It shows live data right in the VS Code status bar:
+The installer automatically detects supported editors and installs a companion status bar extension with live data and color coding.
 
-```
-🔥 Peak — 5h 30m left  |  💛 5h ██░░░░░░ 25%  |  📊 7d ███░░░░░ 34%  |  📏 53K/1.0M 5%  |  ⚙ HI
-```
+**Off-Peak &mdash; all green:**
+
+![Off-Peak](assets/vscode-offpeak.svg)
+
+**Peak hours:**
+
+![Peak](assets/vscode-peak.svg)
+
+**High usage &mdash; warning:**
+
+![High Usage](assets/vscode-high.svg)
 
 **Features:**
 - **Peak/Off-Peak** with countdown and next-peak timer (color-coded)
-- **Rate limits** with battery bars — separate 5h and 7d, each with its own color
-- **Context window** — reads live data from the terminal statusline
-- **Effort level** — HI / MED / LO with color coding
+- **Rate limits** with battery bars &mdash; separate 5h and 7d, each with its own color
+- **Context window** &mdash; reads live data from the terminal statusline
+- **Effort level** &mdash; HI / MED / LO with color coding
 
 **Colors:**
 
 | Color | Meaning |
 |-------|---------|
-| **Teal** | Healthy — low usage / off-peak |
-| **Yellow** (warning bg) | Moderate — 50-79% usage or peak hours |
-| **Red** (error bg) | Critical — 80%+ usage |
+| **Teal** | Healthy &mdash; low usage / off-peak |
+| **Yellow** (warning bg) | Moderate &mdash; 50-79% usage or peak hours |
+| **Red** (error bg) | Critical &mdash; 80%+ usage |
 
-If VS Code is not installed, the extension step is simply skipped. You can install it later by running `npm run package` in the `vscode/` folder.
+**Supported editors:** VS Code, Cursor, Windsurf, Antigravity (Google). Any VS Code&ndash;based editor should work.
+
+If no editor is detected, the extension step is simply skipped. You can install later by running `npm run package` in the `vscode/` folder.
 
 ---
 

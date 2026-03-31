@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="32" viewBox="0 0 820 32">
+  <style>
+    .bg { fill: #007ACC; }
+    .text { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 12px; fill: #fff; }
+    .warn-bg { fill: #9D6A00; }
+    .err-bg { fill: #A1260D; }
+    .dim { fill: #ccc; }
+    .teal { fill: #4ec9b0; }
+    .warm { fill: #dcdcaa; }
+  </style>
+  <!-- Status bar background -->
+  <rect class="bg" width="820" height="32" rx="4"/>
+  <!-- Peak segment (warning) -->
+  <rect class="warn-bg" x="8" y="4" width="210" height="24" rx="3"/>
+  <text class="text" x="18" y="20" font-weight="bold">&#x1F525; Peak &#x2014; 5h 30m left</text>
+  <!-- 5h segment -->
+  <rect class="bg" x="226" y="4" width="175" height="24" rx="3"/>
+  <text class="teal" x="236" y="20" font-family="'Segoe UI', system-ui, sans-serif" font-size="12">&#x25CF; 5h &#x2588;&#x2588;&#x2591;&#x2591;&#x2591;&#x2591;&#x2591;&#x2591; 2%</text>
+  <!-- 7d segment -->
+  <rect class="bg" x="409" y="4" width="185" height="24" rx="3"/>
+  <text class="text" x="419" y="20">&#x25CF; 7d &#x2588;&#x2588;&#x2588;&#x2591;&#x2591;&#x2591;&#x2591;&#x2591; 34%</text>
+  <!-- Context segment -->
+  <rect class="bg" x="602" y="4" width="130" height="24" rx="3"/>
+  <text class="teal" x="612" y="20" font-family="'Segoe UI', system-ui, sans-serif" font-size="12">&#x25A6; 53K/1.0M 5%</text>
+  <!-- Effort segment -->
+  <rect class="bg" x="740" y="4" width="70" height="24" rx="3"/>
+  <text class="warm" x="750" y="20" font-family="'Segoe UI', system-ui, sans-serif" font-size="12">&#x2699; HI</text>
+</svg>

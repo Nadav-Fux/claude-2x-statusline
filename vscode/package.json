@@ -1,7 +1,7 @@
 {
   "name": "claude-statusline",
   "displayName": "Claude Code Statusline",
-  "description": "Peak hours, rate limits, and session info for Claude Code — right in your VS Code status bar",
+  "description": "Peak hours, rate limits with battery bars, context window, and effort level for Claude Code — works in VS Code, Cursor, Windsurf, and Antigravity",
   "version": "0.1.0",
   "publisher": "nvision-digital",
   "engines": {
@@ -16,7 +16,12 @@
     "statusline",
     "rate-limits",
     "peak-hours",
-    "anthropic"
+    "anthropic",
+    "cursor",
+    "windsurf",
+    "antigravity",
+    "battery",
+    "context-window"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -29,7 +34,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Nadav-Fux/claude-statusline-vscode"
+    "url": "https://github.com/Nadav-Fux/claude-2x-statusline"
   },
   "contributes": {
     "configuration": {

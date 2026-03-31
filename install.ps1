@@ -31,11 +31,22 @@ $settings | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue @{
 $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
 Write-Host "Updated $settingsFile" -ForegroundColor Green
 
-# VS Code extension
-$vscodeBin = Get-Command code -ErrorAction SilentlyContinue
-if ($vscodeBin) {
+# VS Code / forks extension
+$editors = @(
+    @{ name='VS Code';      cmd='code' },
+    @{ name='Cursor';       cmd='cursor' },
+    @{ name='Windsurf';     cmd='windsurf' },
+    @{ name='Antigravity';  cmd='agy' }
+)
+$detected = @()
+foreach ($ed in $editors) {
+    if (Get-Command $ed.cmd -ErrorAction SilentlyContinue) { $detected += $ed }
+}
+
+if ($detected.Count -gt 0) {
+    $names = ($detected | ForEach-Object { $_.name }) -join ', '
     Write-Host ""
-    Write-Host "VS Code detected. Installing statusline extension..." -ForegroundColor Cyan
+    Write-Host "Detected: $names. Building statusline extension..." -ForegroundColor Cyan
 
     $vscodeDir = "$binDir\vscode-extension"
     if (-not (Test-Path $vscodeDir)) { New-Item -ItemType Directory -Path $vscodeDir -Force | Out-Null }
@@ -46,19 +57,30 @@ if ($vscodeBin) {
     }
 
     Push-Location $vscodeDir
+    $built = $false
     try {
         npm install --silent 2>$null
         npm run compile --silent 2>$null
         npx @vscode/vsce package --allow-missing-repository --out claude-statusline.vsix 2>$null
-        code --install-extension claude-statusline.vsix --force 2>$null
-        Write-Host "VS Code extension installed!" -ForegroundColor Green
+        $built = $true
     } catch {
-        Write-Host "VS Code extension build failed (optional). You can install it manually later." -ForegroundColor Yellow
+        Write-Host "Extension build failed (optional). You can build manually from vscode/ folder." -ForegroundColor Yellow
+    }
+
+    if ($built) {
+        foreach ($ed in $detected) {
+            try {
+                & $ed.cmd --install-extension claude-statusline.vsix --force 2>$null
+                Write-Host "  Installed in $($ed.name)!" -ForegroundColor Green
+            } catch {
+                Write-Host "  Could not install in $($ed.name) (install manually via VSIX)." -ForegroundColor Yellow
+            }
+        }
     }
     Pop-Location
 } else {
     Write-Host ""
-    Write-Host "VS Code not detected. Skipping VS Code extension (optional)." -ForegroundColor Yellow
+    Write-Host "No supported editors detected (VS Code, Cursor, Windsurf, Antigravity)." -ForegroundColor Yellow
     Write-Host "To install later: clone the repo and run 'npm run package' in the vscode/ folder." -ForegroundColor DarkGray
 }
 

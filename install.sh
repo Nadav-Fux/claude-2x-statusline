@@ -110,10 +110,18 @@ else
     echo "  ⚠ No curl/wget — schedule will be fetched on first run"
 fi
 
-# ── Step 7: VS Code extension (optional) ──
-if command -v code >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+# ── Step 7: Editor extension (VS Code / Cursor / Windsurf / Antigravity) ──
+EDITORS_FOUND=""
+for editor_cmd in code cursor windsurf agy; do
+    if command -v "$editor_cmd" >/dev/null 2>&1; then
+        EDITORS_FOUND="$EDITORS_FOUND $editor_cmd"
+    fi
+done
+
+if [ -n "$EDITORS_FOUND" ] && command -v npm >/dev/null 2>&1; then
     echo ""
-    echo "  VS Code detected. Installing statusline extension..."
+    echo "  Detected editors:$EDITORS_FOUND"
+    echo "  Building statusline extension..."
     VSCODE_DIR="$INSTALL_DIR/vscode"
     mkdir -p "$VSCODE_DIR"
     cp "$SCRIPT_DIR/vscode/extension.ts" "$VSCODE_DIR/"
@@ -123,14 +131,32 @@ if command -v code >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     cp "$SCRIPT_DIR/vscode/icon.png" "$VSCODE_DIR/"
     cp "$SCRIPT_DIR/vscode/LICENSE" "$VSCODE_DIR/"
 
+    VSIX_BUILT=false
     (cd "$VSCODE_DIR" && npm install --silent 2>/dev/null && npm run compile --silent 2>/dev/null && \
-        npx @vscode/vsce package --allow-missing-repository --out claude-statusline.vsix 2>/dev/null && \
-        code --install-extension claude-statusline.vsix --force 2>/dev/null && \
-        echo "  ✓ VS Code extension installed!") || \
-        echo "  ⚠ VS Code extension build failed (optional). Install manually from vscode/ folder."
+        npx @vscode/vsce package --allow-missing-repository --out claude-statusline.vsix 2>/dev/null) && VSIX_BUILT=true
+
+    if [ "$VSIX_BUILT" = true ]; then
+        for editor_cmd in $EDITORS_FOUND; do
+            case "$editor_cmd" in
+                code)       name="VS Code" ;;
+                cursor)     name="Cursor" ;;
+                windsurf)   name="Windsurf" ;;
+                agy)        name="Antigravity" ;;
+                *)          name="$editor_cmd" ;;
+            esac
+            if "$editor_cmd" --install-extension "$VSCODE_DIR/claude-statusline.vsix" --force 2>/dev/null; then
+                echo "  ✓ Installed in $name!"
+            else
+                echo "  ⚠ Could not install in $name (install manually via VSIX)."
+            fi
+        done
+    else
+        echo "  ⚠ Extension build failed (optional). Install manually from vscode/ folder."
+    fi
 else
     echo ""
-    echo "  VS Code not detected. Skipping extension (optional)."
+    echo "  No supported editors detected (VS Code, Cursor, Windsurf, Antigravity)."
+    echo "  To install later: build from the vscode/ folder."
 fi
 
 # ── Done ──
