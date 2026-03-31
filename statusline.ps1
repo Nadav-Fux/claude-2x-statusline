@@ -239,6 +239,14 @@ function Seg_context {
     $cur = [int]$u.input_tokens + [int]$u.cache_creation_input_tokens + [int]$u.cache_read_input_tokens
     $pct = [Math]::Floor($cur * 100 / $size)
     $c = ColorPct $pct
+    # Write context data for VS Code extension
+    try {
+        $ctxDir = Join-Path $env:TEMP 'claude'
+        if (-not (Test-Path $ctxDir)) { New-Item -ItemType Directory -Path $ctxDir -Force | Out-Null }
+        $ctxFile = Join-Path $ctxDir 'statusline-context.json'
+        $modelName = $stdinData.model.display_name
+        @{ current_usage=$cur; context_window_size=$size; pct=$pct; model=$modelName; updated_at=(Get-Date -Format o) } | ConvertTo-Json | Set-Content $ctxFile
+    } catch {}
     if ($tier -eq 'minimal') { return "${DIM}CTX${RST} ${c}${pct}%${RST}" }
     $curK = if ($cur -ge 1000000) { "{0:F1}M" -f ($cur/1000000) } elseif ($cur -ge 1000) { "{0}K" -f [Math]::Floor($cur/1000) } else { "$cur" }
     $sizeK = if ($size -ge 1000000) { "{0:F1}M" -f ($size/1000000) } else { "{0}K" -f [Math]::Floor($size/1000) }
