@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
     "full_mode_rate_limits": True,
     "full_mode_timeline": True,
     "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
-    "schedule_cache_hours": 6,
+    "schedule_cache_hours": 3,
 }
 
 # Default schedule (fallback when remote fetch fails and no cache exists)
@@ -146,7 +146,7 @@ def get_enabled_segments(config, schedule):
 def load_schedule(config):
     """Load peak hours schedule: remote (cached) → local cache → default."""
     cache_path = Path.home() / ".claude" / "statusline-schedule.json"
-    cache_hours = config.get("schedule_cache_hours", 6)
+    cache_hours = config.get("schedule_cache_hours", 3)
     schedule_url = config.get("schedule_url", DEFAULT_CONFIG["schedule_url"])
 
     # Check cache
@@ -154,7 +154,10 @@ def load_schedule(config):
         try:
             age_hours = (time.time() - cache_path.stat().st_mtime) / 3600
             cached = json.loads(cache_path.read_text())
-            if age_hours < cache_hours:
+            # Remote schedule can override cache TTL
+            remote_ttl = cached.get("cache_hours")
+            effective_ttl = remote_ttl if remote_ttl else cache_hours
+            if age_hours < effective_ttl:
                 debug(f"schedule: using cache (age {age_hours:.1f}h)")
                 return cached
         except Exception:

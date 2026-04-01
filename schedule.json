@@ -1,6 +1,7 @@
 {
-  "v": 3,
-  "updated": "2026-03-28",
+  "v": 4,
+  "updated": "2026-04-01",
+  "cache_hours": 3,
   "mode": "peak_hours",
   "default_tier": "full",
   "peak": {
