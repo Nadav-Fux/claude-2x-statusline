@@ -5,10 +5,10 @@
   "default_tier": "full",
   "peak": {
     "enabled": true,
-    "tz": "America/Los_Angeles",
+    "tz": "UTC",
     "days": [1, 2, 3, 4, 5],
-    "start": 5,
-    "end": 11,
+    "start": 13,
+    "end": 19,
     "label_peak": "Peak",
     "label_offpeak": "Off-Peak",
     "note": "Session limits consumed faster during peak hours. Weekly limits unchanged."
