@@ -236,24 +236,27 @@ function updatePeakItem(schedule: Schedule, showPeak: boolean) {
   const { startLocal, endLocal } = peakHoursToLocal(schedule, localOffset);
 
   const isPeakDay = peakDays.includes(weekday);
+  const prevWeekday = weekday === 1 ? 7 : weekday - 1;
+  const prevWasPeak = peakDays.includes(prevWeekday);
   let isPeak = false;
   let minsLeft = 0;
   let minsUntil = 0;
 
-  if (isPeakDay) {
+  if (isPeakDay || prevWasPeak) {
     if (endLocal > startLocal) {
-      isPeak = hour >= startLocal && hour < endLocal;
+      if (isPeakDay) { isPeak = hour >= startLocal && hour < endLocal; }
       if (isPeak) { minsLeft = Math.floor((endLocal - hour) * 60); }
-      else if (hour < startLocal) { minsUntil = Math.floor((startLocal - hour) * 60); }
+      else if (isPeakDay && hour < startLocal) { minsUntil = Math.floor((startLocal - hour) * 60); }
       else { minsUntil = minsUntilNextPeak(now, peakDays, startLocal); }
     } else {
-      isPeak = hour >= startLocal || hour < endLocal;
+      if (isPeakDay && hour >= startLocal) { isPeak = true; }
+      else if (prevWasPeak && hour < endLocal) { isPeak = true; }
       if (isPeak) {
         minsLeft = hour >= startLocal
           ? Math.floor((24 - hour + endLocal) * 60)
           : Math.floor((endLocal - hour) * 60);
       } else {
-        minsUntil = hour < startLocal
+        minsUntil = (isPeakDay && hour < startLocal)
           ? Math.floor((startLocal - hour) * 60)
           : minsUntilNextPeak(now, peakDays, startLocal);
       }

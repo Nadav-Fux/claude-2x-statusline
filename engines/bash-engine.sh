@@ -32,19 +32,15 @@ local_min=$(date +%-M 2>/dev/null || date +%M)
 dow=$(date +%u)  # 1=Mon, 7=Sun
 
 # UTC offset in hours (handles DST automatically via system timezone)
-utc_offset_sec=$(date +%z 2>/dev/null | sed 's/\(..\)\(..\)/\1*3600+\2*60/' | bc 2>/dev/null)
-if [ -z "$utc_offset_sec" ]; then
-    # Fallback: parse +HHMM format
-    tz_str=$(date +%z)
-    tz_sign="${tz_str:0:1}"
-    tz_hh="${tz_str:1:2}"
-    tz_mm="${tz_str:3:2}"
-    # Remove leading zeros
-    tz_hh=$((10#$tz_hh))
-    tz_mm=$((10#$tz_mm))
-    utc_offset_sec=$(( (tz_hh * 3600 + tz_mm * 60) ))
-    [ "$tz_sign" = "-" ] && utc_offset_sec=$(( -utc_offset_sec ))
-fi
+# Parse +HHMM / -HHMM format from date +%z
+tz_str=$(date +%z 2>/dev/null)
+tz_sign="${tz_str:0:1}"
+tz_hh="${tz_str:1:2}"
+tz_mm="${tz_str:3:2}"
+tz_hh=$((10#$tz_hh))
+tz_mm=$((10#$tz_mm))
+utc_offset_sec=$(( (tz_hh * 3600 + tz_mm * 60) ))
+[ "$tz_sign" = "-" ] && utc_offset_sec=$(( -utc_offset_sec ))
 local_offset_hours=$(( utc_offset_sec / 3600 ))
 
 # ── Pacific Time DST calculation ──
@@ -52,43 +48,51 @@ utc_year=$(date -u +%Y)
 utc_month=$(date -u +%-m 2>/dev/null || date -u +%m)
 utc_day=$(date -u +%-d 2>/dev/null || date -u +%d)
 
-# US DST: approx March 8-14 (second Sunday) to Nov 1-7 (first Sunday)
-# Simplified: March 10 - Nov 3 as approximation
+# US DST: Second Sunday of March (8-14) to First Sunday of November (1-7)
 if [ "$utc_month" -gt 3 ] && [ "$utc_month" -lt 11 ]; then
     pt_offset=-7  # PDT
-elif [ "$utc_month" -eq 3 ] && [ "$utc_day" -ge 10 ]; then
-    pt_offset=-7  # PDT (approximate)
-elif [ "$utc_month" -eq 11 ] && [ "$utc_day" -lt 3 ]; then
-    pt_offset=-7  # PDT (approximate)
+elif [ "$utc_month" -eq 3 ] && [ "$utc_day" -ge 8 ]; then
+    pt_offset=-7  # PDT (second Sunday is 8th at earliest)
+elif [ "$utc_month" -eq 11 ] && [ "$utc_day" -le 7 ]; then
+    pt_offset=-7  # PDT (first Sunday is 7th at latest)
 else
     pt_offset=-8  # PST
 fi
 
 # ── Remote schedule (try cached, skip fetch in bash for speed) ──
 SCHEDULE_CACHE="$HOME/.claude/statusline-schedule.json"
-peak_start_pt=5
-peak_end_pt=11
+peak_start_h=5
+peak_end_h=11
+peak_tz="America/Los_Angeles"
+peak_enabled=1
 
 if [ -f "$SCHEDULE_CACHE" ]; then
-    # Try to parse with python if available, else use defaults
     if command -v python3 >/dev/null 2>&1; then
         eval "$(python3 -c "
 import json,sys
 try:
     d=json.load(open('$SCHEDULE_CACHE'))
     p=d.get('peak',{})
-    print(f'peak_start_pt={p.get(\"start\",5)}')
-    print(f'peak_end_pt={p.get(\"end\",11)}')
+    print(f'peak_start_h={p.get(\"start\",5)}')
+    print(f'peak_end_h={p.get(\"end\",11)}')
+    print(f'peak_tz={p.get(\"tz\",\"America/Los_Angeles\")}')
+    print(f'peak_enabled={1 if p.get(\"enabled\",True) else 0}')
 except: pass
 " 2>/dev/null)"
     fi
 fi
 
+# ── Determine source timezone offset ──
+if [ "$peak_tz" = "UTC" ] || [ "$peak_tz" = "Etc/UTC" ] || [ "$peak_tz" = "GMT" ]; then
+    src_offset=0
+else
+    src_offset=$pt_offset
+fi
+
 # ── Convert peak hours to local time ──
-# peak_start_local = peak_start_pt - pt_offset + local_offset_hours (mod 24)
-peak_start_local=$(( (peak_start_pt - pt_offset + local_offset_hours) % 24 ))
+peak_start_local=$(( (peak_start_h - src_offset + local_offset_hours) % 24 ))
 [ "$peak_start_local" -lt 0 ] && peak_start_local=$(( peak_start_local + 24 ))
-peak_end_local=$(( (peak_end_pt - pt_offset + local_offset_hours) % 24 ))
+peak_end_local=$(( (peak_end_h - src_offset + local_offset_hours) % 24 ))
 [ "$peak_end_local" -lt 0 ] && peak_end_local=$(( peak_end_local + 24 ))
 
 # ── Format hours for display ──
@@ -107,8 +111,13 @@ now_mins=$(( local_hour * 60 + local_min ))
 peak_s_mins=$(( peak_start_local * 60 ))
 peak_e_mins=$(( peak_end_local * 60 ))
 
-# Only weekdays (1=Mon to 5=Fri)
-if [ "$dow" -ge 1 ] && [ "$dow" -le 5 ]; then
+# Check if today or previous day (for midnight spillover) is a peak day
+prev_dow=$(( dow == 1 ? 7 : dow - 1 ))
+is_peak_day=0; prev_peak_day=0
+[ "$dow" -ge 1 ] && [ "$dow" -le 5 ] && is_peak_day=1
+[ "$prev_dow" -ge 1 ] && [ "$prev_dow" -le 5 ] && prev_peak_day=1
+
+if [ "$is_peak_day" -eq 1 ] || [ "$prev_peak_day" -eq 1 ]; then
     if [ "$peak_e_mins" -gt "$peak_s_mins" ]; then
         # Normal case (no midnight crossing)
         if [ "$now_mins" -ge "$peak_s_mins" ] && [ "$now_mins" -lt "$peak_e_mins" ]; then
@@ -126,16 +135,15 @@ if [ "$dow" -ge 1 ] && [ "$dow" -le 5 ]; then
             fi
         fi
     else
-        # Crosses midnight
-        if [ "$now_mins" -ge "$peak_s_mins" ] || [ "$now_mins" -lt "$peak_e_mins" ]; then
+        # Crosses midnight — check spillover from previous day
+        if [ "$is_peak_day" -eq 1 ] && [ "$now_mins" -ge "$peak_s_mins" ]; then
             is_peak=1
-            if [ "$now_mins" -ge "$peak_s_mins" ]; then
-                mins_left=$(( (1440 - now_mins) + peak_e_mins ))
-            else
-                mins_left=$(( peak_e_mins - now_mins ))
-            fi
+            mins_left=$(( (1440 - now_mins) + peak_e_mins ))
+        elif [ "$prev_peak_day" -eq 1 ] && [ "$now_mins" -lt "$peak_e_mins" ]; then
+            is_peak=1
+            mins_left=$(( peak_e_mins - now_mins ))
         else
-            if [ "$now_mins" -lt "$peak_s_mins" ]; then
+            if [ "$is_peak_day" -eq 1 ] && [ "$now_mins" -lt "$peak_s_mins" ]; then
                 mins_until=$(( peak_s_mins - now_mins ))
             fi
         fi

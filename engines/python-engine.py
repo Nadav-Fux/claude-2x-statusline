@@ -431,26 +431,34 @@ def seg_peak_hours(ctx):
     ctx["peak_days"] = peak_days
 
     is_peak_day = weekday in peak_days
+    prev_weekday = 7 if weekday == 1 else weekday - 1
+    prev_was_peak = prev_weekday in peak_days
     is_peak = False
     mins_left = 0
     mins_until = 0
 
-    if is_peak_day:
+    if is_peak_day or prev_was_peak:
         # Handle case where peak hours cross midnight in local time
         if end_local > start_local:
             # Normal case: e.g. 15:00-21:00
-            is_peak = start_local <= hour < end_local
+            if is_peak_day:
+                is_peak = start_local <= hour < end_local
             if is_peak:
                 mins_left = int((end_local - hour) * 60)
             else:
-                if hour < start_local:
+                if is_peak_day and hour < start_local:
                     mins_until = int((start_local - hour) * 60)
+                elif is_peak_day:
+                    mins_until = _mins_until_next_peak(now, peak_days, start_local)
                 else:
-                    # After peak today, check next peak day
                     mins_until = _mins_until_next_peak(now, peak_days, start_local)
         else:
             # Crosses midnight: e.g. 22:00-04:00
-            is_peak = hour >= start_local or hour < end_local
+            # Peak if today is peak day and past start, OR previous day was peak and before end
+            if is_peak_day and hour >= start_local:
+                is_peak = True
+            elif prev_was_peak and hour < end_local:
+                is_peak = True
             if is_peak:
                 if hour >= start_local:
                     mins_left = int((24 - hour + end_local) * 60)
