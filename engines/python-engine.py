@@ -215,6 +215,18 @@ def get_local_time():
     except Exception:
         pass
 
+    # Fallback: parse system UTC offset from time module
+    try:
+        import time as _time
+        offset = -_time.timezone / 3600
+        if _time.daylight and _time.localtime().tm_isdst:
+            offset = -_time.altzone / 3600
+        now = datetime.now()
+        tz_name = _time.tzname[_time.localtime().tm_isdst] or f"UTC{offset:+.0f}"
+        return now, tz_name, offset
+    except Exception:
+        pass
+
     # Last resort: UTC
     now = datetime.now(timezone.utc)
     return now, "UTC", 0
@@ -222,6 +234,10 @@ def get_local_time():
 
 def get_tz_offset(tz_name, ref_time=None):
     """Get UTC offset for a named timezone at a given time (handles DST)."""
+    # Handle UTC explicitly (no zoneinfo needed)
+    if tz_name in ("UTC", "Etc/UTC", "GMT"):
+        return 0
+
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(tz_name)
