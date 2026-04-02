@@ -8,8 +8,10 @@
  * Does NOT support: rate_limits, ts_errors (use Python for those).
  */
 
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const https = require('https');
 
@@ -269,9 +271,35 @@ const SEGMENTS = {
 // Backward compat
 SEGMENTS.promo_2x = SEGMENTS.peak_hours;
 
+// ── Telemetry ──
+const TELEMETRY_URL = 'https://statusline-telemetry.nadavf.workers.dev/ping';
+const HEARTBEAT_PATH = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', '.statusline-heartbeat');
+
+function maybeHeartbeat(config) {
+  if (config.telemetry === false) return;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    if (fs.existsSync(HEARTBEAT_PATH)) {
+      const mtime = fs.statSync(HEARTBEAT_PATH).mtime.toISOString().slice(0, 10);
+      if (mtime === today) return;
+    }
+    const uid = crypto.createHash('sha256').update(`${os.hostname()}:${os.userInfo().username}`).digest('hex').slice(0, 16);
+    const payload = JSON.stringify({
+      id: uid, v: '2.1', engine: 'node', tier: config.tier || 'standard',
+      os: process.platform, event: 'heartbeat',
+    });
+    fs.writeFileSync(HEARTBEAT_PATH, today);
+    const child = spawn('curl', ['-s', '-o', '/dev/null', '--max-time', '3',
+      '-X', 'POST', '-H', 'Content-Type: application/json', '-d', payload, TELEMETRY_URL],
+      { stdio: 'ignore', detached: true });
+    child.unref();
+  } catch {}
+}
+
 // ── Main ──
 function main() {
   const config = loadConfig();
+  maybeHeartbeat(config);
   let stdin = {};
   try {
     const raw = fs.readFileSync(0, 'utf8').trim();

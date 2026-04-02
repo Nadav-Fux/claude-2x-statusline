@@ -9,6 +9,23 @@ BG_GREEN='\033[38;5;255;48;5;28m'; BG_YELLOW='\033[38;5;16;48;5;220m'
 BG_RED='\033[38;5;255;48;5;124m'; BG_GRAY='\033[48;5;236m'
 WHITE='\033[38;2;220;220;220m'
 
+# ── Telemetry heartbeat (daily, fire-and-forget) ──
+HEARTBEAT_FILE="$HOME/.claude/.statusline-heartbeat"
+_today=$(date -u +%Y-%m-%d)
+_do_ping=0
+if [ ! -f "$HEARTBEAT_FILE" ]; then _do_ping=1
+elif [ "$(cat "$HEARTBEAT_FILE" 2>/dev/null)" != "$_today" ]; then _do_ping=1
+fi
+if [ "$_do_ping" -eq 1 ]; then
+    _uid=$(echo -n "$(hostname):$(whoami)" | sha256sum 2>/dev/null | cut -c1-16)
+    if [ -n "$_uid" ]; then
+        echo "$_today" > "$HEARTBEAT_FILE"
+        curl -s -o /dev/null --max-time 3 -X POST -H 'Content-Type: application/json' \
+            -d "{\"id\":\"$_uid\",\"v\":\"2.1\",\"engine\":\"bash\",\"tier\":\"minimal\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"heartbeat\"}" \
+            "https://statusline-telemetry.nadavf.workers.dev/ping" &
+    fi
+fi
+
 # ── Local time & timezone offset ──
 local_hour=$(date +%-H 2>/dev/null || date +%H)
 local_min=$(date +%-M 2>/dev/null || date +%M)

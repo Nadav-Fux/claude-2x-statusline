@@ -78,6 +78,9 @@ let ctxItem: vscode.StatusBarItem;
 let infoItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let cachedSchedule: Schedule | null = null;
+const TELEMETRY_URL = 'https://statusline-telemetry.nadavf.workers.dev/ping';
+const HEARTBEAT_PATH = path.join(CLAUDE_DIR, '.statusline-heartbeat');
+let lastHeartbeatDate = '';
 let cachedUsage: UsageData | null = null;
 let usageFetchedAt = 0;
 
@@ -100,6 +103,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Initial update
   refresh();
+  maybeHeartbeat();
 
   // Start periodic refresh
   const intervalSec = vscode.workspace.getConfiguration('claudeStatusline').get<number>('refreshInterval', 30);
@@ -118,6 +122,30 @@ export function deactivate() {
   if (refreshTimer) {
     clearInterval(refreshTimer);
   }
+}
+
+function maybeHeartbeat() {
+  try {
+    const config = loadConfig();
+    if ((config as any).telemetry === false) { return; }
+    const today = new Date().toISOString().slice(0, 10);
+    if (lastHeartbeatDate === today) { return; }
+    try {
+      const mtime = fs.statSync(HEARTBEAT_PATH).mtime.toISOString().slice(0, 10);
+      if (mtime === today) { lastHeartbeatDate = today; return; }
+    } catch { /* no file */ }
+    const crypto = require('crypto');
+    const uid = crypto.createHash('sha256').update(`${os.hostname()}:${os.userInfo().username}`).digest('hex').slice(0, 16);
+    const payload = JSON.stringify({
+      id: uid, v: '0.1.1', engine: 'vscode', tier: config.tier || 'standard',
+      os: process.platform, event: 'heartbeat',
+    });
+    fs.writeFileSync(HEARTBEAT_PATH, today);
+    lastHeartbeatDate = today;
+    const req = https.request(TELEMETRY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    req.on('error', () => {});
+    req.end(payload);
+  } catch { /* telemetry is non-critical */ }
 }
 
 // ── Main refresh ──
@@ -285,21 +313,22 @@ async function updateRateLimitItems(tier: string, showRateLimits: boolean) {
   const fhPct = Math.round(fh?.utilization ?? 0);
   const wdPct = Math.round(wd?.utilization ?? 0);
 
-  // 5-hour item
-  updateBatteryItem(fhItem, '5h', fhPct, fh?.resets_at ?? fh?.reset_at);
+  // 5-hour item — $(clock) icon, teal when healthy
+  updateBatteryItem(fhItem, '5h', fhPct, fh?.resets_at ?? fh?.reset_at, '$(clock)');
 
-  // 7-day item (hide in minimal tier)
+  // 7-day item — $(calendar) icon, different visual identity
   if (tier === 'minimal') {
     wdItem.hide();
   } else {
-    updateBatteryItem(wdItem, '7d', wdPct, wd?.resets_at ?? wd?.reset_at);
+    updateBatteryItem(wdItem, '7d', wdPct, wd?.resets_at ?? wd?.reset_at, '$(calendar)');
   }
 }
 
-function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: number, resetAt?: string) {
+function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: number, resetAt?: string, icon?: string) {
   const bar = batteryBar(pct);
-  const icon = pct >= 80 ? '$(warning)' : pct >= 50 ? '$(dashboard)' : '$(pulse)';
-  item.text = `${icon} ${label} ${bar} ${pct}%`;
+  const defaultIcon = pct >= 80 ? '$(warning)' : '$(pulse)';
+  const displayIcon = (pct >= 80) ? '$(warning)' : (icon ?? defaultIcon);
+  item.text = `${displayIcon} ${label}:${pct}% ${bar}`;
 
   // Color coding — matches terminal: green <50%, yellow 50-79%, red ≥80%
   if (pct >= 80) {
@@ -310,11 +339,11 @@ function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: numbe
     item.color = undefined;
   } else {
     item.backgroundColor = undefined;
-    item.color = '#4ec9b0'; // green/teal for healthy
+    item.color = label === '5h' ? '#4ec9b0' : '#9cdcfe'; // teal for 5h, blue for 7d
   }
 
   // Tooltip
-  const lines = [`Claude Code — ${label} Rate Limit`, ''];
+  const lines = [`Claude Code — ${label === '5h' ? '5-Hour Session' : '7-Day Rolling'} Limit`, ''];
   lines.push(`Usage:  ${pct}%  ${usageBar(pct)}`);
   if (resetAt) {
     lines.push(`Resets: ${fmtResetTime(resetAt)}`);

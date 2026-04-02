@@ -178,3 +178,11 @@ echo "  │                                          │"
 echo "  │  Or re-run: bash install.sh              │"
 echo "  ╰──────────────────────────────────────────╯"
 echo ""
+
+# ── Telemetry: anonymous install ping ──
+_uid=$(echo -n "$(hostname):$(whoami)" | sha256sum 2>/dev/null | cut -c1-16)
+if [ -n "$_uid" ]; then
+    curl -s -o /dev/null --max-time 3 -X POST -H 'Content-Type: application/json' \
+        -d "{\"id\":\"$_uid\",\"v\":\"2.1\",\"engine\":\"installer\",\"tier\":\"$TIER\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"install\"}" \
+        "https://statusline-telemetry.nadavf.workers.dev/ping" &
+fi

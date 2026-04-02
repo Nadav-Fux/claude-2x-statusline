@@ -994,6 +994,7 @@ SEGMENTS = {
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
     config = load_config()
+    maybe_heartbeat(config)
     debug(f"config: tier={config.get('tier')}")
     stdin_data = read_stdin()
 
@@ -1091,6 +1092,38 @@ def main():
         metrics = build_metrics_line(ctx)
         if metrics:
             print(f"\n{metrics}", end="")
+
+
+TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"
+HEARTBEAT_PATH = Path.home() / ".claude" / ".statusline-heartbeat"
+
+def maybe_heartbeat(config):
+    """Send a daily anonymous heartbeat. Fire-and-forget, never blocks."""
+    if config.get("telemetry") is False:
+        return
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if HEARTBEAT_PATH.exists():
+            mtime = datetime.fromtimestamp(HEARTBEAT_PATH.stat().st_mtime, tz=timezone.utc)
+            if mtime.strftime("%Y-%m-%d") == today:
+                return
+        import socket
+        raw = f"{socket.gethostname()}:{os.getlogin()}"
+        uid = hashlib.sha256(raw.encode()).hexdigest()[:16]
+        payload = json.dumps({
+            "id": uid, "v": "2.1", "engine": "python",
+            "tier": config.get("tier", "standard"),
+            "os": sys.platform, "event": "heartbeat",
+        })
+        HEARTBEAT_PATH.write_text(today)
+        subprocess.Popen(
+            ["curl", "-s", "-o", os.devnull, "--max-time", "3",
+             "-X", "POST", "-H", "Content-Type: application/json",
+             "-d", payload, TELEMETRY_URL],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
