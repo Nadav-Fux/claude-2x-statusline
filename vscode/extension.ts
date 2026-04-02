@@ -313,42 +313,63 @@ async function updateRateLimitItems(tier: string, showRateLimits: boolean) {
   const fhPct = Math.round(fh?.utilization ?? 0);
   const wdPct = Math.round(wd?.utilization ?? 0);
 
-  // 5-hour item — $(clock) icon, teal when healthy
-  updateBatteryItem(fhItem, '5h', fhPct, fh?.resets_at ?? fh?.reset_at, '$(clock)');
+  // 5-hour item — $(clock) icon, cyan/teal family
+  updateFhItem(fhItem, fhPct, fh?.resets_at ?? fh?.reset_at);
 
-  // 7-day item — $(calendar) icon, different visual identity
+  // 7-day item — $(history) icon, purple/blue family
   if (tier === 'minimal') {
     wdItem.hide();
   } else {
-    updateBatteryItem(wdItem, '7d', wdPct, wd?.resets_at ?? wd?.reset_at, '$(calendar)');
+    updateWdItem(wdItem, wdPct, wd?.resets_at ?? wd?.reset_at);
   }
 }
 
-function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: number, resetAt?: string, icon?: string) {
+function updateFhItem(item: vscode.StatusBarItem, pct: number, resetAt?: string) {
   const bar = batteryBar(pct);
-  const defaultIcon = pct >= 80 ? '$(warning)' : '$(pulse)';
-  const displayIcon = (pct >= 80) ? '$(warning)' : (icon ?? defaultIcon);
-  item.text = `${displayIcon} ${label}:${pct}% ${bar}`;
-
-  // Color coding — text color only (no background), keeps it distinct from Peak
-  item.backgroundColor = undefined;
+  // 5h: cyan/teal color family
   if (pct >= 80) {
-    item.color = '#f14c4c'; // red
+    item.text = `$(warning) 5h:${pct}% ${bar}`;
+    item.color = '#f14c4c';           // red text
+    item.backgroundColor = undefined;
   } else if (pct >= 50) {
-    item.color = '#cca700'; // yellow/amber
+    item.text = `$(clock) 5h:${pct}% ${bar}`;
+    item.color = '#e8ab3a';           // warm amber
+    item.backgroundColor = undefined;
   } else {
-    item.color = label === '5h' ? '#4ec9b0' : '#9cdcfe'; // teal for 5h, blue for 7d
+    item.text = `$(clock) 5h:${pct}% ${bar}`;
+    item.color = '#3dc9b0';           // teal/cyan
+    item.backgroundColor = undefined;
   }
 
-  // Tooltip
-  const lines = [`Claude Code — ${label === '5h' ? '5-Hour Session' : '7-Day Rolling'} Limit`, ''];
+  const lines = ['$(clock) 5-Hour Session Limit', ''];
   lines.push(`Usage:  ${pct}%  ${usageBar(pct)}`);
-  if (resetAt) {
-    lines.push(`Resets: ${fmtResetTime(resetAt)}`);
-  }
+  if (resetAt) { lines.push(`Resets: ${fmtResetTime(resetAt)}`); }
+  if (pct >= 80) { lines.push('', '$(warning) High usage — consider slowing down'); }
+  item.tooltip = lines.join('\n');
+  item.show();
+}
+
+function updateWdItem(item: vscode.StatusBarItem, pct: number, resetAt?: string) {
+  const bar = batteryBar(pct);
+  // 7d: purple/violet color family — distinct from 5h teal
   if (pct >= 80) {
-    lines.push('', '$(warning) High usage — consider slowing down');
+    item.text = `$(warning) 7d:${pct}% ${bar}`;
+    item.color = '#f14c4c';           // red text
+    item.backgroundColor = undefined;
+  } else if (pct >= 50) {
+    item.text = `$(history) 7d:${pct}% ${bar}`;
+    item.color = '#d4a0ff';           // light purple/lavender
+    item.backgroundColor = undefined;
+  } else {
+    item.text = `$(history) 7d:${pct}% ${bar}`;
+    item.color = '#b4a0ff';           // soft purple
+    item.backgroundColor = undefined;
   }
+
+  const lines = ['$(history) 7-Day Rolling Limit', ''];
+  lines.push(`Usage:  ${pct}%  ${usageBar(pct)}`);
+  if (resetAt) { lines.push(`Resets: ${fmtResetTime(resetAt)}`); }
+  if (pct >= 80) { lines.push('', '$(warning) High usage — consider slowing down'); }
   item.tooltip = lines.join('\n');
   item.show();
 }
