@@ -240,22 +240,26 @@ function updatePeakItem(schedule: Schedule, showPeak: boolean) {
 
   if (isPeak) {
     const t = fmtDuration(minsLeft);
-    peakItem.text = `$(flame) ${labelPeak} — ${t} left`;
-    peakItem.backgroundColor = minsLeft <= 30
-      ? undefined  // almost over
-      : new vscode.ThemeColor('statusBarItem.warningBackground');
+    peakItem.text = `$(flame) ${labelPeak} — ${t} left (${rangeStr})`;
+    if (minsLeft <= 30) {
+      // Almost over — yellow
+      peakItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    } else {
+      // Deep in peak — red
+      peakItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    }
     peakItem.tooltip = `Peak hours: ${rangeStr} (local time)\nEnds in ${t}`;
     peakItem.color = undefined;
   } else {
     if (minsUntil > 0) {
-      peakItem.text = `$(check) ${labelOff} — peak in ${fmtDuration(minsUntil)}`;
+      peakItem.text = `$(check) ${labelOff} — peak in ${fmtDuration(minsUntil)} (${rangeStr})`;
       peakItem.tooltip = `Off-peak! Next peak in ${fmtDuration(minsUntil)}\nPeak hours: ${rangeStr} (local time)`;
     } else {
       peakItem.text = `$(check) ${labelOff}`;
       peakItem.tooltip = 'Off-peak — no restrictions';
     }
     peakItem.backgroundColor = undefined;
-    peakItem.color = '#4ec9b0'; // teal for off-peak = good
+    peakItem.color = '#4ec9b0'; // teal/green for off-peak
   }
   peakItem.show();
 }
@@ -297,7 +301,7 @@ function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: numbe
   const icon = pct >= 80 ? '$(warning)' : pct >= 50 ? '$(dashboard)' : '$(pulse)';
   item.text = `${icon} ${label} ${bar} ${pct}%`;
 
-  // Color coding
+  // Color coding — matches terminal: green <50%, yellow 50-79%, red ≥80%
   if (pct >= 80) {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     item.color = undefined;
@@ -306,7 +310,7 @@ function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: numbe
     item.color = undefined;
   } else {
     item.backgroundColor = undefined;
-    item.color = pct <= 20 ? '#4ec9b0' : undefined; // teal for healthy
+    item.color = '#4ec9b0'; // green/teal for healthy
   }
 
   // Tooltip
@@ -571,11 +575,24 @@ function getPacificOffset(): number {
   return (now >= dstStart && now < dstEnd) ? -7 : -8;
 }
 
+function getSourceOffset(tz: string): number {
+  if (!tz || tz === 'America/Los_Angeles') { return getPacificOffset(); }
+  if (tz === 'UTC' || tz === 'Etc/UTC') { return 0; }
+  // For other US timezones, apply known offsets (DST-aware via Pacific)
+  const pacificOff = getPacificOffset(); // -7 PDT or -8 PST
+  const tzOffsets: Record<string, number> = {
+    'America/New_York': pacificOff + 3,
+    'America/Chicago': pacificOff + 2,
+    'America/Denver': pacificOff + 1,
+  };
+  return tzOffsets[tz] ?? getPacificOffset();
+}
+
 function peakHoursToLocal(schedule: Schedule, localOffset: number): { startLocal: number; endLocal: number } {
   const peak = schedule.peak;
   const startH = peak.start;
   const endH = peak.end;
-  const srcOffset = getPacificOffset();
+  const srcOffset = getSourceOffset(peak.tz);
 
   const startLocal = ((startH - srcOffset + localOffset) % 24 + 24) % 24;
   const endLocal = ((endH - srcOffset + localOffset) % 24 + 24) % 24;

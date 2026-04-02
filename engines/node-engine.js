@@ -119,11 +119,23 @@ function getPacificOffset(utcDate) {
   return (utcDate >= dstStart && utcDate < dstEnd) ? -7 : -8;
 }
 
+function getSourceOffset(tz) {
+  if (!tz || tz === 'America/Los_Angeles') { return getPacificOffset(new Date()); }
+  if (tz === 'UTC' || tz === 'Etc/UTC') { return 0; }
+  const pacificOff = getPacificOffset(new Date());
+  const tzOffsets = {
+    'America/New_York': pacificOff + 3,
+    'America/Chicago': pacificOff + 2,
+    'America/Denver': pacificOff + 1,
+  };
+  return tzOffsets[tz] ?? getPacificOffset(new Date());
+}
+
 function peakHoursToLocal(schedule, localOffset) {
   const peak = schedule.peak || {};
   const startH = peak.start || 5;
   const endH = peak.end || 11;
-  const srcOffset = getPacificOffset(new Date());
+  const srcOffset = getSourceOffset(peak.tz);
 
   const startLocal = ((startH - srcOffset + localOffset) % 24 + 24) % 24;
   const endLocal = ((endH - srcOffset + localOffset) % 24 + 24) % 24;
