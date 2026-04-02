@@ -330,15 +330,13 @@ function updateBatteryItem(item: vscode.StatusBarItem, label: string, pct: numbe
   const displayIcon = (pct >= 80) ? '$(warning)' : (icon ?? defaultIcon);
   item.text = `${displayIcon} ${label}:${pct}% ${bar}`;
 
-  // Color coding — matches terminal: green <50%, yellow 50-79%, red ≥80%
+  // Color coding — text color only (no background), keeps it distinct from Peak
+  item.backgroundColor = undefined;
   if (pct >= 80) {
-    item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-    item.color = undefined;
+    item.color = '#f14c4c'; // red
   } else if (pct >= 50) {
-    item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-    item.color = undefined;
+    item.color = '#cca700'; // yellow/amber
   } else {
-    item.backgroundColor = undefined;
     item.color = label === '5h' ? '#4ec9b0' : '#9cdcfe'; // teal for 5h, blue for 7d
   }
 
