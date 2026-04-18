@@ -63,7 +63,7 @@ def test_no_insights_on_fresh_session(tmp_state_dir):
     # Cost rate is None AND rate_session < 0.5 → no burn insight.
     # No peak, schedule_mode=schedule → off-peak insight still triggers.
     # That's fine; assert list is either empty OR contains only off-peak.
-    assert all("Off-peak" in text or "headroom" in text for _, text, _ in insights)
+    assert all("off-peak" in text.lower() or "headroom" in text for _, text in insights)
 
 
 def test_session_fallback_when_no_rolling_window(tmp_state_dir):
@@ -72,7 +72,7 @@ def test_session_fallback_when_no_rolling_window(tmp_state_dir):
     # $6.00 over 1 hour = $6/hr (session)
     ctx = _make_ctx(cost_usd=6.0, duration_ms=3600000)
     insights = engine._narrator_insights(ctx)
-    texts = [t for _, t, _ in insights]
+    texts = [t for _, t in insights]
     assert any("$6.0/hr (session)" in t for t in texts)
 
 
@@ -82,7 +82,7 @@ def test_high_burn_triggers_critical(tmp_state_dir):
     # $20 over 1 hour = $20/hr
     ctx = _make_ctx(cost_usd=20.0, duration_ms=3600000)
     insights = engine._narrator_insights(ctx)
-    assert any(p <= 2 and "high" in t for p, t, _ in insights)
+    assert any(p <= 2 and "high" in t for p, t in insights)
 
 
 def test_low_burn_marks_dim(tmp_state_dir):
@@ -91,7 +91,7 @@ def test_low_burn_marks_dim(tmp_state_dir):
     # $1 over 1 hour = $1/hr
     ctx = _make_ctx(cost_usd=1.0, duration_ms=3600000)
     insights = engine._narrator_insights(ctx)
-    texts = [t for _, t, _ in insights]
+    texts = [t for _, t in insights]
     assert any("low burn" in t for t in texts)
 
 
@@ -100,7 +100,7 @@ def test_peak_insight_when_peak_active(tmp_state_dir):
     engine = _load_engine()
     ctx = _make_ctx(is_peak=True)
     insights = engine._narrator_insights(ctx)
-    assert any("Peak hours" in t for _, t, _ in insights)
+    assert any("peak hours" in t.lower() for _, t in insights)
 
 
 def test_offpeak_insight_in_schedule_mode(tmp_state_dir):
@@ -108,7 +108,7 @@ def test_offpeak_insight_in_schedule_mode(tmp_state_dir):
     engine = _load_engine()
     ctx = _make_ctx(is_peak=False, schedule_mode="schedule")
     insights = engine._narrator_insights(ctx)
-    assert any("Off-peak" in t for _, t, _ in insights)
+    assert any("off-peak" in t.lower() for _, t in insights)
 
 
 def test_no_offpeak_insight_in_normal_mode(tmp_state_dir):
@@ -116,7 +116,7 @@ def test_no_offpeak_insight_in_normal_mode(tmp_state_dir):
     engine = _load_engine()
     ctx = _make_ctx(is_peak=False, schedule_mode="normal")
     insights = engine._narrator_insights(ctx)
-    assert not any("Off-peak" in t for _, t, _ in insights)
+    assert not any("off-peak" in t.lower() for _, t in insights)
 
 
 def test_context_pressure_at_80_percent(tmp_state_dir):
@@ -130,7 +130,7 @@ def test_context_pressure_at_80_percent(tmp_state_dir):
         cache_create=0,
     )
     insights = engine._narrator_insights(ctx)
-    assert any("headroom" in t.lower() for _, t, _ in insights)
+    assert any("headroom" in t.lower() for _, t in insights)
 
 
 def test_build_narrator_line_caps_at_two(tmp_state_dir):
@@ -163,5 +163,5 @@ def test_insights_sorted_by_priority(tmp_state_dir):
     ctx = _make_ctx(cost_usd=20.0, duration_ms=3600000, is_peak=False, schedule_mode="schedule")
     line = engine.build_narrator_line(ctx)
     # High-burn should appear before off-peak (if both present)
-    if "high" in line and "Off-peak" in line:
-        assert line.index("high") < line.index("Off-peak")
+    if "high" in line and "off-peak" in line.lower():
+        assert line.lower().index("high") < line.lower().index("off-peak")

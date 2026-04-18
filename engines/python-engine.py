@@ -1015,45 +1015,78 @@ def _narrator_insights(ctx):
         if remaining > 0 and tokens_per_min > 0:
             mins_left = int(remaining / tokens_per_min)
 
+    # Narrator palette — deliberately different from the metrics line above:
+    # metrics uses RED/YELLOW/MAGENTA for severity; narrator uses MAGENTA/CYAN/
+    # DIM so the two lines are visually distinct at a glance. The "keyword"
+    # (High / Moderate / Active / compact-now) is the only bold-colored word;
+    # the rest of the sentence stays DIM for low-noise reading.
     if mins_left is not None and mins_left < 30:
-        insights.append((1, f"\u26a0 Context fills in ~{mins_left}m — compact now to keep history.", RED))
+        insights.append((
+            1,
+            (f"{MAGENTA}\u26a0 compact now{RST}{DIM} — context fills in ~{mins_left}m (history at risk).{RST}"),
+        ))
     elif mins_left is not None and mins_left < 60:
-        insights.append((2, f"Context fills in ~{mins_left}m — plan to compact soon.", YELLOW))
+        insights.append((
+            2,
+            (f"{CYAN}compact soon{RST}{DIM} — context fills in ~{mins_left}m.{RST}"),
+        ))
 
     effective_rate = rate_10m if rate_10m is not None else rate_session
     if effective_rate is not None:
         window = "10m" if rate_10m is not None else "session"
         if effective_rate >= 15:
-            insights.append((2, f"Burning ${effective_rate:.1f}/hr ({window}) — high; consider a break.", RED))
+            insights.append((
+                2,
+                (f"{MAGENTA}high burn{RST}{DIM} — ${effective_rate:.1f}/hr ({window}); consider a break.{RST}"),
+            ))
         elif effective_rate >= 5:
-            insights.append((4, f"Spending ${effective_rate:.1f}/hr ({window}) — moderate.", YELLOW))
+            insights.append((
+                4,
+                (f"{CYAN}moderate burn{RST}{DIM} — ${effective_rate:.1f}/hr ({window}).{RST}"),
+            ))
         elif effective_rate >= 0.5:
-            insights.append((5, f"Spending ${effective_rate:.1f}/hr ({window}) — low burn.", DIM))
+            insights.append((
+                5,
+                f"{DIM}low burn — ${effective_rate:.1f}/hr ({window}).{RST}",
+            ))
 
     if cache_delta_5m is not None and cache_delta_5m > 500:
         delta_str = f"{cache_delta_5m / 1000:.1f}k" if cache_delta_5m >= 1000 else str(cache_delta_5m)
-        insights.append((4, f"Cache active: saving ~{delta_str} tokens / 5 min.", GREEN))
+        insights.append((
+            4,
+            (f"{CYAN}cache active{RST}{DIM} — saving ~{delta_str} tokens / 5 min.{RST}"),
+        ))
 
     if ctx_pct >= 80 and (mins_left is None or mins_left >= 30):
-        insights.append((3, f"Context at {ctx_pct}% — headroom shrinking.", YELLOW))
+        insights.append((
+            3,
+            (f"{CYAN}context {ctx_pct}%{RST}{DIM} — headroom shrinking.{RST}"),
+        ))
 
     if ctx.get("is_peak"):
-        insights.append((4, "Peak hours: rate limits drain faster right now.", YELLOW))
+        insights.append((
+            4,
+            (f"{CYAN}peak hours{RST}{DIM} — rate limits drain faster now.{RST}"),
+        ))
     elif ctx.get("schedule", {}).get("mode") == "schedule":
-        insights.append((6, "Off-peak: full rate-limit headroom available.", DIM))
+        insights.append((
+            6,
+            f"{DIM}off-peak — full rate-limit headroom.{RST}",
+        ))
 
     return insights
 
 
 def build_narrator_line(ctx):
     """Line 5: plain-language explanation of the current statusline state.
-    Picks the top 1-2 insights by priority and joins them with ' · '."""
+    Picks the top 1-2 insights by priority and joins them with ' · '.
+    Each insight is already self-colored (see _narrator_insights)."""
     insights = _narrator_insights(ctx)
     if not insights:
         return ""
     insights.sort(key=lambda t: t[0])
     picked = insights[:2]
-    parts = [f"{color}{text}{RST}" for _, text, color in picked]
+    parts = [text for _, text in picked]
     inner = f" {DIM}\u00b7{RST} ".join(parts)
     return f"{DIM}\u2502 \u24d8  {RST}{inner}"
 

@@ -71,11 +71,23 @@ def append_sample(
     _save({"samples": samples})
 
 
-def rolling_rate(window_min: int = 10) -> "float | None":
-    """Return $/hr over last window_min minutes.
+# Minimum window span (seconds) before we trust a rolling rate.
+# Too short → one expensive API call creates a spike like $800/hr.
+_MIN_SPAN_SECS = 180  # 3 minutes
 
-    Returns None if fewer than 2 samples exist in the window or the span
-    is less than 1 minute (insufficient data).
+# Sanity cap: if computed rate exceeds this, treat as spike and return None
+# (caller will fall back to lifetime session rate).
+_MAX_PLAUSIBLE_RATE = 200.0  # $/hr
+
+
+def rolling_rate(window_min: int = 10) -> "float | None":
+    """Return $/hr over the last window_min minutes.
+
+    Returns None if:
+      - fewer than 2 samples in the window
+      - the span is less than 3 minutes (not enough to smooth spikes)
+      - the computed rate is above $200/hr (treated as a spike; caller
+        should fall back to session lifetime rate)
     """
     state = _load()
     samples = _window_samples(state.get("samples", []), window_min)
@@ -87,18 +99,28 @@ def rolling_rate(window_min: int = 10) -> "float | None":
     latest = samples[-1]
     elapsed_secs = latest["t"] - oldest["t"]
 
-    if elapsed_secs < 60:
+    if elapsed_secs < _MIN_SPAN_SECS:
         return None
 
     cost_delta = latest["cost"] - oldest["cost"]
+    if cost_delta < 0:
+        # Cost went backwards — session reset or state corruption.
+        return None
+
     elapsed_hours = elapsed_secs / 3600
-    return cost_delta / elapsed_hours if elapsed_hours > 0 else None
+    if elapsed_hours <= 0:
+        return None
+
+    rate = cost_delta / elapsed_hours
+    if rate > _MAX_PLAUSIBLE_RATE:
+        return None
+    return rate
 
 
 def rolling_tokens_out(window_min: int = 10) -> "int | None":
-    """Return output-token delta over last window_min minutes.
+    """Return output-token delta over the last window_min minutes.
 
-    Returns None if fewer than 2 samples or span < 1 minute.
+    Returns None if fewer than 2 samples or span < 3 minutes.
     """
     state = _load()
     samples = _window_samples(state.get("samples", []), window_min)
@@ -110,16 +132,18 @@ def rolling_tokens_out(window_min: int = 10) -> "int | None":
     latest = samples[-1]
     elapsed_secs = latest["t"] - oldest["t"]
 
-    if elapsed_secs < 60:
+    if elapsed_secs < _MIN_SPAN_SECS:
         return None
 
-    return latest["tokens_out"] - oldest["tokens_out"]
+    delta = latest["tokens_out"] - oldest["tokens_out"]
+    return delta if delta >= 0 else None
 
 
 def cache_delta(window_min: int = 5) -> "int | None":
-    """Return cache_read delta over last window_min minutes.
+    """Return cache_read delta over the last window_min minutes.
 
-    Returns None if fewer than 2 samples or span < 1 minute.
+    Returns None if fewer than 2 samples, span < 1 minute, or delta is
+    negative (session reset).
     """
     state = _load()
     samples = _window_samples(state.get("samples", []), window_min)
@@ -131,7 +155,10 @@ def cache_delta(window_min: int = 5) -> "int | None":
     latest = samples[-1]
     elapsed_secs = latest["t"] - oldest["t"]
 
+    # Cache delta uses a shorter 60s floor — it's a presence indicator,
+    # not a rate, so short spans are fine.
     if elapsed_secs < 60:
         return None
 
-    return latest["cache_read"] - oldest["cache_read"]
+    delta = latest["cache_read"] - oldest["cache_read"]
+    return delta if delta >= 0 else None
