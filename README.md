@@ -271,11 +271,15 @@ The installer asks which tier you want, writes the config, updates `settings.jso
 
 > **Recommendation:** Start with **Full**. You get everything &mdash; timeline, rate limits, burn rate, cache stats. You can always switch down.
 
-| Tier | Lines | What you see | Best for |
-|:-----|:-----:|:-------------|:---------|
-| **Minimal** | 1 | Peak status, model, CTX%, 5H%, env, git | Clean and focused |
-| **Standard** | 2 | + full token counts, cost, rate limit bars with resets | Daily use |
-| **Full** | 4 | + timeline visualization, burn rate, context depletion, cache % | **Recommended** |
+| Tier     | Lines | Segments                                                                       |
+|----------|-------|--------------------------------------------------------------------------------|
+| minimal  | 1     | peak_hours, model, context, git_branch, git_dirty, rate_limits, env            |
+| standard | 1     | peak_hours, model, context, vim_mode, agent, git_branch, git_dirty, cost,      |
+|          |       | effort, env                                                                    |
+| full     | 4     | Same segments as standard on line 1, plus: timeline (line 2), rate_limits bars |
+|          |       | (line 3), burn_rate + cache_hit + metrics (line 4)                             |
+
+On off-peak days (weekdays not in the peak schedule, and all-day normal-mode schedules), the timeline line is auto-hidden; rate limit bars and metrics still render.
 
 ### Switch Anytime
 
@@ -306,6 +310,8 @@ Or edit the config directly:
 
 ## What Everything Means
 
+This statusline is dense by design — each segment answers a specific question. If you see a segment you don't recognize, run `/statusline-doctor --explain <segment>` in Claude Code.
+
 ### Main Status Line
 
 ```
@@ -325,6 +331,8 @@ Or edit the config directly:
 | `main` | Git branch | Current branch name |
 | `saved` / `2 unsaved` | Git status | Green "saved" = clean. Yellow = uncommitted changes |
 
+When you see `$4.20`: cumulative session cost. Compare against your per-session budget. There's no auto-stop at any threshold.
+
 ### Conditional Segments (appear only when active)
 
 | Segment | When it appears |
@@ -332,6 +340,9 @@ Or edit the config directly:
 | `NORMAL` / `INSERT` | Vim mode is active in Claude Code |
 | Agent name | Running inside a subagent |
 | `wt:name` | Running inside a git worktree |
+
+When you see `NORMAL` or `INSERT`: Vim keybindings are active in Claude Code. If this is unexpected, check your settings.json for `"vim": true`.
+When you see `wt:name`: you are working in a linked git worktree. Run `/statusline-doctor --explain worktree` for details.
 
 ### Rate Limits (Standard + Full)
 
@@ -360,13 +371,54 @@ Or edit the config directly:
 | `ctx full ~47m` | Estimated time until context window is full (red < 30m, yellow < 60m) |
 | `cache 82%` | Token cache hit ratio (green >= 80%, yellow >= 50%, red < 50%) |
 
+When you see `$15.83`: cumulative session cost. Compare against your per-session budget. There's no auto-stop at any threshold.
+
+When you see `$6.3/hr (10m)`: spending rate over the last 10 minutes. The `(10m)` clarifies the window. If sustained, multiply by estimated remaining session hours to forecast total. Colors: RED if extrapolated session cost would exceed $50, YELLOW >$20, DIM otherwise.
+
+When you see `CTX full 37m`: at the current token-generation rate (last 10 min), your context window fills in ~37 minutes. **RED <30m = compact NOW.** YELLOW <60m = plan to compact soon. Hidden above 180m.
+
+When you see `cache 96% ↑2.3k`: 96% of cache tokens this tick came from cheap reads (good). `↑2.3k` = tokens read from cache in last 5 min, representing active cost savings. Bare `cache 96%` with no arrow = cache idle this tick (no savings happening right now).
+
 ### Timeline (Full only)
 
 ```
 │ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
 ```
 
-A visual representation of today's peak/off-peak windows with a marker showing where you are now. The legend shows the peak hours in your local timezone.
+A visual representation of today's peak/off-peak windows with a marker showing where you are now. The legend shows the peak hours in your local timezone. On all-day-free (`schedule.mode == "normal"`) days the bar shows a solid off-peak band with the label `Off-Peak all day ✔`.
+
+### Narrator (Full only, line 5)
+
+```
+│ ⓘ  Spending $5.4/hr (10m) — moderate. · Cache active: saving ~19k tokens / 5 min.
+```
+
+A plain-language line that explains what's happening in your session right now. Rotates between up to two of the most-actionable insights:
+
+| When you see... | It means... | What to do |
+|:----------------|:------------|:-----------|
+| `⚠ Context fills in ~24m — compact now...` | RED; <30 min until context is full | Run `/compact` immediately |
+| `Context fills in ~50m — plan to compact soon.` | YELLOW; <60 min | Compact at the next natural break |
+| `Burning $18/hr — high; consider a break.` | RED; rate ≥ $15/hr over the rolling window | Ask yourself if the next task is worth the cost |
+| `Spending $5/hr — moderate.` | YELLOW; rate ≥ $5/hr | Normal for complex work |
+| `Spending $1/hr — low burn.` | DIM; rate < $5/hr | Cheap session |
+| `Cache active: saving ~19k tokens / 5 min.` | GREEN; cache is saving cost right now | Nothing — this is the ideal state |
+| `Peak hours: rate limits drain faster right now.` | YELLOW; you're in a peak window | Consider heavy work during off-peak |
+| `Off-peak: full rate-limit headroom available.` | DIM; informational fallback | Nothing — this is the default good state |
+
+Disable with `features.show_narrator: false` in `schedule.json`.
+
+## Explaining any segment
+
+Run `/explain <segment>` (or `/statusline-doctor --explain <segment>`) to get a detailed in-terminal breakdown of what a segment shows, how it's computed, its color thresholds, and when it hides:
+
+```
+/explain burn_rate
+/explain cache_hit
+/explain context_depletion
+```
+
+Run `/explain` with no argument to see a table of all segments.
 
 ---
 

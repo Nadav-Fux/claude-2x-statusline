@@ -15,6 +15,18 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# Allow importing from project-root lib/ regardless of CWD
+_LIB_DIR = str(Path(__file__).parent.parent / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+from rolling_state import (
+    append_sample as _rs_append,
+    rolling_rate as _rs_rate,
+    rolling_tokens_out as _rs_tokens,
+    cache_delta as _rs_cache_delta,
+)
+
 DEBUG = os.environ.get("STATUSLINE_DEBUG") == "1"
 
 def debug(msg):
@@ -43,6 +55,14 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 # ══════════════════════════════════════════════════════════════════════════════
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
+# "standard" and "full" share an identical segment list — this is intentional.
+# Both tiers render the same line 1 segments. The difference is that "full" mode
+# triggers 3 additional output lines in the render loop (see main(), ~lines 1110-1122):
+#   line 2 — timeline bar       (build_timeline, guarded by show_timeline feature flag
+#                                 and off-peak-day check)
+#   line 3 — rate_limits bars   (build_rate_limits_line)
+#   line 4 — burn/cache metrics (build_metrics_line)
+# Do NOT alter the segment lists below; behaviour diverges only at render time.
 TIER_PRESETS = {
     # Minimal: essentials only — peak, model, compact context, rate limit %, git
     "minimal": ["peak_hours", "model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
@@ -405,7 +425,11 @@ def seg_banner(ctx):
 
 
 def seg_peak_hours(ctx):
-    """Show peak/off-peak status with countdown. Returns '' when mode=normal."""
+    """Show peak/off-peak status with countdown. Returns '' when mode=normal.
+
+    Note: Returns empty when schedule.mode == 'normal'. Render loop (Workstream C)
+    is responsible for suppressing the timeline line on off-peak days.
+    """
     schedule = ctx["schedule"]
 
     # If mode is "normal" (no restrictions), hide this segment entirely
@@ -567,7 +591,7 @@ def seg_git_dirty(ctx):
             unpushed = int(ahead)
 
     if not uncommitted and not unpushed:
-        return f"{GREEN}saved{RST}"
+        return f"{GREEN}clean{RST}"
 
     if uncommitted and unpushed:
         return f"{YELLOW}{uncommitted} changed, {unpushed} unpushed{RST}"
@@ -596,7 +620,7 @@ def seg_git_ahead_behind(ctx):
 def seg_cost(ctx):
     cost = ctx["stdin"].get("cost", {}).get("total_cost_usd")
     if cost is None:
-        return ""
+        return f"{DIM}$?{RST}"
     return f"{MAGENTA}${cost:.2f}{RST}"
 
 
@@ -645,7 +669,7 @@ def seg_effort(ctx):
             settings = json.loads(settings_path.read_text())
             level = settings.get("effortLevel", "")
             if level:
-                label = {"low": "LO", "medium": "MED", "high": "HI"}.get(level, level.upper())
+                label = {"low": "e:LO", "medium": "e:MED", "high": "e:HI"}.get(level, "e:" + level.upper())
                 color = {"low": DIM, "medium": YELLOW, "high": GREEN}.get(level, DIM)
                 return f"{color}{label}{RST}"
     except Exception:
@@ -666,15 +690,35 @@ def seg_burn_rate(ctx):
     cost = cost_data.get("total_cost_usd")
     duration_ms = cost_data.get("total_duration_ms")
     if not cost or not duration_ms or float(duration_ms) < 60000:
-        return ""  # Need at least 1 min of data
-    hours = float(duration_ms) / 3600000
-    rate = float(cost) / hours if hours > 0 else 0
+        return f"{DIM}$?/hr{RST}"  # Need at least 1 min of data
+
+    # Append a rolling-state sample so the 10-min window stays fresh
+    cw_raw = ctx["stdin"].get("context_window", {})
+    usage_raw = cw_raw.get("current_usage", {})
+    _rs_append(
+        cost=float(cost),
+        tokens_in=usage_raw.get("input_tokens", 0),
+        tokens_out=usage_raw.get("output_tokens", 0),
+        cache_read=usage_raw.get("cache_read_input_tokens", 0),
+        cache_creation=usage_raw.get("cache_creation_input_tokens", 0),
+    )
+
+    # Prefer rolling 10-min rate; fall back to lifetime rate so the user
+    # always sees a number (labelled so they know which window it is).
+    rate = _rs_rate(10)
+    window_label = "10m"
+    if rate is None or rate < 0.01:
+        hours = float(duration_ms) / 3600000
+        rate = float(cost) / hours if hours > 0 else 0
+        window_label = "session"
+
     if rate < 0.01:
-        return ""
+        return f"{DIM}$?/hr{RST}"
 
-    parts = [f"{DIM}spending{RST} {MAGENTA}${rate:.1f}/hr{RST}"]
+    rate_color = RED if rate >= 10 else YELLOW if rate >= 5 else MAGENTA
+    parts = [f"{DIM}spending{RST} {rate_color}${rate:.1f}/hr ({window_label}){RST}"]
 
-    # Context depletion estimate
+    # Context depletion estimate using rolling tokens-out rate
     cw = ctx["stdin"].get("context_window", {})
     size = cw.get("context_window_size", 0)
     usage = cw.get("current_usage", {})
@@ -683,20 +727,22 @@ def seg_burn_rate(ctx):
         + usage.get("cache_creation_input_tokens", 0)
         + usage.get("cache_read_input_tokens", 0)
     )
-    if size > 0 and current > 0 and float(duration_ms) > 0:
-        tokens_per_min = current / (float(duration_ms) / 60000)
-        remaining = size - current
-        if tokens_per_min > 0 and remaining > 0:
-            mins_left = int(remaining / tokens_per_min)
-            if mins_left < 180:
-                color = RED if mins_left < 30 else YELLOW if mins_left < 60 else DIM
-                parts.append(f"{color}ctx full ~{fmt_duration(mins_left)}{RST}")
+    if size > 0 and current > 0:
+        tokens_out_delta = _rs_tokens(10)
+        if tokens_out_delta is not None and tokens_out_delta > 0:
+            tokens_per_min = tokens_out_delta / 10
+            remaining = size - current
+            if remaining > 0:
+                mins_left = int(remaining / tokens_per_min)
+                if mins_left < 180:
+                    color = RED if mins_left < 30 else YELLOW if mins_left < 60 else DIM
+                    parts.append(f"{color}ctx full ~{fmt_duration(mins_left)}{RST}")
 
     return " ".join(parts)
 
 
 def seg_cache_hit(ctx):
-    """Show cache efficiency ratio."""
+    """Show cache efficiency ratio with optional rolling delta."""
     cw = ctx["stdin"].get("context_window", {})
     usage = cw.get("current_usage", {})
     cache_read = usage.get("cache_read_input_tokens", 0)
@@ -705,8 +751,14 @@ def seg_cache_hit(ctx):
     if total_cache < 1000:
         return ""  # Not enough cache data to be meaningful
     hit_pct = cache_read * 100 // total_cache if total_cache > 0 else 0
-    color = GREEN if hit_pct >= 80 else YELLOW if hit_pct >= 50 else RED
-    return f"{DIM}cache{RST} {color}{hit_pct}%{RST}"
+
+    delta = _rs_cache_delta(5)
+    if delta is not None and delta > 0:
+        delta_str = f"{delta / 1000:.1f}k" if delta >= 1000 else str(delta)
+        pct_color = GREEN if delta > 500 else DIM
+        return f"{DIM}cache{RST} {pct_color}{hit_pct}% \u2191{delta_str} active{RST}"
+
+    return f"{DIM}cache{RST} {DIM}{hit_pct}% idle{RST}"
 
 
 def seg_vim_mode(ctx):
@@ -933,49 +985,92 @@ def _format_reset(iso_str, style="time"):
         return ""
 
 
-def build_metrics_line(ctx):
-    """Line 4: spending + cache metrics with inline explanations."""
-    parts = []
+def _narrator_insights(ctx):
+    """Pure helper: return a list of (priority, text, color) tuples describing
+    the most-relevant facts about current state. Priority 1 = most urgent."""
+    insights = []
 
-    # Burn rate
     cost_data = ctx["stdin"].get("cost", {})
-    cost = cost_data.get("total_cost_usd")
-    duration_ms = cost_data.get("total_duration_ms")
-    if cost and duration_ms and float(duration_ms) >= 60000:
-        hours = float(duration_ms) / 3600000
-        rate = float(cost) / hours if hours > 0 else 0
-        if rate >= 0.01:
-            part = f"{GREEN}\u25b8{RST} {WHITE}spending{RST} {MAGENTA}${rate:.1f}/hr{RST}"
-            # Context depletion estimate
-            cw = ctx["stdin"].get("context_window", {})
-            size = cw.get("context_window_size", 0)
-            usage = cw.get("current_usage", {})
-            current = (
-                usage.get("input_tokens", 0)
-                + usage.get("cache_creation_input_tokens", 0)
-                + usage.get("cache_read_input_tokens", 0)
-            )
-            if size > 0 and current > 0 and float(duration_ms) > 0:
-                tokens_per_min = current / (float(duration_ms) / 60000)
-                remaining = size - current
-                if tokens_per_min > 0 and remaining > 0:
-                    mins_left = int(remaining / tokens_per_min)
-                    color = RED if mins_left < 30 else YELLOW if mins_left < 60 else WHITE
-                    part += f" {DIM}\u00b7{RST} {color}ctx full ~{fmt_duration(mins_left)}{RST}"
-            parts.append(part)
-
-    # Cache efficiency
+    cost = cost_data.get("total_cost_usd") or 0.0
+    duration_ms = float(cost_data.get("total_duration_ms") or 0)
     cw = ctx["stdin"].get("context_window", {})
     usage = cw.get("current_usage", {})
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_create = usage.get("cache_creation_input_tokens", 0)
-    total_cache = cache_read + cache_create
-    if total_cache >= 1000:
-        hit_pct = cache_read * 100 // total_cache
-        color = GREEN if hit_pct >= 80 else YELLOW if hit_pct >= 50 else RED
-        parts.append(f"{WHITE}cache{RST} {color}{hit_pct}%{RST} {DIM}token reuse{RST}")
+    ctx_size = cw.get("context_window_size", 0) or 0
+    ctx_current = (
+        usage.get("input_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+        + usage.get("cache_read_input_tokens", 0)
+    )
+    ctx_pct = int(ctx_current * 100 / ctx_size) if ctx_size else 0
 
-    # Peak note
+    rate_10m = _rs_rate(10)
+    rate_session = (cost / (duration_ms / 3600000)) if duration_ms >= 60000 else None
+    tokens_delta = _rs_tokens(10)
+    cache_delta_5m = _rs_cache_delta(5)
+
+    mins_left = None
+    if ctx_size and ctx_current and tokens_delta and tokens_delta > 0:
+        tokens_per_min = tokens_delta / 10
+        remaining = ctx_size - ctx_current
+        if remaining > 0 and tokens_per_min > 0:
+            mins_left = int(remaining / tokens_per_min)
+
+    if mins_left is not None and mins_left < 30:
+        insights.append((1, f"\u26a0 Context fills in ~{mins_left}m — compact now to keep history.", RED))
+    elif mins_left is not None and mins_left < 60:
+        insights.append((2, f"Context fills in ~{mins_left}m — plan to compact soon.", YELLOW))
+
+    effective_rate = rate_10m if rate_10m is not None else rate_session
+    if effective_rate is not None:
+        window = "10m" if rate_10m is not None else "session"
+        if effective_rate >= 15:
+            insights.append((2, f"Burning ${effective_rate:.1f}/hr ({window}) — high; consider a break.", RED))
+        elif effective_rate >= 5:
+            insights.append((4, f"Spending ${effective_rate:.1f}/hr ({window}) — moderate.", YELLOW))
+        elif effective_rate >= 0.5:
+            insights.append((5, f"Spending ${effective_rate:.1f}/hr ({window}) — low burn.", DIM))
+
+    if cache_delta_5m is not None and cache_delta_5m > 500:
+        delta_str = f"{cache_delta_5m / 1000:.1f}k" if cache_delta_5m >= 1000 else str(cache_delta_5m)
+        insights.append((4, f"Cache active: saving ~{delta_str} tokens / 5 min.", GREEN))
+
+    if ctx_pct >= 80 and (mins_left is None or mins_left >= 30):
+        insights.append((3, f"Context at {ctx_pct}% — headroom shrinking.", YELLOW))
+
+    if ctx.get("is_peak"):
+        insights.append((4, "Peak hours: rate limits drain faster right now.", YELLOW))
+    elif ctx.get("schedule", {}).get("mode") == "schedule":
+        insights.append((6, "Off-peak: full rate-limit headroom available.", DIM))
+
+    return insights
+
+
+def build_narrator_line(ctx):
+    """Line 5: plain-language explanation of the current statusline state.
+    Picks the top 1-2 insights by priority and joins them with ' · '."""
+    insights = _narrator_insights(ctx)
+    if not insights:
+        return ""
+    insights.sort(key=lambda t: t[0])
+    picked = insights[:2]
+    parts = [f"{color}{text}{RST}" for _, text, color in picked]
+    inner = f" {DIM}\u00b7{RST} ".join(parts)
+    return f"{DIM}\u2502 \u24d8  {RST}{inner}"
+
+
+def build_metrics_line(ctx):
+    """Line 4: spending + cache metrics. Delegates to seg_burn_rate +
+    seg_cache_hit so the rolling-window logic is the single source of truth."""
+    parts = []
+
+    burn = seg_burn_rate(ctx)
+    if burn:
+        parts.append(f"{GREEN}\u25b8{RST} {burn}")
+
+    cache = seg_cache_hit(ctx)
+    if cache:
+        parts.append(cache)
+
     if ctx.get("is_peak"):
         parts.append(f"{YELLOW}\u26a1 peak = limits drain faster{RST}")
 
@@ -1103,19 +1198,33 @@ def main():
         if rate_line:
             print(f"\n{rate_line}", end="")
 
-    # Full tier: additional lines
+    # Full tier: additional lines (line 2, 3, 4)
     if is_full_tier:
         features = schedule.get("features", {})
+
+        # full mode: line 2 — visual 24h timeline. Always rendered (even on
+        # off-peak days) so the bar is a consistent anchor; a day with no
+        # peak window is a legitimate visual state, not a broken statusline.
         if features.get("show_timeline", True):
             timeline = build_timeline(ctx)
             if timeline:
                 print(f"\n\n{timeline}", end="")
+
+        # full mode: line 3 — rate limit bars (5h window + weekly)
         rate_line = build_rate_limits_line(ctx)
         if rate_line:
             print(f"\n{rate_line}", end="")
+
+        # full mode: line 4 — burn rate, cache hit ratio, session metrics
         metrics = build_metrics_line(ctx)
         if metrics:
             print(f"\n{metrics}", end="")
+
+        # full mode: line 5 — plain-language narrator explaining current state
+        if features.get("show_narrator", True):
+            narrator = build_narrator_line(ctx)
+            if narrator:
+                print(f"\n{narrator}", end="")
 
 
 TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"

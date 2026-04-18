@@ -1,7 +1,7 @@
 ---
 description: "Diagnose (and optionally fix) claude-2x-statusline problems"
 allowed-tools: ["Bash"]
-argument-hint: "[--fix] [--report] [--json]"
+argument-hint: "[--fix] [--report] [--json] [--explain [segment]]"
 ---
 
 Run the claude-2x-statusline doctor.
@@ -26,5 +26,8 @@ The doctor checks for:
    - `--fix` → interactive fix prompts (requires TTY)
    - `--json` → machine-readable output
    - `--report` → send anonymous telemetry ping (IDs of failed checks only)
+   - `--explain` → print a table of all segments with one-line descriptions
+   - `--explain <segment>` → print a detailed explanation for a specific segment
+     (e.g. `--explain burn_rate`, `--explain cache_hit`, `--explain context_depletion`)
 3. Show the output verbatim. Do not paraphrase.
 4. If fixes were applied, remind the user to restart Claude Code.

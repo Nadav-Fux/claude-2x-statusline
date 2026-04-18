@@ -93,8 +93,8 @@ fi
 
 # ── Step 5: Install slash commands ──
 mkdir -p "$HOME/.claude/commands"
-cp "$SCRIPT_DIR/commands/statusline-"*.md "$HOME/.claude/commands/" 2>/dev/null && \
-    echo "  ✓ Slash commands installed (/statusline-minimal, /statusline-standard, /statusline-full)" || \
+cp "$SCRIPT_DIR/commands/"*.md "$HOME/.claude/commands/" 2>/dev/null && \
+    echo "  ✓ Slash commands installed (/statusline-*, /explain)" || \
     echo "  ⚠ Could not install slash commands"
 
 # ── Step 6: Fetch initial schedule ──
