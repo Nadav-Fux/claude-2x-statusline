@@ -4,8 +4,12 @@
 # https://github.com/Nadav-Fux/claude-2x-statusline
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY=$(command -v python3 2>/dev/null || command -v python 2>/dev/null)
-NODE=$(command -v node 2>/dev/null)
+
+# shellcheck source=lib/resolve-runtime.sh
+. "$SCRIPT_DIR/lib/resolve-runtime.sh"
+
+PY=$(resolve_runtime python)
+NODE=$(resolve_runtime node)
 
 if [ -n "$PY" ]; then
     exec "$PY" "$SCRIPT_DIR/engines/python-engine.py" "$@"
