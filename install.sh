@@ -42,15 +42,18 @@ echo ""
 
 # ── Step 2: Copy files ──
 echo "  Installing files..."
-mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills" "$INSTALL_DIR/.claude-plugin"
+mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills" \
+         "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/lib" "$INSTALL_DIR/doctor"
 cp "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/statusline.ps1" "$INSTALL_DIR/" 2>/dev/null || true
 cp "$SCRIPT_DIR/engines/"* "$INSTALL_DIR/engines/"
+cp "$SCRIPT_DIR/lib/"* "$INSTALL_DIR/lib/"
+cp "$SCRIPT_DIR/doctor/"* "$INSTALL_DIR/doctor/"
 cp "$SCRIPT_DIR/plugin.json" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/.claude-plugin/plugin.json" "$INSTALL_DIR/.claude-plugin/"
+cp "$SCRIPT_DIR/.claude-plugin/plugin.json" "$INSTALL_DIR/.claude-plugin/" 2>/dev/null || true
 cp -r "$SCRIPT_DIR/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
 cp -r "$SCRIPT_DIR/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
-chmod +x "$INSTALL_DIR/statusline.sh"
+chmod +x "$INSTALL_DIR/statusline.sh" "$INSTALL_DIR/doctor/doctor.sh" "$INSTALL_DIR/doctor/fixes.sh" 2>/dev/null || true
 echo "  ✓ Copied to $INSTALL_DIR"
 
 # ── Step 3: Write config ──

@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# claude-2x-statusline — fix engine for doctor.sh
+#
+# Invoked by doctor.sh as:
+#   bash fixes.sh <hint> <settings.json> <statusline-config.json> <repo-root>
+#
+# One fix per invocation. Exits 0 on success, non-zero on failure. Any
+# change to settings.json is atomic (write to .tmp, rename over) so a
+# partial interrupt cannot leave the file unparseable.
+#
+# Known hints:
+#   add-statusline      settings.json has no statusLine stanza
+#   restore-statusline  statusLine was hijacked (e.g. token-optimizer)
+#   wrap-command        Windows: strip inline 'VAR=val bash …' and route
+#                       through a ~/.claude/statusline-wrapper.sh
+#   create-config       statusline-config.json missing; write default
+
+set -u
+
+HINT="${1:-}"
+SETTINGS="${2:-$HOME/.claude/settings.json}"
+CONFIG="${3:-$HOME/.claude/statusline-config.json}"
+REPO_ROOT="${4:-}"
+
+[ -n "$HINT" ] || { echo "fixes.sh: missing hint" >&2; exit 2; }
+[ -n "$REPO_ROOT" ] || REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+CLAUDE_DIR="$(dirname "$SETTINGS")"
+
+# ── Runtime resolver (shared with statusline.sh + doctor.sh) ─────────────
+if [ -f "$REPO_ROOT/lib/resolve-runtime.sh" ]; then
+    # shellcheck source=../lib/resolve-runtime.sh
+    . "$REPO_ROOT/lib/resolve-runtime.sh"
+else
+    resolve_runtime() {
+        case "$1" in
+            python) for c in python3 python; do command -v "$c" 2>/dev/null && return 0; done ;;
+            node)   command -v node 2>/dev/null && return 0 ;;
+        esac
+        return 1
+    }
+fi
+
+PY=$(resolve_runtime python || true)
+
+# ── OS detection ─────────────────────────────────────────────────────────
+is_windows=0
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) is_windows=1 ;;
+esac
+[ -n "${WINDIR:-}" ] && is_windows=1
+
+# ── JSON helpers ─────────────────────────────────────────────────────────
+# Set statusLine.command in settings.json. Preserves every other key.
+# Requires python — falls back to a naive rewrite that only handles the
+# common shape. If settings.json is missing, creates a minimal one.
+set_statusline_command() {
+    local new_cmd="$1"
+    if [ -n "$PY" ] && [ -f "$SETTINGS" ]; then
+        "$PY" - "$SETTINGS" "$new_cmd" <<'PY'
+import json, os, sys, tempfile
+path, new_cmd = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+data["statusLine"] = {"type": "command", "command": new_cmd}
+dir_ = os.path.dirname(path) or "."
+fd, tmp = tempfile.mkstemp(dir=dir_, prefix=".settings.", suffix=".tmp")
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+os.replace(tmp, path)
+PY
+        return $?
+    fi
+
+    # No python or no settings — create a minimal settings.json from scratch.
+    mkdir -p "$CLAUDE_DIR"
+    local tmp="$SETTINGS.tmp.$$"
+    cat > "$tmp" <<JSON
+{
+  "statusLine": {
+    "type": "command",
+    "command": "$new_cmd"
+  }
+}
+JSON
+    mv "$tmp" "$SETTINGS"
+}
+
+# Default statusLine command. On Windows we always go through the wrapper
+# so the user never hits the cmd.exe-can't-parse-inline-env trap again.
+default_statusline_command() {
+    if [ "$is_windows" = "1" ]; then
+        echo "bash $CLAUDE_DIR/statusline-wrapper.sh"
+    else
+        echo "bash $REPO_ROOT/statusline.sh"
+    fi
+}
+
+# ── Wrapper generator (Windows) ──────────────────────────────────────────
+# The wrapper solves two problems:
+#   1. settings.json routes through cmd.exe, which cannot parse inline
+#      'VAR=value cmd' syntax. A bash script runs as a single argument.
+#   2. Portable Python/Node at C:\Users\nadav\tools\… aren't on PATH for
+#      non-interactive shells. The wrapper prepends them before execing.
+#
+# We only add paths that actually exist on this machine — no dead entries.
+write_wrapper() {
+    local wrapper="$CLAUDE_DIR/statusline-wrapper.sh"
+    local extras=""
+    local home_win="${USERPROFILE:-$HOME}"
+    case "$home_win" in
+        [A-Za-z]:\\*) home_win="/${home_win:0:1}/${home_win:3}"; home_win="${home_win//\\//}" ;;
+    esac
+
+    # Node candidates — add the directory of the first one we find.
+    for d in \
+        "$home_win"/tools/node-*/ \
+        "$home_win"/tools/node/ \
+        "$home_win"/AppData/Roaming/nvm/v*/ \
+        "/c/Program Files/nodejs/"; do
+        for dd in $d; do
+            [ -d "$dd" ] || continue
+            [ -f "$dd/node.exe" ] || [ -f "$dd/node" ] || continue
+            extras="$extras:${dd%/}"
+            break 2
+        done
+    done
+
+    # Python candidates.
+    for d in \
+        "$home_win"/tools/python-*/ \
+        "$home_win"/tools/python/ \
+        "$home_win"/AppData/Local/Programs/Python/Python3*/ \
+        /c/Python3*/ \
+        "/c/Program Files/Python3"*/; do
+        for dd in $d; do
+            [ -d "$dd" ] || continue
+            [ -f "$dd/python.exe" ] || [ -f "$dd/python" ] || continue
+            extras="$extras:${dd%/}"
+            break 2
+        done
+    done
+
+    mkdir -p "$CLAUDE_DIR"
+    cat > "$wrapper" <<WRAP
+#!/usr/bin/env bash
+# Generated by claude-2x-statusline doctor --fix (wrap-command).
+# Purpose: shield the statusline from two Windows-specific quirks —
+#   (a) cmd.exe can't parse inline 'VAR=val cmd' assignments, and
+#   (b) portable Node/Python installs aren't on the non-interactive PATH.
+# Safe to regenerate; safe to edit. Delete and re-run 'doctor --fix' to
+# rebuild from detected portable installs.
+export PATH="${extras#:}:\$PATH"
+exec bash "$REPO_ROOT/statusline.sh" "\$@"
+WRAP
+    chmod +x "$wrapper" 2>/dev/null || true
+    echo "$wrapper"
+}
+
+# ── Fix handlers ─────────────────────────────────────────────────────────
+fix_add_statusline() {
+    local cmd
+    cmd=$(default_statusline_command)
+    if [ "$is_windows" = "1" ]; then
+        write_wrapper >/dev/null
+    fi
+    set_statusline_command "$cmd" || return 1
+    echo "    ↳ set statusLine.command to: $cmd"
+}
+
+fix_restore_statusline() {
+    local cmd
+    cmd=$(default_statusline_command)
+    if [ "$is_windows" = "1" ]; then
+        write_wrapper >/dev/null
+    fi
+    set_statusline_command "$cmd" || return 1
+    echo "    ↳ restored statusLine.command to: $cmd"
+}
+
+fix_wrap_command() {
+    [ "$is_windows" = "1" ] || { echo "    ↳ wrap-command only applies on Windows"; return 0; }
+    local wrapper
+    wrapper=$(write_wrapper)
+    set_statusline_command "bash $wrapper" || return 1
+    echo "    ↳ wrapper written: $wrapper"
+    echo "    ↳ statusLine now invokes wrapper (cmd.exe-safe)"
+}
+
+fix_create_config() {
+    [ -f "$CONFIG" ] && { echo "    ↳ config already exists, leaving untouched"; return 0; }
+    mkdir -p "$(dirname "$CONFIG")"
+    cat > "$CONFIG" <<'JSON'
+{
+  "tier": "full",
+  "mode": "full",
+  "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
+  "schedule_cache_hours": 6
+}
+JSON
+    echo "    ↳ wrote default config to $CONFIG (tier=full)"
+}
+
+# ── Dispatch ─────────────────────────────────────────────────────────────
+case "$HINT" in
+    add-statusline)      fix_add_statusline ;;
+    restore-statusline)  fix_restore_statusline ;;
+    wrap-command)        fix_wrap_command ;;
+    create-config)       fix_create_config ;;
+    *)
+        echo "fixes.sh: unknown hint '$HINT'" >&2
+        exit 2
+        ;;
+esac
