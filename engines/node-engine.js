@@ -54,7 +54,9 @@ function getEnabled(config) {
 
 function loadSchedule(config) {
   const cachePath = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', 'statusline-schedule.json');
-  const cacheHours = config.schedule_cache_hours || 6;
+  // Default matches python-engine (3h). Was 6h here, causing the two engines
+  // to refresh the schedule on different cadences when no explicit config.
+  const cacheHours = config.schedule_cache_hours || 3;
 
   // Check cache
   try {

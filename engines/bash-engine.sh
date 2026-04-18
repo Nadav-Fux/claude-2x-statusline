@@ -117,7 +117,16 @@ is_peak_day=0; prev_peak_day=0
 [ "$dow" -ge 1 ] && [ "$dow" -le 5 ] && is_peak_day=1
 [ "$prev_dow" -ge 1 ] && [ "$prev_dow" -le 5 ] && prev_peak_day=1
 
-if [ "$is_peak_day" -eq 1 ] || [ "$prev_peak_day" -eq 1 ]; then
+# A previous peak day only matters when the peak actually crosses midnight
+# AND we're still inside the spillover window. Otherwise Saturday morning
+# (Fri peak ended hours ago) would incorrectly enter the weekday branch and
+# fall through without setting mins_until → "Off-Peak" with no countdown.
+in_spillover=0
+if [ "$prev_peak_day" -eq 1 ] && [ "$peak_e_mins" -lt "$peak_s_mins" ] && [ "$now_mins" -lt "$peak_e_mins" ]; then
+    in_spillover=1
+fi
+
+if [ "$is_peak_day" -eq 1 ] || [ "$in_spillover" -eq 1 ]; then
     if [ "$peak_e_mins" -gt "$peak_s_mins" ]; then
         # Normal case (no midnight crossing)
         if [ "$now_mins" -ge "$peak_s_mins" ] && [ "$now_mins" -lt "$peak_e_mins" ]; then
