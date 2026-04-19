@@ -13,6 +13,6 @@
     "url": "https://github.com/Nadav-Fux/claude-2x-statusline"
   },
   "author": "Nadav Fux",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": ["claude", "claude-code", "statusline", "peak-hours", "rate-limits", "timezone"]
 }
