@@ -175,17 +175,6 @@ class TestMidnightCrossingPeakUTCPlus3:
 
 # ── Case 3: Saturday spillover ────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason=(
-        "Known bug: when a midnight-crossing schedule has day-of-week filter "
-        "[Sat] and the user is in a forward timezone (e.g. UTC+3), the engine "
-        "checks local weekday against the filter. Local weekday is Sun at "
-        "Sat-23:00-UTC, so the peak-day test fails. Needs either (a) "
-        "day-of-week filter applied in UTC, or (b) spillover logic that also "
-        "checks yesterday-UTC-weekday. Tracked for a later patch."
-    ),
-    strict=True,
-)
 def test_saturday_spillover_into_sunday():
     """Peak Sat UTC 22:00 → Sun UTC 04:00; Sun 02:00 UTC+3 (Sat 23:00 UTC) = peak."""
     _require_engine()

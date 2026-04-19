@@ -72,8 +72,24 @@ CONF
 echo "  ✓ Config saved to $CONFIG"
 
 # ── Step 4: Update settings.json ──
-PY=$(command -v python3 2>/dev/null || command -v python 2>/dev/null)
+# Use the shared resolver so we reject Windows App-Store stubs and pick up
+# portable installs (~/tools/python-*, AppData\Local\Programs\Python, etc.).
+# shellcheck source=lib/resolve-runtime.sh
+. "$SCRIPT_DIR/lib/resolve-runtime.sh"
+PY=$(resolve_runtime python 2>/dev/null || true)
+NODE=$(resolve_runtime node 2>/dev/null || true)
 STATUSLINE_CMD="bash $INSTALL_DIR/statusline.sh"
+
+# Advisory: which runtime will actually drive the statusline?
+if [ -n "$PY" ]; then
+    echo "  ✓ Runtime: Python at $PY (full dashboard, narrator enabled)"
+elif [ -n "$NODE" ]; then
+    echo "  ⚠ Runtime: Node.js only ($NODE) — statusline works, narrator disabled"
+    echo "    (Narrator requires Python 3.9+. Install from python.org for the full experience.)"
+else
+    echo "  ⚠ Runtime: no Python or Node found — bash-only minimal statusline"
+    echo "    Install Python 3 (python.org) or Node.js for full features + narrator."
+fi
 
 if [ -f "$SETTINGS" ] && [ -n "$PY" ]; then
     "$PY" -c "
@@ -161,11 +177,12 @@ PYWIRE
         echo "  ✓ Narrator hooks wired in settings.json"
     fi
 else
-    echo "  ⚠ No python found — narrator hooks not wired. Add manually:"
-    echo "    hooks.SessionStart:     bash $HOOK_SS"
-    echo "    hooks.UserPromptSubmit: bash $HOOK_PS"
+    echo "  ⚠ Skipping narrator hooks — no Python found."
+    echo "    Narrator requires Python 3.9+. Statusline still works via Node/bash."
 fi
-echo "  ℹ Narrator: rules-mode ON by default. Set ANTHROPIC_API_KEY + STATUSLINE_NARRATOR_HAIKU=1 for the Haiku layer."
+if [ -n "$PY" ]; then
+    echo "  ℹ Narrator: rules-mode ON by default. Set ANTHROPIC_API_KEY + STATUSLINE_NARRATOR_HAIKU=1 for the Haiku layer."
+fi
 
 # ── Step 5: Install slash commands ──
 mkdir -p "$HOME/.claude/commands"

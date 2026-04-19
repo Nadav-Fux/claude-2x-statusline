@@ -294,7 +294,16 @@ def _us_pacific_offset(utc_dt):
 
 def peak_hours_to_local(schedule, local_offset):
     """Convert peak hours from schedule timezone to local time.
-    Returns (local_start_hour_float, local_end_hour_float, duration_hours)."""
+
+    Returns (local_start_hour_float, local_end_hour_float, duration_hours,
+             peak_day_offset).
+
+    `peak_day_offset` is the number of days the LOCAL peak window is shifted
+    FORWARD from the schedule-timezone's peak day. For example, a schedule
+    of peak=22 UTC on Saturday, observed by a UTC+3 user, starts at local
+    01:00 on SUNDAY — so peak_day_offset=1. The caller uses this to check
+    `peak_days` against the correct effective local weekday.
+    """
     peak = schedule.get("peak", {})
     peak_tz = peak.get("tz", "America/Los_Angeles")
     start_h = peak.get("start", 5)
@@ -306,14 +315,18 @@ def peak_hours_to_local(schedule, local_offset):
     if src_offset is None:
         src_offset = _us_pacific_offset(utc_now)
 
-    # Convert to UTC, then to local
-    start_utc = start_h - src_offset
+    # Raw start hour in local time (without mod) — lets us detect if the
+    # conversion pushed the peak window into the next local day (>= 24) or
+    # back into the previous local day (< 0).
+    raw_start_local = start_h - src_offset + local_offset
+    peak_day_offset = int(raw_start_local // 24)
+
+    start_local = raw_start_local % 24
     end_utc = end_h - src_offset
-    start_local = (start_utc + local_offset) % 24
     end_local = (end_utc + local_offset) % 24
 
     duration = end_h - start_h  # Duration doesn't change across timezones
-    return start_local, end_local, duration
+    return start_local, end_local, duration, peak_day_offset
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -447,16 +460,24 @@ def seg_peak_hours(ctx):
     weekday = now.isoweekday()  # 1=Mon, 7=Sun
 
     peak_days = peak_cfg.get("days", [1, 2, 3, 4, 5])
-    start_local, end_local, duration = peak_hours_to_local(schedule, local_offset)
+    start_local, end_local, duration, peak_day_offset = peak_hours_to_local(schedule, local_offset)
+
+    # Shift peak_days into LOCAL semantics: if timezone conversion pushed
+    # the peak window forward a local day (e.g. UTC Sat 22:00 → local Sun
+    # 01:00 for UTC+3), a schedule-day "Saturday" maps to local-day "Sunday".
+    def _shift_wd(wd, delta):
+        return ((wd - 1 + delta) % 7) + 1
+
+    effective_peak_days = [_shift_wd(d, peak_day_offset) for d in peak_days]
 
     # Store for timeline
     ctx["peak_start_local"] = start_local
     ctx["peak_end_local"] = end_local
-    ctx["peak_days"] = peak_days
+    ctx["peak_days"] = effective_peak_days
 
-    is_peak_day = weekday in peak_days
+    is_peak_day = weekday in effective_peak_days
     prev_weekday = 7 if weekday == 1 else weekday - 1
-    prev_was_peak = prev_weekday in peak_days
+    prev_was_peak = prev_weekday in effective_peak_days
     is_peak = False
     mins_left = 0
     mins_until = 0
@@ -762,9 +783,11 @@ def seg_cache_hit(ctx):
     if delta is not None and delta > 0:
         delta_str = f"{delta / 1000:.1f}k" if delta >= 1000 else str(delta)
         pct_color = GREEN if delta > 500 else DIM
-        return f"{DIM}cache{RST} {pct_color}{hit_pct}% \u2191{delta_str} active{RST}"
+        # "reuse" clarifies what cache does: reused tokens cost ~10% of fresh
+        # input, so a high % = you're paying less. "saving" = right now.
+        return f"{DIM}cache reuse{RST} {pct_color}{hit_pct}% \u2191{delta_str} saving{RST}"
 
-    return f"{DIM}cache{RST} {DIM}{hit_pct}% idle{RST}"
+    return f"{DIM}cache reuse{RST} {DIM}{hit_pct}% idle{RST}"
 
 
 def seg_vim_mode(ctx):
