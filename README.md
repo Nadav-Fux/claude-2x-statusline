@@ -387,27 +387,6 @@ When you see `cache 96% ↑2.3k`: 96% of cache tokens this tick came from cheap 
 
 A visual representation of today's peak/off-peak windows with a marker showing where you are now. The legend shows the peak hours in your local timezone. On all-day-free (`schedule.mode == "normal"`) days the bar shows a solid off-peak band with the label `Off-Peak all day ✔`.
 
-### Narrator (Full only, line 5)
-
-```
-│ ⓘ  Spending $5.4/hr (10m) — moderate. · Cache active: saving ~19k tokens / 5 min.
-```
-
-A plain-language line that explains what's happening in your session right now. Rotates between up to two of the most-actionable insights:
-
-| When you see... | It means... | What to do |
-|:----------------|:------------|:-----------|
-| `⚠ Context fills in ~24m — compact now...` | RED; <30 min until context is full | Run `/compact` immediately |
-| `Context fills in ~50m — plan to compact soon.` | YELLOW; <60 min | Compact at the next natural break |
-| `Burning $18/hr — high; consider a break.` | RED; rate ≥ $15/hr over the rolling window | Ask yourself if the next task is worth the cost |
-| `Spending $5/hr — moderate.` | YELLOW; rate ≥ $5/hr | Normal for complex work |
-| `Spending $1/hr — low burn.` | DIM; rate < $5/hr | Cheap session |
-| `Cache active: saving ~19k tokens / 5 min.` | GREEN; cache is saving cost right now | Nothing — this is the ideal state |
-| `Peak hours: rate limits drain faster right now.` | YELLOW; you're in a peak window | Consider heavy work during off-peak |
-| `Off-peak: full rate-limit headroom available.` | DIM; informational fallback | Nothing — this is the default good state |
-
-Disable with `features.show_narrator: false` in `schedule.json`.
-
 ## Explaining any segment
 
 Run `/explain <segment>` (or `/statusline-doctor --explain <segment>`) to get a detailed in-terminal breakdown of what a segment shows, how it's computed, its color thresholds, and when it hides:
@@ -419,6 +398,35 @@ Run `/explain <segment>` (or `/statusline-doctor --explain <segment>`) to get a 
 ```
 
 Run `/explain` with no argument to see a table of all segments.
+
+---
+
+### Narrator hook (above the prompt)
+
+The statusline shows what's happening right now. The narrator hook tells you what it *means* and what to do — as a brief message injected above your next prompt, like a co-pilot reading the dashboard and summarizing.
+
+**Two tiers, additive:**
+1. **Rules engine** (always on): runs every hook fire, emits one advisory sentence based on your current state. Observation → meaning → action pattern. Example:
+   > Burning $18/hr — at this rate your 5-hour budget ends in ~40 min. Consider Sonnet for simple steps.
+
+2. **Haiku layer** (opt-in, default ON when `ANTHROPIC_API_KEY` is set): every 5 prompts OR 15 min (whichever first), a Haiku call adds a second line (25-35 words) that reasons over the last report plus the overall session. Example:
+   > Since last check you refactored three components while your cache warmed up from 62% to 94%. Great compounding gains. Rate limits still at 23%, peak hours ended, wide-open runway ahead.
+
+**When it fires:**
+- Session start / compact / resume
+- Every user prompt submit (throttled to ≥ 5 min between emissions)
+
+**Tuning:**
+```bash
+export STATUSLINE_NARRATOR_ENABLED=1      # kill switch (default on)
+export STATUSLINE_NARRATOR_HAIKU=auto      # auto = on if ANTHROPIC_API_KEY present
+export STATUSLINE_NARRATOR_HAIKU_INTERVAL_MIN=15
+export STATUSLINE_NARRATOR_THROTTLE_MIN=5
+```
+
+**Cross-session memory**: the narrator keeps the last 3 sessions' narratives in `~/.claude/narrator-memory.json`, so on continuation it can reference "last time you were working on X".
+
+Run `/narrate` to invoke the narrator manually (ignores throttle).
 
 ---
 

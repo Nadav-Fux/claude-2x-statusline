@@ -716,7 +716,13 @@ def seg_burn_rate(ctx):
         return f"{DIM}$?/hr{RST}"
 
     rate_color = RED if rate >= 10 else YELLOW if rate >= 5 else MAGENTA
-    parts = [f"{DIM}spending{RST} {rate_color}${rate:.1f}/hr ({window_label}){RST}"]
+    if rate >= 10:
+        sev_word = "high"
+    elif rate >= 5:
+        sev_word = "moderate"
+    else:
+        sev_word = "low"
+    parts = [f"{DIM}spending{RST} {rate_color}${rate:.1f}/hr {sev_word} ({window_label}){RST}"]
 
     # Context depletion estimate using rolling tokens-out rate
     cw = ctx["stdin"].get("context_window", {})
@@ -985,112 +991,6 @@ def _format_reset(iso_str, style="time"):
         return ""
 
 
-def _narrator_insights(ctx):
-    """Pure helper: return a list of (priority, text, color) tuples describing
-    the most-relevant facts about current state. Priority 1 = most urgent."""
-    insights = []
-
-    cost_data = ctx["stdin"].get("cost", {})
-    cost = cost_data.get("total_cost_usd") or 0.0
-    duration_ms = float(cost_data.get("total_duration_ms") or 0)
-    cw = ctx["stdin"].get("context_window", {})
-    usage = cw.get("current_usage", {})
-    ctx_size = cw.get("context_window_size", 0) or 0
-    ctx_current = (
-        usage.get("input_tokens", 0)
-        + usage.get("cache_creation_input_tokens", 0)
-        + usage.get("cache_read_input_tokens", 0)
-    )
-    ctx_pct = int(ctx_current * 100 / ctx_size) if ctx_size else 0
-
-    rate_10m = _rs_rate(10)
-    rate_session = (cost / (duration_ms / 3600000)) if duration_ms >= 60000 else None
-    tokens_delta = _rs_tokens(10)
-    cache_delta_5m = _rs_cache_delta(5)
-
-    mins_left = None
-    if ctx_size and ctx_current and tokens_delta and tokens_delta > 0:
-        tokens_per_min = tokens_delta / 10
-        remaining = ctx_size - ctx_current
-        if remaining > 0 and tokens_per_min > 0:
-            mins_left = int(remaining / tokens_per_min)
-
-    # Narrator palette — deliberately different from the metrics line above:
-    # metrics uses RED/YELLOW/MAGENTA for severity; narrator uses MAGENTA/CYAN/
-    # DIM so the two lines are visually distinct at a glance. The "keyword"
-    # (High / Moderate / Active / compact-now) is the only bold-colored word;
-    # the rest of the sentence stays DIM for low-noise reading.
-    if mins_left is not None and mins_left < 30:
-        insights.append((
-            1,
-            (f"{MAGENTA}\u26a0 compact now{RST}{DIM} — context fills in ~{mins_left}m (history at risk).{RST}"),
-        ))
-    elif mins_left is not None and mins_left < 60:
-        insights.append((
-            2,
-            (f"{CYAN}compact soon{RST}{DIM} — context fills in ~{mins_left}m.{RST}"),
-        ))
-
-    effective_rate = rate_10m if rate_10m is not None else rate_session
-    if effective_rate is not None:
-        window = "10m" if rate_10m is not None else "session"
-        if effective_rate >= 15:
-            insights.append((
-                2,
-                (f"{MAGENTA}high burn{RST}{DIM} — ${effective_rate:.1f}/hr ({window}); consider a break.{RST}"),
-            ))
-        elif effective_rate >= 5:
-            insights.append((
-                4,
-                (f"{CYAN}moderate burn{RST}{DIM} — ${effective_rate:.1f}/hr ({window}).{RST}"),
-            ))
-        elif effective_rate >= 0.5:
-            insights.append((
-                5,
-                f"{DIM}low burn — ${effective_rate:.1f}/hr ({window}).{RST}",
-            ))
-
-    if cache_delta_5m is not None and cache_delta_5m > 500:
-        delta_str = f"{cache_delta_5m / 1000:.1f}k" if cache_delta_5m >= 1000 else str(cache_delta_5m)
-        insights.append((
-            4,
-            (f"{CYAN}cache active{RST}{DIM} — saving ~{delta_str} tokens / 5 min.{RST}"),
-        ))
-
-    if ctx_pct >= 80 and (mins_left is None or mins_left >= 30):
-        insights.append((
-            3,
-            (f"{CYAN}context {ctx_pct}%{RST}{DIM} — headroom shrinking.{RST}"),
-        ))
-
-    if ctx.get("is_peak"):
-        insights.append((
-            4,
-            (f"{CYAN}peak hours{RST}{DIM} — rate limits drain faster now.{RST}"),
-        ))
-    elif ctx.get("schedule", {}).get("mode") == "schedule":
-        insights.append((
-            6,
-            f"{DIM}off-peak — full rate-limit headroom.{RST}",
-        ))
-
-    return insights
-
-
-def build_narrator_line(ctx):
-    """Line 5: plain-language explanation of the current statusline state.
-    Picks the top 1-2 insights by priority and joins them with ' · '.
-    Each insight is already self-colored (see _narrator_insights)."""
-    insights = _narrator_insights(ctx)
-    if not insights:
-        return ""
-    insights.sort(key=lambda t: t[0])
-    picked = insights[:2]
-    parts = [text for _, text in picked]
-    inner = f" {DIM}\u00b7{RST} ".join(parts)
-    return f"{DIM}\u2502 \u24d8  {RST}{inner}"
-
-
 def build_metrics_line(ctx):
     """Line 4: spending + cache metrics. Delegates to seg_burn_rate +
     seg_cache_hit so the rolling-window logic is the single source of truth."""
@@ -1252,12 +1152,6 @@ def main():
         metrics = build_metrics_line(ctx)
         if metrics:
             print(f"\n{metrics}", end="")
-
-        # full mode: line 5 — plain-language narrator explaining current state
-        if features.get("show_narrator", True):
-            narrator = build_narrator_line(ctx)
-            if narrator:
-                print(f"\n{narrator}", end="")
 
 
 TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"

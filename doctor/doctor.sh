@@ -328,32 +328,6 @@ When it hides:
   Hidden after the expiry date defined in schedule.json. Also hidden if the
   schedule fetch fails (no network, stale cache) and no cached banner exists."
 
-SEG_DETAIL[narrator]="What it shows:
-  Line 5 of the full tier: one or two short sentences in plain language
-  explaining what's happening in your session right now. Dynamic — the
-  content rotates based on which facts are most actionable at the moment.
-
-Example outputs:
-  'ⓘ Context fills in ~24m — compact now to keep history. · Burning \$18/hr — high.'
-  'ⓘ Spending \$5.4/hr (10m) — moderate. · Cache active: saving ~19k tokens / 5 min.'
-  'ⓘ Off-peak: full rate-limit headroom available.'
-
-How it's computed:
-  Scans the current ctx for insights, scores each by priority (critical ctx
-  depletion > warning > info > off-peak fallback), and picks the top 2.
-  Sources: rolling-window burn rate, cache delta, context-fill projection,
-  peak/off-peak state, git state.
-
-Colors:
-  RED    — critical (context <30 min, burn >\$15/hr).
-  YELLOW — warning (context <60 min, burn \$5-15/hr, peak hours).
-  GREEN  — positive info (cache saving cost actively).
-  DIM    — informational / off-peak fallback.
-
-When it hides:
-  Hidden if no insights trigger, or disabled via
-  schedule.json 'features.show_narrator: false'."
-
 # One-line purpose table (used by --explain with no arg)
 declare -A SEG_ONELINER
 SEG_ONELINER[peak_hours]="Visual indicator of peak-hour window (when Opus throttling kicks in)"
@@ -375,7 +349,6 @@ SEG_ONELINER[timeline]="Horizontal bar of today's peak/off-peak windows with 'no
 SEG_ONELINER[metrics]="Combined spending + cache metrics line (full tier only)"
 SEG_ONELINER[banner]="Broadcast message from remote schedule.json; hidden after expiry"
 SEG_ONELINER[duration]="Wall-clock time elapsed since session start"
-SEG_ONELINER[narrator]="Plain-language line (full tier) explaining what's happening right now"
 
 # ── explain mode ─────────────────────────────────────────────────────────
 do_explain() {
@@ -395,6 +368,7 @@ do_explain() {
                 printf '%-22s %s\n' "$name" "$line"
             fi
         done
+        printf '\n%bNote:%b narrator is no longer a statusline segment — it runs as a SessionStart/UserPromptSubmit hook. Use '"'"'check_narrator_hook'"'"' or run doctor.sh to verify it is wired correctly.\n' "$BOLD" "$RST"
         printf '\n%bTip:%b run '"'"'doctor.sh --explain <segment>'"'"' for a detailed breakdown.\n\n' "$BOLD" "$RST"
     else
         # Detailed explanation for a single segment
@@ -742,6 +716,93 @@ check_redundant_commands() {
     fi
 }
 
+# ── Check 9: narrator hooks installed + wired ────────────────────────────
+check_narrator_hook() {
+    local hooks_dir="$CLAUDE_DIR/cc-2x-statusline/hooks"
+    local hook_ss="$hooks_dir/narrator-session-start.sh"
+    local hook_ps="$hooks_dir/narrator-prompt-submit.sh"
+    local memory_file="$CLAUDE_DIR/narrator-memory.json"
+
+    # 1. Session-start hook: must exist and be executable
+    if [ ! -f "$hook_ss" ]; then
+        add_result fail narrator_hook \
+            "Narrator: narrator-session-start.sh not installed" \
+            "$hook_ss missing. Re-run install.sh to install narrator hooks." \
+            0 ""
+        return
+    fi
+    if [ ! -x "$hook_ss" ]; then
+        add_result warn narrator_hook \
+            "Narrator: narrator-session-start.sh not executable" \
+            "Run: chmod +x $hook_ss" \
+            0 ""
+        return
+    fi
+
+    # 2. Prompt-submit hook: must exist
+    if [ ! -f "$hook_ps" ]; then
+        add_result warn narrator_hook \
+            "Narrator: narrator-prompt-submit.sh not installed" \
+            "$hook_ps missing. Re-run install.sh." \
+            0 ""
+        return
+    fi
+
+    # 3. Narrator hooks wired into settings.json
+    local wired=0
+    local py
+    py=$(have_python) || py=""
+    if [ -n "$py" ] && [ -f "$SETTINGS" ]; then
+        wired=$("$py" - "$SETTINGS" "$hook_ss" "$hook_ps" << 'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        s = json.load(f)
+    hooks = s.get("hooks", {})
+    want = {sys.argv[2], sys.argv[3]}
+    found = set()
+    for entries in hooks.values():
+        if isinstance(entries, list):
+            for e in entries:
+                if isinstance(e, dict):
+                    found.add(e.get("command", ""))
+                elif isinstance(e, str):
+                    found.add(e)
+    print("1" if want.issubset(found) else "0")
+except Exception:
+    print("0")
+PY
+        )
+    fi
+    if [ "${wired:-0}" != "1" ]; then
+        add_result warn narrator_hook \
+            "Narrator hooks not wired in settings.json" \
+            "Re-run install.sh to wire SessionStart + UserPromptSubmit hooks." \
+            0 ""
+        return
+    fi
+
+    # 4. Memory file writable (file itself, or parent dir)
+    local mem_ok=0
+    if [ -f "$memory_file" ]; then
+        [ -w "$memory_file" ] && mem_ok=1
+    else
+        [ -w "$(dirname "$memory_file")" ] && mem_ok=1
+    fi
+    if [ "$mem_ok" = "0" ]; then
+        add_result warn narrator_hook \
+            "Narrator memory file not writable" \
+            "$memory_file (or its parent dir) is not writable. Narrator will not persist state." \
+            0 ""
+        return
+    fi
+
+    add_result ok narrator_hook \
+        "Narrator hooks installed and wired" \
+        "$hook_ss + $hook_ps → settings.json hooks" \
+        0 ""
+}
+
 # ── Run all checks ───────────────────────────────────────────────────────
 check_settings
 check_hijack
@@ -751,6 +812,7 @@ check_runtime
 check_execution
 check_origin
 check_redundant_commands
+check_narrator_hook
 
 # ── Output ───────────────────────────────────────────────────────────────
 count_ok=0; count_warn=0; count_fail=0; count_fixable=0

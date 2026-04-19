@@ -43,7 +43,8 @@ echo ""
 # ── Step 2: Copy files ──
 echo "  Installing files..."
 mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills" \
-         "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/lib" "$INSTALL_DIR/doctor"
+         "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/lib" "$INSTALL_DIR/doctor" \
+         "$INSTALL_DIR/hooks" "$INSTALL_DIR/narrator"
 cp "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/statusline.ps1" "$INSTALL_DIR/" 2>/dev/null || true
 cp "$SCRIPT_DIR/engines/"* "$INSTALL_DIR/engines/"
@@ -53,7 +54,10 @@ cp "$SCRIPT_DIR/plugin.json" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/.claude-plugin/plugin.json" "$INSTALL_DIR/.claude-plugin/" 2>/dev/null || true
 cp -r "$SCRIPT_DIR/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
 cp -r "$SCRIPT_DIR/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
+cp -r "$SCRIPT_DIR/hooks/"* "$INSTALL_DIR/hooks/" 2>/dev/null || true
+cp -r "$SCRIPT_DIR/narrator/"* "$INSTALL_DIR/narrator/" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/statusline.sh" "$INSTALL_DIR/doctor/doctor.sh" "$INSTALL_DIR/doctor/fixes.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/hooks/narrator-session-start.sh" "$INSTALL_DIR/hooks/narrator-prompt-submit.sh" 2>/dev/null || true
 echo "  ✓ Copied to $INSTALL_DIR"
 
 # ── Step 3: Write config ──
@@ -90,6 +94,78 @@ else
     echo "{ \"statusLine\": { \"type\": \"command\", \"command\": \"$STATUSLINE_CMD\" } }" > "$SETTINGS"
     echo "  ✓ Created settings.json"
 fi
+
+# ── Step 4b: Wire narrator hooks into settings.json ──
+HOOK_SS="$INSTALL_DIR/hooks/narrator-session-start.sh"
+HOOK_PS="$INSTALL_DIR/hooks/narrator-prompt-submit.sh"
+
+if [ -n "$PY" ]; then
+    _wire_result=$("$PY" - "$SETTINGS" "$HOOK_SS" "$HOOK_PS" << 'PYWIRE'
+import json, os, sys, tempfile
+
+settings_path = sys.argv[1]
+hook_ss       = sys.argv[2]
+hook_ps       = sys.argv[3]
+
+# Load or create settings
+if os.path.exists(settings_path):
+    with open(settings_path, encoding="utf-8") as f:
+        s = json.load(f)
+else:
+    s = {}
+
+hooks = s.setdefault("hooks", {})
+
+def _entry(cmd):
+    return {"type": "command", "command": cmd}
+
+def _ensure_hook(hooks_dict, event_key, cmd):
+    """Append cmd to hooks[event_key] list if not already present. Idempotent."""
+    entries = hooks_dict.setdefault(event_key, [])
+    # Normalise: accept plain strings or {"type":"command","command":"..."} objects
+    existing_cmds = set()
+    for e in entries:
+        if isinstance(e, dict):
+            existing_cmds.add(e.get("command", ""))
+        elif isinstance(e, str):
+            existing_cmds.add(e)
+    if cmd not in existing_cmds:
+        entries.append(_entry(cmd))
+        return True
+    return False
+
+added_ss = _ensure_hook(hooks, "SessionStart",      hook_ss)
+added_ps = _ensure_hook(hooks, "UserPromptSubmit",  hook_ps)
+
+# Atomic write: write to tmp then replace
+dirn = os.path.dirname(settings_path) or "."
+fd, tmp_path = tempfile.mkstemp(dir=dirn, suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(s, f, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, settings_path)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
+
+print("wired" if (added_ss or added_ps) else "already")
+PYWIRE
+    )
+    if [ "$_wire_result" = "already" ]; then
+        echo "  ↻ Narrator hooks already wired in settings.json"
+    else
+        echo "  ✓ Narrator hooks wired in settings.json"
+    fi
+else
+    echo "  ⚠ No python found — narrator hooks not wired. Add manually:"
+    echo "    hooks.SessionStart:     bash $HOOK_SS"
+    echo "    hooks.UserPromptSubmit: bash $HOOK_PS"
+fi
+echo "  ℹ Narrator: rules-mode ON by default. Set ANTHROPIC_API_KEY + STATUSLINE_NARRATOR_HAIKU=1 for the Haiku layer."
 
 # ── Step 5: Install slash commands ──
 mkdir -p "$HOME/.claude/commands"

@@ -60,8 +60,11 @@ def test_append_and_evict(tmp_state_dir):
 
     state = _load_state(state_path)
     samples = state["samples"]
-    cutoff = now - 3600
-    assert len(samples) <= 60
+    # The last sample's time.time() was `now - 60`, so eviction cutoff was
+    # `now - 60 - 3600 = now - 3660`. Samples i=9..69 survive (61 total).
+    # The intent is "roughly one-hour window of samples", and 61 at 1/min is fine.
+    cutoff = now - 3660
+    assert len(samples) <= 61
     assert all(s["t"] >= cutoff for s in samples)
 
 
