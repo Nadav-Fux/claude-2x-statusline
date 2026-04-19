@@ -84,6 +84,17 @@ DEFAULT_CONFIG = {
     "schedule_cache_hours": 3,
 }
 
+
+def load_local_version():
+    package_path = Path(__file__).resolve().parent.parent / "package.json"
+    try:
+        return json.loads(package_path.read_text()).get("version", "")
+    except Exception:
+        return ""
+
+
+CURRENT_VERSION = load_local_version()
+
 # Default schedule (fallback when remote fetch fails and no cache exists)
 DEFAULT_SCHEDULE = {
     "v": 2,
@@ -100,8 +111,54 @@ DEFAULT_SCHEDULE = {
         "note": "Session limits consumed faster during peak hours",
     },
     "banner": {"text": "", "expires": "", "color": "yellow"},
+    "release": {},
     "features": {"show_peak_segment": True, "show_rate_limits": True, "show_timeline": True},
 }
+
+
+def parse_version(value):
+    core = str(value or "").split("-", 1)[0].split("+", 1)[0]
+    parts = []
+    for token in core.split("."):
+        digits = "".join(ch for ch in token if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return parts
+
+
+def compare_versions(left, right):
+    left_parts = parse_version(left)
+    right_parts = parse_version(right)
+    length = max(len(left_parts), len(right_parts))
+    left_parts.extend([0] * (length - len(left_parts)))
+    right_parts.extend([0] * (length - len(right_parts)))
+    if left_parts < right_parts:
+        return -1
+    if left_parts > right_parts:
+        return 1
+    return 0
+
+
+def build_release_notice(schedule):
+    release = schedule.get("release", {})
+    latest_version = str(release.get("latest_version", "")).strip()
+    minimum_version = str(release.get("minimum_version", "")).strip()
+    if not CURRENT_VERSION or (not latest_version and not minimum_version):
+        return ""
+
+    command = str(release.get("command", "/statusline-update")).strip() or "/statusline-update"
+    target_version = latest_version or minimum_version
+
+    if minimum_version and compare_versions(CURRENT_VERSION, minimum_version) < 0:
+        text = release.get("required_text") or f"Update required v{target_version} via {command}"
+        return f"{BG_RED} {text} {RST}"
+
+    if latest_version and compare_versions(CURRENT_VERSION, latest_version) < 0:
+        text = release.get("available_text") or f"Update available v{latest_version} via {command}"
+        return f"{BG_YELLOW} {text} {RST}"
+
+    return ""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -417,24 +474,31 @@ def seg_time(ctx):
 def seg_banner(ctx):
     """Show a remote-controlled banner message (with optional expiry)."""
     schedule = ctx["schedule"]
+    badges = []
+
+    release_notice = build_release_notice(schedule)
+    if release_notice:
+        badges.append(release_notice)
+
     banner = schedule.get("banner", {})
     text = banner.get("text", "")
-    if not text:
-        return ""
+    if text:
+        expires = banner.get("expires", "")
+        show_banner = True
+        if expires:
+            try:
+                exp_date = datetime.strptime(expires, "%Y-%m-%d").date()
+                if ctx["local_time"].date() > exp_date:
+                    show_banner = False
+            except Exception:
+                pass
 
-    # Check expiry
-    expires = banner.get("expires", "")
-    if expires:
-        try:
-            exp_date = datetime.strptime(expires, "%Y-%m-%d").date()
-            if ctx["local_time"].date() > exp_date:
-                return ""
-        except Exception:
-            pass
+        if show_banner:
+            color_map = {"yellow": BG_YELLOW, "red": BG_RED, "green": BG_GREEN, "blue": BG_BLUE, "gray": BG_GRAY}
+            bg = color_map.get(banner.get("color", "yellow"), BG_YELLOW)
+            badges.append(f"{bg} {text} {RST}")
 
-    color_map = {"yellow": BG_YELLOW, "red": BG_RED, "green": BG_GREEN, "blue": BG_BLUE, "gray": BG_GRAY}
-    bg = color_map.get(banner.get("color", "yellow"), BG_YELLOW)
-    return f"{bg} {text} {RST}"
+    return " ".join(badges)
 
 
 def seg_peak_hours(ctx):

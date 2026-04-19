@@ -1,11 +1,36 @@
 #!/usr/bin/env bash
-# claude-2x-statusline — interactive installer
+# claude-2x-statusline — interactive/non-interactive installer
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$HOME/.claude/cc-2x-statusline"
 SETTINGS="$HOME/.claude/settings.json"
 CONFIG="$HOME/.claude/statusline-config.json"
+SCHEDULE_URL_DEFAULT="https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json"
+SCHEDULE_CACHE_HOURS_DEFAULT="6"
+TELEMETRY_URL="https://statusline-telemetry.nadavf.workers.dev/ping"
+
+# shellcheck source=lib/resolve-runtime.sh
+. "$SCRIPT_DIR/lib/resolve-runtime.sh"
+# shellcheck source=lib/wire-json.sh
+. "$SCRIPT_DIR/lib/wire-json.sh"
+
+TIER_CLI=""
+UPDATE_MODE=0
+QUIET=0
+SKIP_COPY=""
+TIER=""
+MODE=""
+PY=""
+NODE=""
+PYTHON_39=0
+DOCTOR_OK=0
+DOCTOR_WARN=0
+DOCTOR_FAIL=0
+DOCTOR_FAILED_IDS=""
+DOCTOR_AVAILABLE=0
+SCHEDULE_URL="$SCHEDULE_URL_DEFAULT"
+SCHEDULE_CACHE_HOURS="$SCHEDULE_CACHE_HOURS_DEFAULT"
 
 echo ""
 echo "  ╭──────────────────────────────────────────╮"
@@ -14,287 +39,482 @@ echo "  │     github.com/Nadav-Fux                 │"
 echo "  ╰──────────────────────────────────────────╯"
 echo ""
 
-# ── Step 1: Choose tier ──
-echo "  Choose your tier:"
-echo ""
-echo "    1) Minimal   — peak status + model + git + rate limits"
-echo "       OFF-PEAK ▸ Opus 4.6 ▸ CTX 40% ▸ main saved ▸ 15% 5H"
-echo ""
-echo "    2) Standard  — + cost + full context"
-echo "       OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ main saved ▸ \$0.42 ▸ ▰▰▱▱▱▱▱▱▱▱ 15%"
-echo ""
-echo "    3) Full      — + multiline timeline + rate limit dashboard (recommended)"
-echo "       OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ main saved ▸ \$0.42"
-echo "       │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━ │"
-echo "       │ ▸ 5h ▰▰▱▱▱▱▱▱▱▱  15% · weekly ▰▰▰▱▱▱▱▱▱▱  31% │"
-echo ""
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tier)
+                TIER_CLI="${2:-}"
+                shift 2
+                ;;
+            --update)
+                UPDATE_MODE=1
+                shift
+                ;;
+            --quiet)
+                QUIET=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+}
 
-read -rp "  Pick a tier [1/2/3] (default: 3): " tier_choice
-case "$tier_choice" in
-    1) TIER="minimal"; MODE="minimal" ;;
-    2) TIER="standard"; MODE="minimal" ;;
-    *) TIER="full"; MODE="full" ;;
-esac
+select_tier() {
+    case "$1" in
+        1|minimal)
+            TIER="minimal"
+            MODE="minimal"
+            ;;
+        2|standard)
+            TIER="standard"
+            MODE="minimal"
+            ;;
+        3|full|"")
+            TIER="full"
+            MODE="full"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
 
-echo ""
+load_existing_config() {
+    [ -f "$CONFIG" ] || return 1
+
+    local config_tier config_mode config_schedule config_cache
+    config_tier=$(json_get "$CONFIG" tier 2>/dev/null || true)
+    config_mode=$(json_get "$CONFIG" mode 2>/dev/null || true)
+    config_schedule=$(json_get "$CONFIG" schedule_url 2>/dev/null || true)
+    config_cache=$(json_get "$CONFIG" schedule_cache_hours 2>/dev/null || true)
+
+    if [ -n "$config_schedule" ]; then
+        SCHEDULE_URL="$config_schedule"
+    fi
+    if [ -n "$config_cache" ]; then
+        SCHEDULE_CACHE_HOURS="$config_cache"
+    fi
+
+    if [ -n "$config_tier" ]; then
+        select_tier "$config_tier" || true
+    fi
+    if [ -n "$config_mode" ]; then
+        MODE="$config_mode"
+    fi
+
+    [ -n "$TIER" ]
+}
+
+prompt_for_tier() {
+    echo "  Choose your tier:"
+    echo ""
+    echo "    1) Minimal   — peak status + model + git + rate limits"
+    echo "       OFF-PEAK ▸ Opus 4.6 ▸ CTX 40% ▸ main saved ▸ 15% 5H"
+    echo ""
+    echo "    2) Standard  — + cost + full context"
+    echo "       OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ main saved ▸ \$0.42 ▸ ▰▰▱▱▱▱▱▱▱▱ 15%"
+    echo ""
+    echo "    3) Full      — + multiline timeline + rate limit dashboard (recommended)"
+    echo "       OFF-PEAK ▸ Opus 4.6 ▸ 400K/1.0M 40% ▸ main saved ▸ \$0.42"
+    echo "       │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━ │"
+    echo "       │ ▸ 5h ▰▰▱▱▱▱▱▱▱▱  15% · weekly ▰▰▰▱▱▱▱▱▱▱  31% │"
+    echo ""
+
+    if [ "$QUIET" = "1" ]; then
+        select_tier "full"
+        return 0
+    fi
+
+    read -rp "  Pick a tier [1/2/3] (default: 3): " tier_choice
+    select_tier "$tier_choice" || select_tier "full"
+}
+
+configure_tier() {
+    if [ -n "$TIER_CLI" ]; then
+        if ! select_tier "$TIER_CLI"; then
+            echo "  ⚠ Unknown tier '$TIER_CLI' — falling back to full"
+            select_tier "full"
+        fi
+        return 0
+    fi
+
+    if [ "$UPDATE_MODE" = "1" ] && load_existing_config; then
+        return 0
+    fi
+
+    prompt_for_tier
+}
+
+detect_migration_update() {
+    [ -d "$INSTALL_DIR" ] || return 0
+
+    local missing=""
+    [ ! -d "$INSTALL_DIR/narrator" ] && missing="$missing narrator"
+    [ ! -d "$INSTALL_DIR/hooks" ] && missing="$missing hooks"
+    [ ! -d "$INSTALL_DIR/lib" ] && missing="$missing lib"
+    [ ! -d "$INSTALL_DIR/doctor" ] && missing="$missing doctor"
+    if [ -n "$missing" ]; then
+        UPDATE_MODE=1
+        echo "  ℹ Upgrading existing install — adding:$missing"
+    fi
+}
+
+same_dir_detection() {
+    if [ "$SCRIPT_DIR" = "$INSTALL_DIR" ]; then
+        SKIP_COPY=1
+        echo "  ℹ Installing in-place (source == install dir). Skipping file copy."
+    fi
+}
+
+python_supports_narrator() {
+    [ -n "$PY" ] || return 1
+    "$PY" -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" >/dev/null 2>&1
+}
+
+detect_runtime() {
+    PY=$(resolve_runtime python 2>/dev/null || true)
+    NODE=$(resolve_runtime node 2>/dev/null || true)
+    PYTHON_39=0
+    if python_supports_narrator; then
+        PYTHON_39=1
+    fi
+
+    if [ -n "$PY" ] && [ "$PYTHON_39" = "1" ]; then
+        echo "  ✓ Runtime: Python at $PY (full dashboard, narrator ready)"
+    elif [ -n "$PY" ]; then
+        echo "  ⚠ Runtime: Python at $PY (statusline works, narrator waits for Python 3.9+)"
+    elif [ -n "$NODE" ]; then
+        echo "  ⚠ Runtime: Node.js only ($NODE) — statusline works, narrator hooks will no-op until Python 3.9+ is installed"
+    else
+        echo "  ⚠ Runtime: no Python or Node found — bash-only minimal statusline"
+        echo "    Install Python 3.9+ or Node.js for full features."
+    fi
+}
+
+write_install_files() {
+    echo "  Installing files..."
+    mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills" \
+             "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/lib" "$INSTALL_DIR/doctor" \
+             "$INSTALL_DIR/hooks" "$INSTALL_DIR/narrator"
+
+    if [ -z "$SKIP_COPY" ]; then
+        cp "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/statusline.ps1" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/install.sh" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/install.ps1" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/update.sh" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/update.ps1" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/" 2>/dev/null || true
+        cp -R "$SCRIPT_DIR/engines/." "$INSTALL_DIR/engines/"
+        cp -R "$SCRIPT_DIR/lib/." "$INSTALL_DIR/lib/"
+        cp -R "$SCRIPT_DIR/doctor/." "$INSTALL_DIR/doctor/"
+        cp "$SCRIPT_DIR/plugin.json" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/.claude-plugin/plugin.json" "$INSTALL_DIR/.claude-plugin/" 2>/dev/null || true
+        cp -r "$SCRIPT_DIR/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
+        cp -r "$SCRIPT_DIR/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
+        cp -r "$SCRIPT_DIR/hooks/"* "$INSTALL_DIR/hooks/" 2>/dev/null || true
+        cp -r "$SCRIPT_DIR/narrator/"* "$INSTALL_DIR/narrator/" 2>/dev/null || true
+    fi
+
+    chmod +x "$INSTALL_DIR/statusline.sh" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/update.sh" \
+             "$INSTALL_DIR/doctor/doctor.sh" "$INSTALL_DIR/doctor/fixes.sh" 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/hooks/narrator-session-start.sh" "$INSTALL_DIR/hooks/narrator-prompt-submit.sh" 2>/dev/null || true
+    echo "  ✓ Installed to $INSTALL_DIR"
+}
+
+write_config() {
+    local config_merge config_result
+    config_merge=$(printf '{"tier":"%s","mode":"%s","schedule_url":"%s","schedule_cache_hours":%s}' \
+        "$TIER" "$MODE" "$SCHEDULE_URL" "$SCHEDULE_CACHE_HOURS")
+
+    config_result=0
+    wire_json "$CONFIG" "$config_merge" || config_result=$?
+
+    if [ "$config_result" -eq 0 ]; then
+        echo "  ✓ Config saved to $CONFIG"
+    else
+        echo "  ⚠ Could not update statusline-config.json automatically"
+    fi
+}
+
+wire_settings() {
+    local statusline_cmd settings_merge settings_result settings_existed hook_merge hook_result hook_ss hook_ps
+    statusline_cmd="bash $INSTALL_DIR/statusline.sh"
+    settings_merge=$(printf '{"statusLine":{"type":"command","command":"%s"}}' "$statusline_cmd")
+    settings_result=0
+    settings_existed=0
+    [ -f "$SETTINGS" ] && settings_existed=1
+
+    wire_json "$SETTINGS" "$settings_merge" || settings_result=$?
+    if [ "$settings_result" -eq 0 ]; then
+        if [ "$settings_existed" = "1" ]; then
+            echo "  ✓ Updated settings.json"
+        else
+            echo "  ✓ Created settings.json"
+        fi
+    else
+        echo "  ⚠ Could not auto-update settings.json"
+    fi
+
+    hook_ss="$INSTALL_DIR/hooks/narrator-session-start.sh"
+    hook_ps="$INSTALL_DIR/hooks/narrator-prompt-submit.sh"
+    hook_merge=$(printf '{"hooks":{"SessionStart":[{"type":"command","command":"%s"}],"UserPromptSubmit":[{"type":"command","command":"%s"}]}}' \
+        "$hook_ss" "$hook_ps")
+
+    hook_result=0
+    wire_json "$SETTINGS" "$hook_merge" || hook_result=$?
+    if [ "$hook_result" -eq 0 ]; then
+        echo "  ✓ Narrator hooks wired in settings.json"
+    else
+        echo "  ⚠ Could not wire narrator hooks automatically"
+    fi
+
+    if [ "$PYTHON_39" = "1" ]; then
+        echo "  ℹ Narrator: rules-mode ON by default. Set ANTHROPIC_API_KEY + STATUSLINE_NARRATOR_HAIKU=1 for the Haiku layer."
+    else
+        echo "  ℹ Narrator hooks are installed. They will activate automatically once Python 3.9+ is available."
+    fi
+}
+
+install_commands() {
+    mkdir -p "$HOME/.claude/commands"
+    if cp "$SCRIPT_DIR/commands/"*.md "$HOME/.claude/commands/" 2>/dev/null; then
+        echo "  ✓ Slash commands installed (/statusline-*, /explain, /narrate, /narrator-lang)"
+    else
+        echo "  ⚠ Could not install slash commands"
+    fi
+}
+
+fetch_schedule() {
+    echo "  Fetching peak hours schedule..."
+    local schedule_cache="$HOME/.claude/statusline-schedule.json"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s --max-time 5 "$SCHEDULE_URL" -o "$schedule_cache" 2>/dev/null && \
+            echo "  ✓ Schedule downloaded (auto-updates every ${SCHEDULE_CACHE_HOURS} hours)" || \
+            echo "  ⚠ Could not fetch schedule (will use defaults)"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=5 "$SCHEDULE_URL" -O "$schedule_cache" 2>/dev/null && \
+            echo "  ✓ Schedule downloaded (auto-updates every ${SCHEDULE_CACHE_HOURS} hours)" || \
+            echo "  ⚠ Could not fetch schedule (will use defaults)"
+    else
+        echo "  ⚠ No curl/wget — schedule will be fetched on first run"
+    fi
+}
+
+install_editor_extension() {
+    local editors_found=""
+    local editor_cmd name
+
+    for editor_cmd in code cursor windsurf agy; do
+        if command -v "$editor_cmd" >/dev/null 2>&1; then
+            editors_found="$editors_found $editor_cmd"
+        fi
+    done
+
+    if [ -n "$editors_found" ] && command -v npm >/dev/null 2>&1; then
+        echo ""
+        echo "  Detected editors:$editors_found"
+        echo "  Building statusline extension..."
+        local vscode_dir="$INSTALL_DIR/vscode"
+        local vsix_built=false
+        local vsce_bin=""
+        mkdir -p "$vscode_dir"
+        cp "$SCRIPT_DIR/vscode/extension.ts" "$vscode_dir/"
+        cp "$SCRIPT_DIR/vscode/package.json" "$vscode_dir/"
+        cp "$SCRIPT_DIR/vscode/package-lock.json" "$vscode_dir/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/vscode/tsconfig.json" "$vscode_dir/"
+        cp "$SCRIPT_DIR/vscode/icon.png" "$vscode_dir/"
+        cp "$SCRIPT_DIR/vscode/LICENSE" "$vscode_dir/"
+
+        vsce_bin="$vscode_dir/node_modules/.bin/vsce"
+        rm -f "$vscode_dir/claude-statusline.vsix"
+        (cd "$vscode_dir" && npm install --silent 2>/dev/null && npm run compile --silent 2>/dev/null && \
+            [ -x "$vsce_bin" ] && "$vsce_bin" package --allow-missing-repository --out claude-statusline.vsix >/dev/null 2>&1 && \
+            [ -f claude-statusline.vsix ]) && vsix_built=true
+
+        if [ "$vsix_built" = true ]; then
+            for editor_cmd in $editors_found; do
+                case "$editor_cmd" in
+                    code) name="VS Code" ;;
+                    cursor) name="Cursor" ;;
+                    windsurf) name="Windsurf" ;;
+                    agy) name="Antigravity" ;;
+                    *) name="$editor_cmd" ;;
+                esac
+                if "$editor_cmd" --install-extension "$vscode_dir/claude-statusline.vsix" --force 2>/dev/null; then
+                    echo "  ✓ Installed in $name!"
+                else
+                    echo "  ⚠ Could not install in $name (install manually via VSIX)."
+                fi
+            done
+        else
+            echo "  ⚠ Extension build failed (optional). Install manually from vscode/ folder."
+        fi
+    else
+        echo ""
+        echo "  No supported editors detected (VS Code, Cursor, Windsurf, Antigravity)."
+        echo "  To install later: build from the vscode/ folder."
+    fi
+}
+
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+telemetry_id() {
+    local raw
+    raw="$(hostname 2>/dev/null):$(whoami 2>/dev/null)"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$raw" | sha256sum | cut -c1-16
+        return 0
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$raw" | shasum -a 256 | cut -c1-16
+        return 0
+    fi
+    if [ -n "$PY" ]; then
+        "$PY" - <<'PY'
+import hashlib
+import os
+import socket
+
+raw = f"{socket.gethostname()}:{os.environ.get('USER') or os.environ.get('USERNAME') or ''}"
+print(hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16])
+PY
+        return 0
+    fi
+    if [ -n "$NODE" ]; then
+        "$NODE" -e "const crypto=require('crypto'); const os=require('os'); const user=process.env.USER || process.env.USERNAME || ''; const raw=os.hostname()+':' + user; process.stdout.write(crypto.createHash('sha256').update(raw).digest('hex').slice(0,16));"
+        return 0
+    fi
+    return 1
+}
+
+post_telemetry() {
+    local payload="$1"
+    if [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" = "1" ]; then
+        return 0
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        curl -sS --max-time 3 -X POST -H "Content-Type: application/json" -d "$payload" "$TELEMETRY_URL" >/dev/null 2>&1 &
+        return 0
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=3 --header="Content-Type: application/json" --post-data="$payload" "$TELEMETRY_URL" -O /dev/null 2>/dev/null &
+        return 0
+    fi
+    if [ -n "$PY" ]; then
+        "$PY" -c "import urllib.request; payload = b'''$payload'''; req = urllib.request.Request('$TELEMETRY_URL', data=payload, method='POST', headers={'Content-Type': 'application/json'});\
+try: urllib.request.urlopen(req, timeout=3).read()\
+except Exception: pass" >/dev/null 2>&1 &
+        return 0
+    fi
+    if [ -n "$NODE" ]; then
+        "$NODE" -e "const https=require('https'); const data=process.argv[1]; const req=https.request('$TELEMETRY_URL',{method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)}},res=>res.resume()); req.on('error',()=>{}); req.end(data);" "$payload" >/dev/null 2>&1 &
+        return 0
+    fi
+    return 1
+}
+
+run_doctor() {
+    local doctor_script="$INSTALL_DIR/doctor/doctor.sh"
+    local doctor_json="$HOME/.claude/.statusline-install-doctor.json"
+
+    echo ""
+    echo "  Running post-install diagnostics..."
+
+    if [ ! -f "$doctor_script" ]; then
+        DOCTOR_WARN=1
+        DOCTOR_FAIL=0
+        DOCTOR_FAILED_IDS="doctor_unavailable"
+        echo "  ⚠ Doctor script missing — install marked as degraded"
+        return 0
+    fi
+
+    if bash "$doctor_script" --json > "$doctor_json" 2>/dev/null; then
+        DOCTOR_AVAILABLE=1
+        DOCTOR_OK=$(json_get "$doctor_json" ok 2>/dev/null || echo 0)
+        DOCTOR_WARN=$(json_get "$doctor_json" warn 2>/dev/null || echo 0)
+        DOCTOR_FAIL=$(json_get "$doctor_json" fail 2>/dev/null || echo 0)
+        DOCTOR_FAILED_IDS=$(json_fail_ids "$doctor_json" 2>/dev/null || true)
+    else
+        DOCTOR_WARN=1
+        DOCTOR_FAIL=0
+        DOCTOR_FAILED_IDS="doctor_unavailable"
+        echo "  ⚠ Doctor could not run — install marked as degraded"
+    fi
+
+    rm -f "$doctor_json"
+
+    if [ "${DOCTOR_FAIL:-0}" -gt 0 ] || [ "${DOCTOR_WARN:-0}" -gt 0 ]; then
+        echo "  ⚠ ${DOCTOR_FAIL:-0} fail, ${DOCTOR_WARN:-0} warn — run: bash $INSTALL_DIR/doctor/doctor.sh --fix"
+    else
+        echo "  ✓ All checks passed"
+    fi
+}
+
+send_install_telemetry() {
+    local uid os_name payload failed_ids escaped_failed_ids event_name has_python has_node
+    uid=$(telemetry_id 2>/dev/null || true)
+    [ -n "$uid" ] || return 0
+
+    os_name="$(uname -s 2>/dev/null | tr A-Z a-z)"
+    has_python=false
+    has_node=false
+    [ -n "$PY" ] && has_python=true
+    [ -n "$NODE" ] && has_node=true
+    escaped_failed_ids=$(json_escape "$DOCTOR_FAILED_IDS")
+
+    if [ "$UPDATE_MODE" = "1" ]; then
+        event_name="update"
+    else
+        payload=$(printf '{"id":"%s","v":"2.2","engine":"installer","tier":"%s","os":"%s","event":"install"}' \
+            "$uid" "$TIER" "$os_name")
+        post_telemetry "$payload" || true
+        event_name="install_result"
+    fi
+
+    payload=$(printf '{"id":"%s","v":"2.2","engine":"installer","tier":"%s","os":"%s","event":"%s","ok":%s,"warn":%s,"fail":%s,"failed_ids":"%s","has_python":%s,"has_node":%s,"ps1_only":false}' \
+        "$uid" "$TIER" "$os_name" "$event_name" "${DOCTOR_OK:-0}" "${DOCTOR_WARN:-0}" "${DOCTOR_FAIL:-0}" "$escaped_failed_ids" "$has_python" "$has_node")
+    post_telemetry "$payload" || true
+}
+
+print_done() {
+    echo ""
+    echo "  ╭──────────────────────────────────────────╮"
+    echo "  │  ✓ Installed! Restart Claude Code.       │"
+    echo "  │                                          │"
+    echo "  │  First-run quickstart:                   │"
+    echo "  │    /statusline-onboarding                │"
+    echo "  │                                          │"
+    echo "  │  To update later:                        │"
+    echo "  │    bash ~/.claude/cc-2x-statusline/update.sh │"
+    echo "  │                                          │"
+    echo "  │  To change tier:                         │"
+    echo "  │    /statusline-minimal                   │"
+    echo "  │    /statusline-standard                  │"
+    echo "  │    /statusline-full                      │"
+    echo "  ╰──────────────────────────────────────────╯"
+    echo ""
+}
+
+parse_args "$@"
+detect_migration_update
+same_dir_detection
+configure_tier
+
 echo "  ✓ Selected: $TIER"
 echo ""
 
-# ── Step 2: Copy files ──
-echo "  Installing files..."
-mkdir -p "$INSTALL_DIR/engines" "$INSTALL_DIR/commands" "$INSTALL_DIR/skills" \
-         "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/lib" "$INSTALL_DIR/doctor" \
-         "$INSTALL_DIR/hooks" "$INSTALL_DIR/narrator"
-cp "$SCRIPT_DIR/statusline.sh" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/statusline.ps1" "$INSTALL_DIR/" 2>/dev/null || true
-cp "$SCRIPT_DIR/engines/"* "$INSTALL_DIR/engines/"
-cp "$SCRIPT_DIR/lib/"* "$INSTALL_DIR/lib/"
-cp "$SCRIPT_DIR/doctor/"* "$INSTALL_DIR/doctor/"
-cp "$SCRIPT_DIR/plugin.json" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/.claude-plugin/plugin.json" "$INSTALL_DIR/.claude-plugin/" 2>/dev/null || true
-cp -r "$SCRIPT_DIR/commands/"* "$INSTALL_DIR/commands/" 2>/dev/null || true
-cp -r "$SCRIPT_DIR/skills/"* "$INSTALL_DIR/skills/" 2>/dev/null || true
-cp -r "$SCRIPT_DIR/hooks/"* "$INSTALL_DIR/hooks/" 2>/dev/null || true
-cp -r "$SCRIPT_DIR/narrator/"* "$INSTALL_DIR/narrator/" 2>/dev/null || true
-chmod +x "$INSTALL_DIR/statusline.sh" "$INSTALL_DIR/doctor/doctor.sh" "$INSTALL_DIR/doctor/fixes.sh" 2>/dev/null || true
-chmod +x "$INSTALL_DIR/hooks/narrator-session-start.sh" "$INSTALL_DIR/hooks/narrator-prompt-submit.sh" 2>/dev/null || true
-echo "  ✓ Copied to $INSTALL_DIR"
-
-# ── Step 3: Write config ──
-cat > "$CONFIG" << CONF
-{
-  "tier": "$TIER",
-  "mode": "$MODE",
-  "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
-  "schedule_cache_hours": 6
-}
-CONF
-echo "  ✓ Config saved to $CONFIG"
-
-# ── Step 4: Update settings.json ──
-# Use the shared resolver so we reject Windows App-Store stubs and pick up
-# portable installs (~/tools/python-*, AppData\Local\Programs\Python, etc.).
-# shellcheck source=lib/resolve-runtime.sh
-. "$SCRIPT_DIR/lib/resolve-runtime.sh"
-PY=$(resolve_runtime python 2>/dev/null || true)
-NODE=$(resolve_runtime node 2>/dev/null || true)
-STATUSLINE_CMD="bash $INSTALL_DIR/statusline.sh"
-
-# Advisory: which runtime will actually drive the statusline?
-if [ -n "$PY" ]; then
-    echo "  ✓ Runtime: Python at $PY (full dashboard, narrator enabled)"
-elif [ -n "$NODE" ]; then
-    echo "  ⚠ Runtime: Node.js only ($NODE) — statusline works, narrator disabled"
-    echo "    (Narrator requires Python 3.9+. Install from python.org for the full experience.)"
-else
-    echo "  ⚠ Runtime: no Python or Node found — bash-only minimal statusline"
-    echo "    Install Python 3 (python.org) or Node.js for full features + narrator."
-fi
-
-if [ -f "$SETTINGS" ] && [ -n "$PY" ]; then
-    "$PY" -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    s = json.load(f)
-s['statusLine'] = {'type': 'command', 'command': sys.argv[2]}
-with open(sys.argv[1], 'w') as f:
-    json.dump(s, f, indent=2)
-" "$SETTINGS" "$STATUSLINE_CMD"
-    echo "  ✓ Updated settings.json"
-elif [ -f "$SETTINGS" ]; then
-    echo "  ⚠ Could not auto-update settings.json (no python)"
-    echo "    Add manually:"
-    echo "    \"statusLine\": { \"type\": \"command\", \"command\": \"$STATUSLINE_CMD\" }"
-else
-    mkdir -p "$(dirname "$SETTINGS")"
-    echo "{ \"statusLine\": { \"type\": \"command\", \"command\": \"$STATUSLINE_CMD\" } }" > "$SETTINGS"
-    echo "  ✓ Created settings.json"
-fi
-
-# ── Step 4b: Wire narrator hooks into settings.json ──
-HOOK_SS="$INSTALL_DIR/hooks/narrator-session-start.sh"
-HOOK_PS="$INSTALL_DIR/hooks/narrator-prompt-submit.sh"
-
-if [ -n "$PY" ]; then
-    _wire_result=$("$PY" - "$SETTINGS" "$HOOK_SS" "$HOOK_PS" << 'PYWIRE'
-import json, os, sys, tempfile
-
-settings_path = sys.argv[1]
-hook_ss       = sys.argv[2]
-hook_ps       = sys.argv[3]
-
-# Load or create settings
-if os.path.exists(settings_path):
-    with open(settings_path, encoding="utf-8") as f:
-        s = json.load(f)
-else:
-    s = {}
-
-hooks = s.setdefault("hooks", {})
-
-def _entry(cmd):
-    return {"type": "command", "command": cmd}
-
-def _ensure_hook(hooks_dict, event_key, cmd):
-    """Append cmd to hooks[event_key] list if not already present. Idempotent."""
-    entries = hooks_dict.setdefault(event_key, [])
-    # Normalise: accept plain strings or {"type":"command","command":"..."} objects
-    existing_cmds = set()
-    for e in entries:
-        if isinstance(e, dict):
-            existing_cmds.add(e.get("command", ""))
-        elif isinstance(e, str):
-            existing_cmds.add(e)
-    if cmd not in existing_cmds:
-        entries.append(_entry(cmd))
-        return True
-    return False
-
-added_ss = _ensure_hook(hooks, "SessionStart",      hook_ss)
-added_ps = _ensure_hook(hooks, "UserPromptSubmit",  hook_ps)
-
-# Atomic write: write to tmp then replace
-dirn = os.path.dirname(settings_path) or "."
-fd, tmp_path = tempfile.mkstemp(dir=dirn, suffix=".tmp")
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(s, f, indent=2)
-        f.write("\n")
-    os.replace(tmp_path, settings_path)
-except Exception:
-    try:
-        os.unlink(tmp_path)
-    except OSError:
-        pass
-    raise
-
-print("wired" if (added_ss or added_ps) else "already")
-PYWIRE
-    )
-    if [ "$_wire_result" = "already" ]; then
-        echo "  ↻ Narrator hooks already wired in settings.json"
-    else
-        echo "  ✓ Narrator hooks wired in settings.json"
-    fi
-else
-    echo "  ⚠ Skipping narrator hooks — no Python found."
-    echo "    Narrator requires Python 3.9+. Statusline still works via Node/bash."
-fi
-if [ -n "$PY" ]; then
-    echo "  ℹ Narrator: rules-mode ON by default. Set ANTHROPIC_API_KEY + STATUSLINE_NARRATOR_HAIKU=1 for the Haiku layer."
-fi
-
-# ── Step 5: Install slash commands ──
-mkdir -p "$HOME/.claude/commands"
-cp "$SCRIPT_DIR/commands/"*.md "$HOME/.claude/commands/" 2>/dev/null && \
-    echo "  ✓ Slash commands installed (/statusline-*, /explain, /narrate, /narrator-lang)" || \
-    echo "  ⚠ Could not install slash commands"
-
-# ── Step 6: Fetch initial schedule ──
-echo "  Fetching peak hours schedule..."
-SCHEDULE_URL="https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json"
-SCHEDULE_CACHE="$HOME/.claude/statusline-schedule.json"
-if command -v curl >/dev/null 2>&1; then
-    curl -s --max-time 5 "$SCHEDULE_URL" -o "$SCHEDULE_CACHE" 2>/dev/null && \
-        echo "  ✓ Schedule downloaded (auto-updates every 6 hours)" || \
-        echo "  ⚠ Could not fetch schedule (will use defaults)"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q --timeout=5 "$SCHEDULE_URL" -O "$SCHEDULE_CACHE" 2>/dev/null && \
-        echo "  ✓ Schedule downloaded (auto-updates every 6 hours)" || \
-        echo "  ⚠ Could not fetch schedule (will use defaults)"
-else
-    echo "  ⚠ No curl/wget — schedule will be fetched on first run"
-fi
-
-# ── Step 7: Editor extension (VS Code / Cursor / Windsurf / Antigravity) ──
-EDITORS_FOUND=""
-for editor_cmd in code cursor windsurf agy; do
-    if command -v "$editor_cmd" >/dev/null 2>&1; then
-        EDITORS_FOUND="$EDITORS_FOUND $editor_cmd"
-    fi
-done
-
-if [ -n "$EDITORS_FOUND" ] && command -v npm >/dev/null 2>&1; then
-    echo ""
-    echo "  Detected editors:$EDITORS_FOUND"
-    echo "  Building statusline extension..."
-    VSCODE_DIR="$INSTALL_DIR/vscode"
-    mkdir -p "$VSCODE_DIR"
-    cp "$SCRIPT_DIR/vscode/extension.ts" "$VSCODE_DIR/"
-    cp "$SCRIPT_DIR/vscode/package.json" "$VSCODE_DIR/"
-    cp "$SCRIPT_DIR/vscode/package-lock.json" "$VSCODE_DIR/" 2>/dev/null || true
-    cp "$SCRIPT_DIR/vscode/tsconfig.json" "$VSCODE_DIR/"
-    cp "$SCRIPT_DIR/vscode/icon.png" "$VSCODE_DIR/"
-    cp "$SCRIPT_DIR/vscode/LICENSE" "$VSCODE_DIR/"
-
-    VSIX_BUILT=false
-    (cd "$VSCODE_DIR" && npm install --silent 2>/dev/null && npm run compile --silent 2>/dev/null && \
-        npx @vscode/vsce package --allow-missing-repository --out claude-statusline.vsix 2>/dev/null) && VSIX_BUILT=true
-
-    if [ "$VSIX_BUILT" = true ]; then
-        for editor_cmd in $EDITORS_FOUND; do
-            case "$editor_cmd" in
-                code)       name="VS Code" ;;
-                cursor)     name="Cursor" ;;
-                windsurf)   name="Windsurf" ;;
-                agy)        name="Antigravity" ;;
-                *)          name="$editor_cmd" ;;
-            esac
-            if "$editor_cmd" --install-extension "$VSCODE_DIR/claude-statusline.vsix" --force 2>/dev/null; then
-                echo "  ✓ Installed in $name!"
-            else
-                echo "  ⚠ Could not install in $name (install manually via VSIX)."
-            fi
-        done
-    else
-        echo "  ⚠ Extension build failed (optional). Install manually from vscode/ folder."
-    fi
-else
-    echo ""
-    echo "  No supported editors detected (VS Code, Cursor, Windsurf, Antigravity)."
-    echo "  To install later: build from the vscode/ folder."
-fi
-
-# ── Done ──
-echo ""
-echo "  ╭──────────────────────────────────────────╮"
-echo "  │  ✓ Installed! Restart Claude Code.       │"
-echo "  │                                          │"
-echo "  │  Peak hours schedule updates             │"
-echo "  │  automatically from GitHub.              │"
-echo "  │                                          │"
-echo "  │  To change tier:                         │"
-echo "  │    /statusline-minimal                   │"
-echo "  │    /statusline-standard                  │"
-echo "  │    /statusline-full                      │"
-echo "  │                                          │"
-echo "  │  VS Code: extension auto-installed       │"
-echo "  │  if VS Code + npm were detected.         │"
-echo "  │                                          │"
-echo "  │  Or re-run: bash install.sh              │"
-echo "  ╰──────────────────────────────────────────╯"
-echo ""
-
-# ── Telemetry: anonymous install ping ──
-_uid=$(echo -n "$(hostname):$(whoami)" | sha256sum 2>/dev/null | cut -c1-16)
-if [ -n "$_uid" ]; then
-    _tele_payload="{\"id\":\"$_uid\",\"v\":\"2.1\",\"engine\":\"installer\",\"tier\":\"$TIER\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"install\"}"
-    _tele_url="https://statusline-telemetry.nadavf.workers.dev/ping"
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -sS --max-time 3 -X POST -H "Content-Type: application/json" \
-          -d "$_tele_payload" "$_tele_url" >/dev/null 2>&1 &
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=3 --header="Content-Type: application/json" \
-          --post-data="$_tele_payload" "$_tele_url" -O /dev/null 2>/dev/null &
-    elif [ -n "${PY:-}" ] && [ -x "$PY" ]; then
-        "$PY" -c "
-import urllib.request, json
-try:
-    req = urllib.request.Request('$_tele_url', data=b'''$_tele_payload''', method='POST',
-        headers={'Content-Type': 'application/json'})
-    urllib.request.urlopen(req, timeout=3).read()
-except Exception: pass
-" >/dev/null 2>&1 &
-    fi
-fi
+write_install_files
+detect_runtime
+write_config
+wire_settings
+install_commands
+fetch_schedule
+install_editor_extension
+run_doctor
+send_install_telemetry
+print_done

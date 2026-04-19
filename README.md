@@ -12,7 +12,7 @@ Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash;
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)](#installation--30-seconds)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#engines-auto-detected)
 [![Works in](https://img.shields.io/badge/Works_in-CLI%20%7C%20Terminal-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.1.0-orange)](#)
+[![Version](https://img.shields.io/badge/version-2.2.0-orange)](#)
 
 **[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
 
@@ -95,19 +95,60 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 
 </div>
 
+**Windows (PowerShell):**
+
+<div dir="ltr" align="left">
+
+```powershell
+irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
+```
+
+</div>
+
 ה-installer מדפיס בדיוק איזה runtime הוא בוחר (Python / Node.js / Bash) &mdash; שקוף לגמרי. על Windows הוא דוחה stubs של Microsoft Store ומחפש Python נייד ב-`~/tools/` ו-`AppData`.
 
 **Narrator דורש Python 3.9+.** בלעדיו ה-Narrator לא יפעל, אבל שאר ה-statusline עובד עם Node.js או Bash בלבד.
+
+אם התקנת דרך plugin בלבד ועדיין אין statusline, הרץ `/statusline-init` כדי להשלים את ה-wiring המלא של `settings.json` וה-hooks.
+אחרי install או update, הרץ `/statusline-onboarding` כדי לקבל quickstart קצר עם הפקודות החשובות באמת.
+אם ההתקנה שלך ישנה, ה-statusline עצמו יציג badge של `Update available` או `Update required` מתוך ה-schedule המרוחק.
 
 ### שינוי רמה
 
 <div dir="ltr" align="left">
 
-| פקודה | מה עושה |
-|-------|---------|
-| `/statusline-minimal` | עובר ל-Minimal |
-| `/statusline-standard` | עובר ל-Standard |
-| `/statusline-full` | עובר ל-Full (מומלץ) |
+| פקודה                  | מה עושה             |
+| ---------------------- | ------------------- |
+| `/statusline-minimal`  | עובר ל-Minimal      |
+| `/statusline-standard` | עובר ל-Standard     |
+| `/statusline-full`     | עובר ל-Full (מומלץ) |
+
+</div>
+
+### עדכון התוסף
+
+<div dir="ltr" align="left">
+
+```bash
+bash ~/.claude/cc-2x-statusline/update.sh
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\cc-2x-statusline\update.ps1"
+```
+
+</div>
+
+אפשר גם מתוך Claude דרך `/statusline-update`.
+
+### Troubleshooting מהיר
+
+<div dir="ltr" align="left">
+
+```bash
+bash ~/.claude/cc-2x-statusline/doctor/doctor.sh
+bash ~/.claude/cc-2x-statusline/doctor/doctor.sh --fix
+```
 
 </div>
 
@@ -139,6 +180,7 @@ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k savi
 **שתי שכבות, אדיטיביות (מוצגות ביחד כשעוברים את הסף):**
 
 **שכבה 1 &mdash; Rules Engine** (תמיד פעיל, מתחת ל-50ms, בחינם):
+
 - ניתוח על-פי 4 צירים: דחיפות × חדשנות × ניתנות-לפעולה × ייחודיות
 - 15+ תבניות שמכסות: context שמתמלא, burn rate גבוה, cache, rate limits, שעות שיא/עמק, אבני דרך עלות
 
@@ -149,6 +191,7 @@ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k savi
 </div>
 
 **שכבה 2 &mdash; Haiku** (opt-in, פועל אוטומטית אם `ANTHROPIC_API_KEY` מוגדר):
+
 - `claude-haiku-4-5`, נורה כל 5 פרומפטים **או** 15 דקות (המוקדם מביניהם)
 - מוסיף 25-35 מילים של נרטיב על הסשן
 - עלות: ~$0.0005 לקריאה
@@ -160,6 +203,7 @@ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k savi
 </div>
 
 **מתי נורה:**
+
 - התחלת סשן / compact / resume (תמיד)
 - כל פרומפט (throttle: ≥ 5 דקות בין הודעות)
 
@@ -234,11 +278,11 @@ export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # מינימום בין הו�
 
 <div dir="ltr" align="left">
 
-| צבע | משמעות |
-|-----|--------|
-| **ירוק (teal)** | בריא &mdash; שימוש נמוך / מחוץ לשיא |
+| צבע                  | משמעות                                  |
+| -------------------- | --------------------------------------- |
+| **ירוק (teal)**      | בריא &mdash; שימוש נמוך / מחוץ לשיא     |
 | **צהוב** (רקע אזהרה) | בינוני &mdash; 50-79% שימוש או שעות שיא |
-| **אדום** (רקע שגיאה) | קריטי &mdash; 80%+ שימוש |
+| **אדום** (רקע שגיאה) | קריטי &mdash; 80%+ שימוש                |
 
 </div>
 
@@ -250,11 +294,11 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 <div dir="ltr" align="left">
 
-| מתי | סטטוס | שעון Pacific |
-|------|:------:|:-------------|
-| ימי חול, שעות שיא | **Peak** | 5:00am &ndash; 11:00am PT |
-| שאר השעות | Off-Peak | &mdash; |
-| סופ"ש (שבת + ראשון) | Off-Peak | כל היום |
+| מתי                 |  סטטוס   | שעון Pacific              |
+| ------------------- | :------: | :------------------------ |
+| ימי חול, שעות שיא   | **Peak** | 5:00am &ndash; 11:00am PT |
+| שאר השעות           | Off-Peak | &mdash;                   |
+| סופ"ש (שבת + ראשון) | Off-Peak | כל היום                   |
 
 </div>
 
@@ -274,10 +318,10 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 **מה נשלח, מתי, ולמה:**
 
-| אירוע | מתי | TTL |
-|-------|-----|-----|
-| `install` | פעם אחת למכונה (בהתקנה או בהרצה הראשונה) | ללא תפוגה |
-| `heartbeat` | פעם ביום | 90 יום |
+| אירוע       | מתי                                      | TTL       |
+| ----------- | ---------------------------------------- | --------- |
+| `install`   | פעם אחת למכונה (בהתקנה או בהרצה הראשונה) | ללא תפוגה |
+| `heartbeat` | פעם ביום                                 | 90 יום    |
 
 **Payload:**
 
@@ -348,11 +392,14 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 ```bash
 pip install pytest tzdata
 python -m pytest tests/ -v
+
+# Worker telemetry tests
+npm run test:worker
 ```
 
 </div>
 
-81 בדיקות עוברות: שעות שיא עם edge cases, DST, cross-timezone, rolling state, narrator scoring, memory, install ping.
+107 בדיקות pytest עוברות (שעות שיא, DST, cross-timezone, rolling state, narrator scoring, memory, install ping, JSON wiring) + 3 בדיקות Node ל-worker telemetry.
 
 </div>
 
@@ -424,6 +471,7 @@ The installer automatically detects supported editors and installs a companion s
 ![High Usage](assets/vscode-high.svg)
 
 **Features:**
+
 - **Peak/Off-Peak** with countdown and next-peak timer (color-coded)
 - **Rate limits** with battery bars &mdash; separate 5h and 7d, each with its own color
 - **Context window** &mdash; reads live data from the terminal statusline
@@ -431,11 +479,11 @@ The installer automatically detects supported editors and installs a companion s
 
 **Colors:**
 
-| Color | Meaning |
-|-------|---------|
-| **Teal** | Healthy &mdash; low usage / off-peak |
+| Color                   | Meaning                                     |
+| ----------------------- | ------------------------------------------- |
+| **Teal**                | Healthy &mdash; low usage / off-peak        |
 | **Yellow** (warning bg) | Moderate &mdash; 50-79% usage or peak hours |
-| **Red** (error bg) | Critical &mdash; 80%+ usage |
+| **Red** (error bg)      | Critical &mdash; 80%+ usage                 |
 
 **Supported editors:** VS Code, Cursor, Windsurf, Antigravity (Google). Any VS Code&ndash;based editor should work.
 
@@ -471,14 +519,16 @@ irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/instal
 
 The installer asks which tier you want, writes the config, updates `settings.json`, installs slash commands, and fetches the initial peak hours schedule. It prints exactly which runtime it selected before proceeding. **Restart Claude Code to activate.**
 
+After install or update, run `/statusline-onboarding` for a short quickstart. If your local install falls behind the version advertised by the remote schedule, the statusline now shows an `Update available` or `Update required` badge directly in the first line.
+
 ### Runtime requirements
 
-| Engine | Features | Minimum version |
-|:-------|:---------|:----------------|
-| Python 3.9+ | Full features including Narrator | Recommended |
-| Python 3 (older) | All statusline features, no Narrator | 3.6+ |
-| Node.js | All statusline features, no Narrator | Any LTS |
-| Bash | Minimal statusline only | 4+ |
+| Engine           | Features                             | Minimum version |
+| :--------------- | :----------------------------------- | :-------------- |
+| Python 3.9+      | Full features including Narrator     | Recommended     |
+| Python 3 (older) | All statusline features, no Narrator | 3.6+            |
+| Node.js          | All statusline features, no Narrator | Any LTS         |
+| Bash             | Minimal statusline only              | 4+              |
 
 The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rejects Microsoft Store app-execution alias stubs and probes portable install locations before falling back to system PATH.
 
@@ -489,7 +539,7 @@ The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rej
 > **Recommendation:** Start with **Full**. You get everything &mdash; timeline, rate limits, burn rate, cache stats. You can always switch down.
 
 | Tier     | Lines | Segments                                                                       |
-|----------|-------|--------------------------------------------------------------------------------|
+| -------- | ----- | ------------------------------------------------------------------------------ |
 | minimal  | 1     | peak_hours, model, context, git_branch, git_dirty, rate_limits, env            |
 | standard | 1     | peak_hours, model, context, vim_mode, agent, git_branch, git_dirty, cost,      |
 |          |       | effort, env                                                                    |
@@ -502,11 +552,11 @@ On off-peak days (weekdays not in the peak schedule, and all-day normal-mode sch
 
 Use slash commands inside Claude Code:
 
-| Command | Effect |
-|:--------|:-------|
-| `/statusline-minimal` | Switch to Minimal (1 line) |
-| `/statusline-standard` | Switch to Standard (2 lines) |
-| `/statusline-full` | Switch to Full dashboard (4 lines) |
+| Command                | Effect                             |
+| :--------------------- | :--------------------------------- |
+| `/statusline-minimal`  | Switch to Minimal (1 line)         |
+| `/statusline-standard` | Switch to Standard (2 lines)       |
+| `/statusline-full`     | Switch to Full dashboard (4 lines) |
 
 Or edit the config directly:
 
@@ -554,6 +604,7 @@ cache reuse 96% idle              ← nothing read from cache this tick
 ### State storage
 
 Rolling samples are persisted to `~/.claude/statusline-state.json`:
+
 - 60-minute ring buffer of timestamped samples.
 - Atomic write (temp file + rename) so a crash cannot corrupt the file.
 - If the file is corrupt or unreadable, it is silently replaced with an empty buffer.
@@ -571,27 +622,27 @@ This statusline is dense by design &mdash; each segment answers a specific quest
  ╰─ peak ─╯  ╰─ countdown ─╯  ╰ model ╯  ╰── context ──╯  ╰ $$ ╯  ╰ env ╯  ╰─── git ───╯
 ```
 
-| Segment | What it shows | Details |
-|:--------|:-------------|:--------|
-| `Off-Peak` / `Peak` | Current peak status | Green = Off-Peak (normal). Red/yellow = Peak (limits consumed faster) |
-| `peak in 3h 22m` | Countdown | Time until the next peak window starts (or ends, during peak) |
-| `3pm-9pm` | Peak window | Peak hours converted to your local timezone |
-| `Opus 4.6` | Active model | The model Claude Code is currently using |
-| `360K/1.0M 36%` | Context usage | Tokens used / window size and percentage |
-| `$4.20` | Session cost | Total cost in USD for this session |
-| `LOCAL` / `REMOTE` | Environment | Cyan = local machine. Magenta = SSH/remote server |
-| `main` | Git branch | Current branch name |
-| `saved` / `2 unsaved` | Git status | Green "saved" = clean. Yellow = uncommitted changes |
+| Segment               | What it shows       | Details                                                               |
+| :-------------------- | :------------------ | :-------------------------------------------------------------------- |
+| `Off-Peak` / `Peak`   | Current peak status | Green = Off-Peak (normal). Red/yellow = Peak (limits consumed faster) |
+| `peak in 3h 22m`      | Countdown           | Time until the next peak window starts (or ends, during peak)         |
+| `3pm-9pm`             | Peak window         | Peak hours converted to your local timezone                           |
+| `Opus 4.6`            | Active model        | The model Claude Code is currently using                              |
+| `360K/1.0M 36%`       | Context usage       | Tokens used / window size and percentage                              |
+| `$4.20`               | Session cost        | Total cost in USD for this session                                    |
+| `LOCAL` / `REMOTE`    | Environment         | Cyan = local machine. Magenta = SSH/remote server                     |
+| `main`                | Git branch          | Current branch name                                                   |
+| `saved` / `2 unsaved` | Git status          | Green "saved" = clean. Yellow = uncommitted changes                   |
 
 When you see `$4.20`: cumulative session cost. Compare against your per-session budget. There's no auto-stop at any threshold.
 
 ### Conditional Segments (appear only when active)
 
-| Segment | When it appears |
-|:--------|:---------------|
+| Segment             | When it appears                   |
+| :------------------ | :-------------------------------- |
 | `NORMAL` / `INSERT` | Vim mode is active in Claude Code |
-| Agent name | Running inside a subagent |
-| `wt:name` | Running inside a git worktree |
+| Agent name          | Running inside a subagent         |
+| `wt:name`           | Running inside a git worktree     |
 
 When you see `NORMAL` or `INSERT`: Vim keybindings are active in Claude Code. If this is unexpected, check your settings.json for `"vim": true`.
 When you see `wt:name`: you are working in a linked git worktree. Run `/explain worktree` for details.
@@ -602,14 +653,14 @@ When you see `wt:name`: you are working in a linked git worktree. Run `/explain 
 │ ▸ 5h ▰▰▱▱▱▱▱▱▱▱ 20% ⟳ 5:00pm · weekly ▰▰▰▰▱▱▱▱▱▱ 42% ⟳ 4/4 11:00pm │
 ```
 
-| Part | Meaning |
-|:-----|:--------|
-| `5h` | 5-hour rolling window limit |
-| `▰▰▱▱▱▱▱▱▱▱ 20%` | Graphical bar + percentage consumed |
-| `⟳ 5:00pm` | When this limit resets (local time) |
-| `⚡ peak` | Appears during peak &mdash; consumption rate is higher |
-| `weekly` | Weekly limit (does not change during peak) |
-| `⟳ 4/4 11:00pm` | Weekly reset date and time |
+| Part             | Meaning                                                |
+| :--------------- | :----------------------------------------------------- |
+| `5h`             | 5-hour rolling window limit                            |
+| `▰▰▱▱▱▱▱▱▱▱ 20%` | Graphical bar + percentage consumed                    |
+| `⟳ 5:00pm`       | When this limit resets (local time)                    |
+| `⚡ peak`        | Appears during peak &mdash; consumption rate is higher |
+| `weekly`         | Weekly limit (does not change during peak)             |
+| `⟳ 4/4 11:00pm`  | Weekly reset date and time                             |
 
 ### Spending & Cache (Full only)
 
@@ -617,11 +668,11 @@ When you see `wt:name`: you are working in a linked git worktree. Run `/explain 
 │ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k saving │
 ```
 
-| Part | Meaning |
-|:-----|:--------|
-| `spending $5.4/hr moderate (10m)` | Burn rate over last 10 min. Severity word inline. |
-| `ctx full ~47m` | Estimated time until context window is full (red < 30m, yellow < 60m) |
-| `cache reuse 96% ↑2.3k saving` | Cache read ratio + tokens saved this window. `idle` when nothing being read. |
+| Part                              | Meaning                                                                      |
+| :-------------------------------- | :--------------------------------------------------------------------------- |
+| `spending $5.4/hr moderate (10m)` | Burn rate over last 10 min. Severity word inline.                            |
+| `ctx full ~47m`                   | Estimated time until context window is full (red < 30m, yellow < 60m)        |
+| `cache reuse 96% ↑2.3k saving`    | Cache read ratio + tokens saved this window. `idle` when nothing being read. |
 
 When you see `$6.3/hr moderate (10m)`: spending rate over the last 10 minutes. The `(10m)` clarifies the window. If sustained, multiply by estimated remaining session hours to forecast total. Colors: RED if extrapolated session cost would exceed $50, YELLOW >$20, DIM otherwise.
 
@@ -656,16 +707,16 @@ Run `/explain` with no argument to print a table of all 18 documented segments.
 
 The two invocation paths are equivalent:
 
-| Path | Command |
-|:-----|:--------|
-| Direct slash command | `/explain <segment>` |
-| Via doctor (legacy) | `/statusline-doctor --explain <segment>` |
+| Path                 | Command                                  |
+| :------------------- | :--------------------------------------- |
+| Direct slash command | `/explain <segment>`                     |
+| Via doctor (legacy)  | `/statusline-doctor --explain <segment>` |
 
 ---
 
 ## Narrator Hook
 
-The statusline shows what's happening right now. The narrator hook tells you what it *means* and what to do &mdash; as a brief message injected above your next prompt, like a co-pilot reading the dashboard and summarizing.
+The statusline shows what's happening right now. The narrator hook tells you what it _means_ and what to do &mdash; as a brief message injected above your next prompt, like a co-pilot reading the dashboard and summarizing.
 
 **Two tiers, additive** (both shown together when the Haiku gate passes):
 
@@ -699,14 +750,15 @@ Rate limits at 23%, peak hours ended — wide-open runway ahead.
 
 ### When it fires
 
-| Event | Frequency |
-|:------|:----------|
-| Session start / compact / resume | Always, no throttle |
-| User prompt submit | Throttled: minimum 5 min between emissions |
+| Event                            | Frequency                                  |
+| :------------------------------- | :----------------------------------------- |
+| Session start / compact / resume | Always, no throttle                        |
+| User prompt submit               | Throttled: minimum 5 min between emissions |
 
 ### Session memory
 
 `~/.claude/narrator-memory.json` stores:
+
 - Rolling observations from the last 2 hours
 - Last 8 delivered narratives (deduplication)
 - Cost milestones crossed this session
@@ -806,21 +858,21 @@ After setting this, the engine checks the flag before every ping attempt. Nothin
 
 ## Color Guide
 
-| Color | Where | Meaning |
-|:------|:------|:--------|
-| Green | Peak badge | Off-Peak &mdash; normal rate |
-| Red | Peak badge | Deep into peak hours (lots of time left) |
-| Yellow | Peak badge | Peak ending soon (1-2 hours) |
-| Green | Peak badge | Peak almost over (< 30 minutes) |
-| Green | Git status | Clean &mdash; all saved |
-| Yellow | Git status | Uncommitted changes |
-| Cyan | Environment | LOCAL |
-| Magenta | Environment | REMOTE (SSH) |
-| Green | Cache % | Excellent reuse (>= 80%) |
-| Yellow | Cache % | Moderate reuse (>= 50%) |
-| Red | Cache % | Low reuse / context depletion warning |
-| Green | Separators (▸) | Off-Peak |
-| Yellow | Separators (▸) | During Peak |
+| Color   | Where          | Meaning                                  |
+| :------ | :------------- | :--------------------------------------- |
+| Green   | Peak badge     | Off-Peak &mdash; normal rate             |
+| Red     | Peak badge     | Deep into peak hours (lots of time left) |
+| Yellow  | Peak badge     | Peak ending soon (1-2 hours)             |
+| Green   | Peak badge     | Peak almost over (< 30 minutes)          |
+| Green   | Git status     | Clean &mdash; all saved                  |
+| Yellow  | Git status     | Uncommitted changes                      |
+| Cyan    | Environment    | LOCAL                                    |
+| Magenta | Environment    | REMOTE (SSH)                             |
+| Green   | Cache %        | Excellent reuse (>= 80%)                 |
+| Yellow  | Cache %        | Moderate reuse (>= 50%)                  |
+| Red     | Cache %        | Low reuse / context depletion warning    |
+| Green   | Separators (▸) | Off-Peak                                 |
+| Yellow  | Separators (▸) | During Peak                              |
 
 ---
 
@@ -828,11 +880,11 @@ After setting this, the engine checks the flag before every ping attempt. Nothin
 
 Anthropic's rate limiting policy adjusts **5-hour session limit** consumption during peak hours. This does **not** change your weekly limit &mdash; only how fast the 5-hour window quota is consumed.
 
-| When | Status | Pacific Time | Your time |
-|:-----|:------:|:-------------|:----------|
-| Weekdays, peak hours | **Peak** | 5:00 AM &ndash; 11:00 AM PT | Auto-converted to local |
-| Weekdays, other hours | Off-Peak | &mdash; | &mdash; |
-| Weekends (Sat & Sun) | Off-Peak | All day | &mdash; |
+| When                  |  Status  | Pacific Time                | Your time               |
+| :-------------------- | :------: | :-------------------------- | :---------------------- |
+| Weekdays, peak hours  | **Peak** | 5:00 AM &ndash; 11:00 AM PT | Auto-converted to local |
+| Weekdays, other hours | Off-Peak | &mdash;                     | &mdash;                 |
+| Weekends (Sat & Sun)  | Off-Peak | All day                     | &mdash;                 |
 
 > **Key insight:** Peak = bad for heavy usage. Your 5-hour limit gets consumed faster. If you have limit-intensive work, consider scheduling it for Off-Peak hours.
 
@@ -842,12 +894,12 @@ The plugin detects your timezone automatically and converts peak hours to your l
 
 **Examples of the same peak window in different timezones:**
 
-| Timezone | Peak window displayed as |
-|:---------|:------------------------|
-| US Pacific (PT) | 5:00 AM &ndash; 11:00 AM |
-| US Eastern (ET) | 8:00 AM &ndash; 2:00 PM |
-| Israel (IST) | 3:00 PM &ndash; 9:00 PM |
-| Central Europe (CET) | 2:00 PM &ndash; 8:00 PM |
+| Timezone              | Peak window displayed as      |
+| :-------------------- | :---------------------------- |
+| US Pacific (PT)       | 5:00 AM &ndash; 11:00 AM      |
+| US Eastern (ET)       | 8:00 AM &ndash; 2:00 PM       |
+| Israel (IST)          | 3:00 PM &ndash; 9:00 PM       |
+| Central Europe (CET)  | 2:00 PM &ndash; 8:00 PM       |
 | Australia East (AEST) | 11:00 PM &ndash; 5:00 AM (+1) |
 
 ### Cross-timezone edge case (fixed)
@@ -876,15 +928,15 @@ https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.j
 
 **What the schedule controls:**
 
-| Field | Purpose |
-|:------|:--------|
-| `peak.start` / `peak.end` | Peak hour range (in PT) |
-| `peak.days` | Which days have peak hours (1=Mon, 7=Sun) |
-| `peak.label_peak` / `peak.label_offpeak` | Display labels |
-| `default_tier` | Recommended tier for new installs |
-| `banner.text` | Optional announcement shown to all users |
-| `banner.expires` | Auto-expiry date for the banner |
-| `features.*` | Toggle segments on/off remotely |
+| Field                                    | Purpose                                   |
+| :--------------------------------------- | :---------------------------------------- |
+| `peak.start` / `peak.end`                | Peak hour range (in PT)                   |
+| `peak.days`                              | Which days have peak hours (1=Mon, 7=Sun) |
+| `peak.label_peak` / `peak.label_offpeak` | Display labels                            |
+| `default_tier`                           | Recommended tier for new installs         |
+| `banner.text`                            | Optional announcement shown to all users  |
+| `banner.expires`                         | Auto-expiry date for the banner           |
+| `features.*`                             | Toggle segments on/off remotely           |
 
 ---
 
@@ -892,21 +944,21 @@ https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.j
 
 The plugin ships with 4 engine implementations. The wrapper script auto-detects the best available runtime:
 
-| Priority | Engine | Platform | Dependencies |
-|:--------:|:-------|:---------|:-------------|
-| 1 | **Python** | macOS, Linux, Windows | Python 3 (no pip packages required for core; `tzdata` for full DST coverage) |
-| 2 | **Node.js** | All | Node.js |
-| 3 | **Bash** | macOS, Linux | None |
-| 4 | **PowerShell** | Windows | PowerShell 5.1+ (built-in) |
+| Priority | Engine         | Platform              | Dependencies                                                                 |
+| :------: | :------------- | :-------------------- | :--------------------------------------------------------------------------- |
+|    1     | **Python**     | macOS, Linux, Windows | Python 3 (no pip packages required for core; `tzdata` for full DST coverage) |
+|    2     | **Node.js**    | All                   | Node.js                                                                      |
+|    3     | **Bash**       | macOS, Linux          | None                                                                         |
+|    4     | **PowerShell** | Windows               | PowerShell 5.1+ (built-in)                                                   |
 
-Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is used directly. All engines produce identical statusline output. Feature parity table:
+Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, the installer prefers **Git Bash + `statusline.sh`** when available, and falls back to **PowerShell + `statusline.ps1`** when Bash is missing. Feature parity table:
 
-| Feature | Python | Node.js | Bash | PowerShell |
-|:--------|:------:|:-------:|:----:|:----------:|
-| Full statusline | Yes | Yes | Yes | Yes |
-| Narrator hook | Yes (3.9+) | No | No | No |
-| Rolling-window metrics | Yes | Yes | Partial | Partial |
-| `/explain` command | Yes | Yes | No | No |
+| Feature                |   Python   | Node.js |  Bash   | PowerShell |
+| :--------------------- | :--------: | :-----: | :-----: | :--------: |
+| Full statusline        |    Yes     |   Yes   |   Yes   |    Yes     |
+| Narrator hook          | Yes (3.9+) |   No    |   No    |     No     |
+| Rolling-window metrics |    Yes     |   Yes   | Partial |  Partial   |
+| `/explain` command     |    Yes     |   Yes   |   No    |     No     |
 
 **Confirmed for CLI / terminal.** VS Code and JetBrains extensions may also work (they share `~/.claude/settings.json`) but are not officially documented yet.
 
@@ -915,6 +967,12 @@ Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is us
 ## Windows Support
 
 Windows requires a few extra accommodations that the installer and hook scripts handle automatically.
+
+### Install paths
+
+- If Git Bash is installed, `install.ps1` wires the main statusline through `bash.exe statusline.sh` so Windows gets the same runtime resolver and narrator path as macOS/Linux.
+- If Git Bash is not installed, `install.ps1` falls back to `statusline.ps1`. The statusline still works, but narrator hooks are skipped until Git Bash or WSL is available.
+- `update.ps1` supports both git-clone installs and legacy non-git installs by bootstrapping a fresh source tree when needed.
 
 ### Runtime resolver
 
@@ -951,20 +1009,25 @@ pip install pytest tzdata
 
 # Run all tests
 python -m pytest tests/ -v
+
+# Run worker telemetry tests
+npm run test:worker
 ```
 
-Current status: **81 tests passing**.
+Current status: **106 pytest passes, 1 expected skip, plus 3 Node worker tests**.
 
 Coverage areas:
 
-| Area | What's tested |
-|:-----|:-------------|
-| Peak hours | Edge cases: exact boundary minutes, overnight windows (AEST), DST transitions |
-| Cross-timezone | Saturday UTC peak spilling into Sunday UTC+3, negative-offset zones |
-| Rolling state | Ring buffer overflow, corrupt file recovery, atomic write simulation |
-| Narrator scoring | 4-axis scoring, template selection, deduplication, throttle logic |
-| Narrator memory | Rolling observations, session boundary, prior-session retention |
-| Install ping | First-seen deduplication, opt-out flag, retroactive backfill |
+| Area             | What's tested                                                                       |
+| :--------------- | :---------------------------------------------------------------------------------- |
+| Peak hours       | Edge cases: exact boundary minutes, overnight windows (AEST), DST transitions       |
+| Cross-timezone   | Saturday UTC peak spilling into Sunday UTC+3, negative-offset zones                 |
+| Rolling state    | Ring buffer overflow, corrupt file recovery, atomic write simulation                |
+| Narrator scoring | 4-axis scoring, template selection, deduplication, throttle logic                   |
+| Narrator memory  | Rolling observations, session boundary, prior-session retention                     |
+| JSON wiring      | Installer merge/query helpers for settings.json, config.json, and doctor failed IDs |
+| Install ping     | First-seen deduplication, opt-out flag, retroactive backfill                        |
+| Worker failures  | `/failures` auth, per-OS aggregation, fail-index rollups, update/install summaries  |
 
 ---
 
@@ -981,12 +1044,13 @@ Coverage areas:
     node-engine.js       # Node.js engine
     bash-engine.sh       # Pure bash fallback
   commands/
+    statusline-onboarding.md
     statusline-minimal.md
     statusline-standard.md
     statusline-full.md
     statusline-tier.md
-  skills/                # Slash command skill definitions (explain, narrate, doctor)
-  tests/                 # 81 pytest tests
+  skills/                # Skills for setup, onboarding, and tier changes
+  tests/                 # 107 pytest cases
   schedule.json          # Bundled schedule (fallback)
   plugin.json            # Plugin metadata
   install.sh             # Interactive installer

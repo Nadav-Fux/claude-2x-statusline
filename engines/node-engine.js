@@ -24,6 +24,7 @@ const BG_GREEN = '\x1b[38;5;255;48;5;28m';
 const BG_YELLOW = '\x1b[38;5;16;48;5;220m';
 const BG_RED = '\x1b[38;5;255;48;5;124m';
 const BG_GRAY = '\x1b[48;5;236m';
+const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
@@ -35,8 +36,83 @@ const TIER_PRESETS = {
 const DEFAULT_SCHEDULE = {
   v: 2, mode: 'peak_hours',
   peak: { enabled: true, tz: 'America/Los_Angeles', days: [1,2,3,4,5], start: 5, end: 11,
-    label_peak: 'Peak', label_offpeak: 'Off-Peak', note: 'Session limits consumed faster' }
+    label_peak: 'Peak', label_offpeak: 'Off-Peak', note: 'Session limits consumed faster' },
+  banner: { text: '', expires: '', color: 'yellow' },
+  release: {},
 };
+
+function loadLocalVersion() {
+  try {
+    const packagePath = path.join(__dirname, '..', 'package.json');
+    return JSON.parse(fs.readFileSync(packagePath, 'utf8')).version || '';
+  } catch {
+    return '';
+  }
+}
+
+const CURRENT_VERSION = loadLocalVersion();
+
+function parseVersion(value) {
+  const core = String(value || '').split('-', 1)[0].split('+', 1)[0];
+  const parts = core.split('.').map(token => {
+    const digits = token.replace(/[^0-9]/g, '');
+    return digits ? parseInt(digits, 10) : 0;
+  });
+  while (parts.length < 3) {
+    parts.push(0);
+  }
+  return parts;
+}
+
+function compareVersions(left, right) {
+  const leftParts = parseVersion(left);
+  const rightParts = parseVersion(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  while (leftParts.length < length) {
+    leftParts.push(0);
+  }
+  while (rightParts.length < length) {
+    rightParts.push(0);
+  }
+  for (let index = 0; index < length; index++) {
+    if (leftParts[index] < rightParts[index]) {
+      return -1;
+    }
+    if (leftParts[index] > rightParts[index]) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+function buildReleaseNotice(schedule) {
+  const release = schedule.release || {};
+  const latestVersion = String(release.latest_version || '').trim();
+  const minimumVersion = String(release.minimum_version || '').trim();
+  if (!CURRENT_VERSION || (!latestVersion && !minimumVersion)) {
+    return '';
+  }
+
+  const command = String(release.command || '/statusline-update').trim() || '/statusline-update';
+  const targetVersion = latestVersion || minimumVersion;
+
+  if (minimumVersion && compareVersions(CURRENT_VERSION, minimumVersion) < 0) {
+    const text = release.required_text || `Update required v${targetVersion} via ${command}`;
+    return `${BG_RED} ${text} ${RST}`;
+  }
+  if (latestVersion && compareVersions(CURRENT_VERSION, latestVersion) < 0) {
+    const text = release.available_text || `Update available v${latestVersion} via ${command}`;
+    return `${BG_YELLOW} ${text} ${RST}`;
+  }
+  return '';
+}
+
+function localDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 function loadConfig() {
   const p = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', 'statusline-config.json');
@@ -161,6 +237,31 @@ function minsUntilNextPeak(now, peakDays, startLocalHour) {
 
 // ── Segments ──
 const SEGMENTS = {
+  banner(ctx) {
+    const badges = [];
+    const releaseNotice = buildReleaseNotice(ctx.schedule);
+    if (releaseNotice) {
+      badges.push(releaseNotice);
+    }
+
+    const banner = ctx.schedule.banner || {};
+    if (banner.text) {
+      const today = localDateString(ctx.now);
+      if (!banner.expires || today <= banner.expires) {
+        const colorMap = {
+          yellow: BG_YELLOW,
+          red: BG_RED,
+          green: BG_GREEN,
+          blue: BG_BLUE,
+          gray: BG_GRAY,
+        };
+        const bg = colorMap[banner.color] || BG_YELLOW;
+        badges.push(`${bg} ${banner.text} ${RST}`);
+      }
+    }
+
+    return badges.join(' ');
+  },
   time(ctx) {
     const h = String(ctx.now.getHours()).padStart(2,'0');
     const m = String(ctx.now.getMinutes()).padStart(2,'0');
@@ -318,6 +419,9 @@ function main() {
 
   const ctx = { config, stdin, now, tzName, offsetHours, schedule, isPeak: false };
   const enabled = getEnabled(config);
+  if (!enabled.includes('banner')) {
+    enabled.unshift('banner');
+  }
 
   const parts = [];
   const gitParts = [];

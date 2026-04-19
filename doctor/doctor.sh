@@ -791,21 +791,38 @@ check_narrator_hook() {
     py=$(have_python) || py=""
     if [ -n "$py" ] && [ -f "$SETTINGS" ]; then
         wired=$("$py" - "$SETTINGS" "$hook_ss" "$hook_ps" << 'PY' 2>/dev/null
-import json, sys
+import json, os, sys
+
 try:
     with open(sys.argv[1], encoding="utf-8") as f:
         s = json.load(f)
+
     hooks = s.get("hooks", {})
-    want = {sys.argv[2], sys.argv[3]}
-    found = set()
+    want = [sys.argv[2], sys.argv[3]]
+    hook_blob = json.dumps(hooks, ensure_ascii=False)
+    found = []
+
     for entries in hooks.values():
         if isinstance(entries, list):
             for e in entries:
                 if isinstance(e, dict):
-                    found.add(e.get("command", ""))
+                    found.append(e.get("command", ""))
                 elif isinstance(e, str):
-                    found.add(e)
-    print("1" if want.issubset(found) else "0")
+                    found.append(e)
+        elif isinstance(entries, dict):
+            found.append(entries.get("command", ""))
+        elif isinstance(entries, str):
+            found.append(entries)
+
+    def matches(target):
+        basename = os.path.basename(target)
+        return (
+            target in hook_blob
+            or basename in hook_blob
+            or any(cmd == target or target in cmd or basename in cmd for cmd in found)
+        )
+
+    print("1" if all(matches(target) for target in want) else "0")
 except Exception:
     print("0")
 PY

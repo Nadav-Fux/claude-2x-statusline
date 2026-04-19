@@ -9,6 +9,10 @@ BG_GREEN='\033[38;5;255;48;5;28m'; BG_YELLOW='\033[38;5;16;48;5;220m'
 BG_RED='\033[38;5;255;48;5;124m'; BG_GRAY='\033[48;5;236m'
 WHITE='\033[38;2;220;220;220m'
 
+ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_ROOT="$(cd "$ENGINE_DIR/.." && pwd)"
+PACKAGE_JSON="$INSTALL_ROOT/package.json"
+
 # ── Telemetry heartbeat (daily, fire-and-forget) ──
 HEARTBEAT_FILE="$HOME/.claude/.statusline-heartbeat"
 _today=$(date -u +%Y-%m-%d)
@@ -80,6 +84,61 @@ try:
 except: pass
 " 2>/dev/null)"
     fi
+fi
+
+extract_json_string() {
+    local key="$1"
+    local file="$2"
+    [ -f "$file" ] || return 0
+    grep -o '"'"$key"'"[[:space:]]*:[[:space:]]*"[^"]*"' "$file" 2>/dev/null | head -1 | sed -E 's/.*"([^"]*)"/\1/'
+}
+
+version_lt() {
+    local left="$1"
+    local right="$2"
+    local IFS=.
+    local -a left_parts=() right_parts=()
+    local max_len=0
+    local index left_part right_part
+
+    [ -n "$left" ] || return 1
+    [ -n "$right" ] || return 1
+    [ "$left" != "$right" ] || return 1
+
+    read -r -a left_parts <<< "$left"
+    read -r -a right_parts <<< "$right"
+    max_len=${#left_parts[@]}
+    [ ${#right_parts[@]} -gt "$max_len" ] && max_len=${#right_parts[@]}
+
+    for ((index = 0; index < max_len; index++)); do
+        left_part="${left_parts[index]:-0}"
+        right_part="${right_parts[index]:-0}"
+        left_part="${left_part//[^0-9]/}"
+        right_part="${right_part//[^0-9]/}"
+        [ -n "$left_part" ] || left_part=0
+        [ -n "$right_part" ] || right_part=0
+        if [ "$left_part" -lt "$right_part" ]; then
+            return 0
+        fi
+        if [ "$left_part" -gt "$right_part" ]; then
+            return 1
+        fi
+    done
+
+    return 1
+}
+
+local_version="$(extract_json_string version "$PACKAGE_JSON")"
+latest_version="$(extract_json_string latest_version "$SCHEDULE_CACHE")"
+minimum_version="$(extract_json_string minimum_version "$SCHEDULE_CACHE")"
+release_notice=""
+
+if version_lt "$local_version" "$minimum_version"; then
+    release_target="$latest_version"
+    [ -n "$release_target" ] || release_target="$minimum_version"
+    release_notice="${BG_RED} Update required v${release_target} ${RST}"
+elif version_lt "$local_version" "$latest_version"; then
+    release_notice="${BG_YELLOW} Update available v${latest_version} ${RST}"
 fi
 
 # ── Determine source timezone offset ──
@@ -212,6 +271,7 @@ fi
 [ "$is_peak" -eq 1 ] && arrow="${YELLOW}▸${RST}" || arrow="${GREEN}▸${RST}"
 
 parts="${status}"
+[ -n "$release_notice" ] && parts="${release_notice} ${arrow} ${parts}"
 [ -n "$gitinfo" ] && parts="${parts} ${arrow} ${gitinfo}"
 parts="${parts} ${arrow} ${envtag}"
 
