@@ -260,7 +260,7 @@ wire_settings() {
 
     hook_ss="$INSTALL_DIR/hooks/narrator-session-start.sh"
     hook_ps="$INSTALL_DIR/hooks/narrator-prompt-submit.sh"
-    hook_merge=$(printf '{"hooks":{"SessionStart":[{"type":"command","command":"%s"}],"UserPromptSubmit":[{"type":"command","command":"%s"}]}}' \
+    hook_merge=$(printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s"}]}]}}' \
         "$hook_ss" "$hook_ps")
 
     hook_result=0
