@@ -72,17 +72,30 @@ peak_enabled=1
 
 if [ -f "$SCHEDULE_CACHE" ]; then
     if command -v python3 >/dev/null 2>&1; then
-        eval "$(python3 -c "
+        _sched_out="$(python3 -c "
 import json,sys
 try:
     d=json.load(open('$SCHEDULE_CACHE'))
     p=d.get('peak',{})
-    print(f'peak_start_h={p.get(\"start\",5)}')
-    print(f'peak_end_h={p.get(\"end\",11)}')
-    print(f'peak_tz={p.get(\"tz\",\"America/Los_Angeles\")}')
-    print(f'peak_enabled={1 if p.get(\"enabled\",True) else 0}')
+    print(p.get('start',5))
+    print(p.get('end',11))
+    print(p.get('tz','America/Los_Angeles'))
+    print(1 if p.get('enabled',True) else 0)
 except: pass
 " 2>/dev/null)"
+        # Read exactly 4 lines; validate each before assigning
+        {
+            IFS= read -r _v_start
+            IFS= read -r _v_end
+            IFS= read -r _v_tz
+            IFS= read -r _v_enabled
+        } <<< "$_sched_out"
+        # Only assign if values look sane (integers / safe string)
+        [[ "$_v_start"   =~ ^[0-9]+$ ]]          && peak_start_h="$_v_start"
+        [[ "$_v_end"     =~ ^[0-9]+$ ]]          && peak_end_h="$_v_end"
+        [[ "$_v_tz"      =~ ^[A-Za-z/_+-]+$ ]]   && peak_tz="$_v_tz"
+        [[ "$_v_enabled" =~ ^[01]$ ]]            && peak_enabled="$_v_enabled"
+        unset _sched_out _v_start _v_end _v_tz _v_enabled
     fi
 fi
 

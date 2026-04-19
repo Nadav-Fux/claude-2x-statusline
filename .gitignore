@@ -1,5 +1,23 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+
+# Node / build
+node_modules/
+vscode/out/
+*.vsix
+
+# Caches & tooling
 .DS_Store
 .superpowers/
 .wrangler/
+*.log
+.env
+.env.*
+
+# IDE
+.idea/
+*.swp
+*.swo
