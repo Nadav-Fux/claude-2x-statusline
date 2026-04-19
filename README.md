@@ -26,6 +26,20 @@ Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash;
 
 ## עברית
 
+**ניווט מהיר:**
+[מה זה?](#מה-זה) &bull;
+[3 רמות תצוגה](#3-רמות-תצוגה) &bull;
+[התקנה](#התקנה--30-שניות) &bull;
+[מדדים ו-Rolling Window](#מדדים-ו-rolling-window) &bull;
+[Narrator Hook](#narrator-hook--הודעה-מעל-הפרומפט) &bull;
+[פקודת /explain](#פקודת-explain) &bull;
+[עדכון אוטומטי](#עדכון-אוטומטי-מרחוק) &bull;
+[Telemetry](#telemetry--שקיפות-מלאה) &bull;
+[Windows](#תמיכה-ב-windows) &bull;
+[בדיקות](#בדיקות)
+
+---
+
 ### מה זה?
 
 תוסף ל-Claude Code שמציג **שורת סטטוס חיה** בתחתית הטרמינל.
@@ -81,6 +95,10 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 
 </div>
 
+ה-installer מדפיס בדיוק איזה runtime הוא בוחר (Python / Node.js / Bash) &mdash; שקוף לגמרי. על Windows הוא דוחה stubs של Microsoft Store ומחפש Python נייד ב-`~/tools/` ו-`AppData`.
+
+**Narrator דורש Python 3.9+.** בלעדיו ה-Narrator לא יפעל, אבל שאר ה-statusline עובד עם Node.js או Bash בלבד.
+
 ### שינוי רמה
 
 <div dir="ltr" align="left">
@@ -92,6 +110,96 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 | `/statusline-full` | עובר ל-Full (מומלץ) |
 
 </div>
+
+---
+
+### מדדים ו-Rolling Window
+
+שורה 4 ב-Full tier מציגה נתונים על חלון נע של **10 דקות אחרונות**, לא על כל הסשן. כך ספייק רגעי לא מעוות את המספר.
+
+<div dir="ltr" align="left">
+
+```
+spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k saving
+```
+
+</div>
+
+- **spending**: קצב שריפה. המילה `low` / `moderate` / `high` מוטמעת ישירות בתצוגה. `(10m)` = החלון של החישוב.
+- **cache reuse**: כשיש קריאות מה-cache פעיל &mdash; `↑2.3k saving` מציין כמה טוקנים נחסכו ב-5 דקות האחרונות. כשה-cache בסרק &mdash; `cache reuse 96% idle`. המילה "reuse" מדגישה שקריאות cache עולות כ-10% מה-input הרגיל.
+- **הנתונים**: נשמרים ב-`~/.claude/statusline-state.json` כ-ring buffer של 60 דקות. כתיבה אטומית. קובץ פגום? נכתב מחדש מאפס.
+- **Sanity checks**: מינימום חלון של 3 דקות + תקרה של $200/שעה כדי שספייקים לא ישגעו את המספר.
+
+---
+
+### Narrator Hook &mdash; הודעה מעל הפרומפט
+
+ה-Narrator מוסיף הודעה קצרה **מעל הפרומפט הבא שלך**, בדיוק כמו ש-Borg עושה. הוא קורא את הדשבורד ואומר מה זה אומר ומה כדאי לעשות.
+
+**שתי שכבות, אדיטיביות (מוצגות ביחד כשעוברים את הסף):**
+
+**שכבה 1 &mdash; Rules Engine** (תמיד פעיל, מתחת ל-50ms, בחינם):
+- ניתוח על-פי 4 צירים: דחיפות × חדשנות × ניתנות-לפעולה × ייחודיות
+- 15+ תבניות שמכסות: context שמתמלא, burn rate גבוה, cache, rate limits, שעות שיא/עמק, אבני דרך עלות
+
+<div dir="ltr" align="left">
+
+> Burning $18/hr &mdash; at this rate your 5-hour budget ends in ~40 min. Consider Sonnet for simple steps.
+
+</div>
+
+**שכבה 2 &mdash; Haiku** (opt-in, פועל אוטומטית אם `ANTHROPIC_API_KEY` מוגדר):
+- `claude-haiku-4-5`, נורה כל 5 פרומפטים **או** 15 דקות (המוקדם מביניהם)
+- מוסיף 25-35 מילים של נרטיב על הסשן
+- עלות: ~$0.0005 לקריאה
+
+<div dir="ltr" align="left">
+
+> Since last check you refactored three components while your cache warmed from 62% to 94%. Rate limits at 23%, peak ended &mdash; wide-open runway ahead.
+
+</div>
+
+**מתי נורה:**
+- התחלת סשן / compact / resume (תמיד)
+- כל פרומפט (throttle: ≥ 5 דקות בין הודעות)
+
+**זיכרון בין סשנים:** `~/.claude/narrator-memory.json` &mdash; תצפיות עד 2 שעות, 8 נרטיבים אחרונים, 3 סשנים קודמים, ספירת פרומפטים, אבני דרך עלות.
+
+**כיוונון:**
+
+<div dir="ltr" align="left">
+
+```bash
+export STATUSLINE_NARRATOR_ENABLED=1               # kill switch (ברירת מחדל: on)
+export STATUSLINE_NARRATOR_HAIKU=auto              # auto = on אם ANTHROPIC_API_KEY קיים
+export STATUSLINE_NARRATOR_HAIKU_INTERVAL_MIN=15   # כל כמה דקות מקסימום
+export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # מינימום בין הודעות
+```
+
+</div>
+
+הרץ `/narrate` כדי להפעיל ידנית (עוקף throttle).
+
+**מגבלה:** Narrator דורש Python 3.9+. עם Node-only אין Narrator.
+
+---
+
+### פקודת /explain
+
+<div dir="ltr" align="left">
+
+```
+/explain burn_rate
+/explain cache_hit
+/explain context_depletion
+/explain          # ← בלי ארגומנט: טבלת כל הסגמנטים
+```
+
+</div>
+
+מסביר בדיוק מה הסגמנט מציג, איך חושב, אילו צבעים משמשים, ומתי הוא מסתתר. 18 סגמנטים מתועדים. אפשר גם דרך `/statusline-doctor --explain <segment>`.
+
+---
 
 ### תוסף VS Code / Cursor / Windsurf / Antigravity
 
@@ -146,20 +254,99 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 השעות מתורגמות **אוטומטית** לאזור הזמן שלך (ישראל, ארה"ב, אירופה, אוסטרליה &mdash; כולל שעון קיץ/חורף).
 
+**תיקון cross-timezone:** Peak של שבת בשעון Pacific שמגיע לתוך יום ראשון בשעון +UTC3 (ישראל) &mdash; מזוהה ומוצג נכון. גרסאות קודמות לא זיהו את הספיל הזה.
+
 > **חשוב:** מכסות שבועיות לא משתנות. רק הקצב שבו מכסת ה-5 שעות נצרכת עולה בזמן Peak.
 
 ### עדכון אוטומטי מרחוק
 
 התוסף מושך קובץ `schedule.json` מ-GitHub כל 6 שעות. אם Anthropic משנים את שעות העומס, אני מעדכן את הקובץ ב-repo &mdash; וכל המשתמשים מקבלים את העדכון **אוטומטית**, בלי `git pull`, בלי התקנה מחדש.
 
+---
+
+### Telemetry &mdash; שקיפות מלאה
+
+**מה נשלח, מתי, ולמה:**
+
+| אירוע | מתי | TTL |
+|-------|-----|-----|
+| `install` | פעם אחת למכונה (בהתקנה או בהרצה הראשונה) | ללא תפוגה |
+| `heartbeat` | פעם ביום | 90 יום |
+
+**Payload:**
+
+<div dir="ltr" align="left">
+
+```json
+{
+  "id": "sha256('hostname:username')[:16]",
+  "v": "2.1.0",
+  "engine": "python",
+  "tier": "full",
+  "os": "linux",
+  "event": "install"
+}
+```
+
+</div>
+
+**Endpoint:** `https://statusline-telemetry.nadavf.workers.dev/ping`
+
+**מה לא נשלח:** תוכן קבצים, נתוני שיחות, זהות אמיתית, session IDs, כתובות IP (מעבר למה ש-Cloudflare edge רואה). המזהה היחיד הוא hash חד-כיווני של hostname + username (16 תווים).
+
+**סטטיסטיקות חיות (שקיפות):** `https://statusline-telemetry.nadavf.workers.dev/stats`
+
+**ביטול:**
+
+<div dir="ltr" align="left">
+
+```json
+// ~/.claude/statusline-config.json
+{
+  "tier": "full",
+  "telemetry": false
+}
+```
+
+</div>
+
+אחרי שמגדירים `"telemetry": false` &mdash; לא נשלח שום ping, לעולם.
+
+---
+
+### תמיכה ב-Windows
+
+- `lib/resolve-runtime.sh` דוחה `C:\Program Files\WindowsApps\*.exe` &mdash; Microsoft Store stubs שרק פותחים דיאלוג התקנה.
+- בדיקת Python נייד: `~/tools/python-*/`, `AppData/Local/Programs/Python/Python3*/` ועוד.
+- Hook scripts משתמשים ב-`cygpath -w` לתרגום נתיבי `/c/Users/...` ל-`C:\Users\...`.
+- UTF-8 מאולץ ב-stdout של ה-hooks כדי שתווי Narrator לא יינפצו ב-cp1252.
+
+---
+
 ### דרישות
 
 <div dir="ltr" align="left">
 
 - Claude Code (CLI / terminal)
-- **אחד מ:** Python 3 | Node.js | PowerShell 5.1+ | Bash
+- **אחד מ:** Python 3.9+ (מומלץ, Narrator + כל הפיצ'רים) | Python 3 | Node.js | Bash
+- **Narrator**: Python 3.9+ בלבד. Node.js = בלי Narrator. Bash = statusline מינימלי בלבד.
 
 </div>
+
+---
+
+### בדיקות
+
+<div dir="ltr" align="left">
+
+```bash
+pip install pytest tzdata
+python -m pytest tests/ -v
+```
+
+</div>
+
+81 בדיקות עוברות: שעות שיא עם edge cases, DST, cross-timezone, rolling state, narrator scoring, memory, install ping.
 
 </div>
 
@@ -168,6 +355,19 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 <br>
 
 ## English
+
+**Quick navigation:**
+[What is it?](#what-is-it) &bull;
+[What it looks like](#what-it-looks-like) &bull;
+[Installation](#installation--30-seconds) &bull;
+[Rolling-window metrics](#rolling-window-metrics) &bull;
+[Narrator hook](#narrator-hook) &bull;
+[/explain command](#explaining-any-segment) &bull;
+[Telemetry](#telemetry--transparency) &bull;
+[Windows support](#windows-support) &bull;
+[Testing](#testing)
+
+---
 
 ### What is this?
 
@@ -263,7 +463,18 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
 ```
 
-The installer asks which tier you want, writes the config, updates `settings.json`, installs slash commands, and fetches the initial peak hours schedule. **Restart Claude Code to activate.**
+The installer asks which tier you want, writes the config, updates `settings.json`, installs slash commands, and fetches the initial peak hours schedule. It prints exactly which runtime it selected before proceeding. **Restart Claude Code to activate.**
+
+### Runtime requirements
+
+| Engine | Features | Minimum version |
+|:-------|:---------|:----------------|
+| Python 3.9+ | Full features including Narrator | Recommended |
+| Python 3 (older) | All statusline features, no Narrator | 3.6+ |
+| Node.js | All statusline features, no Narrator | Any LTS |
+| Bash | Minimal statusline only | 4+ |
+
+The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rejects Microsoft Store app-execution alias stubs and probes portable install locations before falling back to system PATH.
 
 ---
 
@@ -308,9 +519,44 @@ Or edit the config directly:
 
 ---
 
+## Rolling-Window Metrics
+
+Line 4 of the Full tier computes burn rate and cache stats over a **rolling 10-minute window**, not lifetime totals. A one-off spike does not distort the reading.
+
+### Burn rate
+
+```
+spending $5.4/hr moderate (10m)
+```
+
+- The `(10m)` label makes the window explicit.
+- Severity word (`low` / `moderate` / `high`) is inline, no separate indicator needed.
+- Colors: RED if extrapolated session cost would exceed $50, YELLOW >$20, dim otherwise.
+- Sanity bounds: minimum 3-minute window span required; hard cap at $200/hr to prevent divide-by-small-interval spikes.
+
+### Cache display
+
+```
+cache reuse 96% ↑2.3k saving     ← cache is actively being read
+cache reuse 96% idle              ← nothing read from cache this tick
+```
+
+- "reuse" is intentional: cache reads cost roughly 10% of fresh input tokens, so knowing the reuse ratio tells you the actual saving.
+- `↑2.3k` = tokens read from cache in the last 5 minutes.
+- `saving` / `idle` indicates whether those reads are happening right now.
+
+### State storage
+
+Rolling samples are persisted to `~/.claude/statusline-state.json`:
+- 60-minute ring buffer of timestamped samples.
+- Atomic write (temp file + rename) so a crash cannot corrupt the file.
+- If the file is corrupt or unreadable, it is silently replaced with an empty buffer.
+
+---
+
 ## What Everything Means
 
-This statusline is dense by design — each segment answers a specific question. If you see a segment you don't recognize, run `/statusline-doctor --explain <segment>` in Claude Code.
+This statusline is dense by design &mdash; each segment answers a specific question. If you see a segment you don't recognize, run `/explain <segment>` (or the legacy path `/statusline-doctor --explain <segment>`) inside Claude Code.
 
 ### Main Status Line
 
@@ -342,7 +588,7 @@ When you see `$4.20`: cumulative session cost. Compare against your per-session 
 | `wt:name` | Running inside a git worktree |
 
 When you see `NORMAL` or `INSERT`: Vim keybindings are active in Claude Code. If this is unexpected, check your settings.json for `"vim": true`.
-When you see `wt:name`: you are working in a linked git worktree. Run `/statusline-doctor --explain worktree` for details.
+When you see `wt:name`: you are working in a linked git worktree. Run `/explain worktree` for details.
 
 ### Rate Limits (Standard + Full)
 
@@ -362,22 +608,20 @@ When you see `wt:name`: you are working in a linked git worktree. Run `/statusli
 ### Spending & Cache (Full only)
 
 ```
-│ spending $3.2/hr · ctx full ~47m · cache 82% │
+│ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k saving │
 ```
 
 | Part | Meaning |
 |:-----|:--------|
-| `spending $3.2/hr` | Current burn rate in dollars per hour |
+| `spending $5.4/hr moderate (10m)` | Burn rate over last 10 min. Severity word inline. |
 | `ctx full ~47m` | Estimated time until context window is full (red < 30m, yellow < 60m) |
-| `cache 82%` | Token cache hit ratio (green >= 80%, yellow >= 50%, red < 50%) |
+| `cache reuse 96% ↑2.3k saving` | Cache read ratio + tokens saved this window. `idle` when nothing being read. |
 
-When you see `$15.83`: cumulative session cost. Compare against your per-session budget. There's no auto-stop at any threshold.
-
-When you see `$6.3/hr (10m)`: spending rate over the last 10 minutes. The `(10m)` clarifies the window. If sustained, multiply by estimated remaining session hours to forecast total. Colors: RED if extrapolated session cost would exceed $50, YELLOW >$20, DIM otherwise.
+When you see `$6.3/hr moderate (10m)`: spending rate over the last 10 minutes. The `(10m)` clarifies the window. If sustained, multiply by estimated remaining session hours to forecast total. Colors: RED if extrapolated session cost would exceed $50, YELLOW >$20, DIM otherwise.
 
 When you see `CTX full 37m`: at the current token-generation rate (last 10 min), your context window fills in ~37 minutes. **RED <30m = compact NOW.** YELLOW <60m = plan to compact soon. Hidden above 180m.
 
-When you see `cache 96% ↑2.3k`: 96% of cache tokens this tick came from cheap reads (good). `↑2.3k` = tokens read from cache in last 5 min, representing active cost savings. Bare `cache 96%` with no arrow = cache idle this tick (no savings happening right now).
+When you see `cache reuse 96% ↑2.3k saving`: 96% of cache tokens this tick came from cheap reads (good). `↑2.3k` = tokens read from cache in last 5 min, representing active cost savings. `cache reuse 96% idle` = cache warm but no reads happening this tick.
 
 ### Timeline (Full only)
 
@@ -387,46 +631,157 @@ When you see `cache 96% ↑2.3k`: 96% of cache tokens this tick came from cheap 
 
 A visual representation of today's peak/off-peak windows with a marker showing where you are now. The legend shows the peak hours in your local timezone. On all-day-free (`schedule.mode == "normal"`) days the bar shows a solid off-peak band with the label `Off-Peak all day ✔`.
 
-## Explaining any segment
+---
 
-Run `/explain <segment>` (or `/statusline-doctor --explain <segment>`) to get a detailed in-terminal breakdown of what a segment shows, how it's computed, its color thresholds, and when it hides:
+## Explaining Any Segment
+
+Run `/explain <segment>` (or `/statusline-doctor --explain <segment>`) to get a detailed in-terminal breakdown of what a segment shows, how it's computed, its color thresholds, and when it hides.
 
 ```
 /explain burn_rate
 /explain cache_hit
 /explain context_depletion
+/explain peak_hours
+/explain rate_limits
+/explain timeline
 ```
 
-Run `/explain` with no argument to see a table of all segments.
+Run `/explain` with no argument to print a table of all 18 documented segments.
+
+The two invocation paths are equivalent:
+
+| Path | Command |
+|:-----|:--------|
+| Direct slash command | `/explain <segment>` |
+| Via doctor (legacy) | `/statusline-doctor --explain <segment>` |
 
 ---
 
-### Narrator hook (above the prompt)
+## Narrator Hook
 
-The statusline shows what's happening right now. The narrator hook tells you what it *means* and what to do — as a brief message injected above your next prompt, like a co-pilot reading the dashboard and summarizing.
+The statusline shows what's happening right now. The narrator hook tells you what it *means* and what to do &mdash; as a brief message injected above your next prompt, like a co-pilot reading the dashboard and summarizing.
 
-**Two tiers, additive:**
-1. **Rules engine** (always on): runs every hook fire, emits one advisory sentence based on your current state. Observation → meaning → action pattern. Example:
-   > Burning $18/hr — at this rate your 5-hour budget ends in ~40 min. Consider Sonnet for simple steps.
+**Two tiers, additive** (both shown together when the Haiku gate passes):
 
-2. **Haiku layer** (opt-in, default ON when `ANTHROPIC_API_KEY` is set): every 5 prompts OR 15 min (whichever first), a Haiku call adds a second line (25-35 words) that reasons over the last report plus the overall session. Example:
-   > Since last check you refactored three components while your cache warmed up from 62% to 94%. Great compounding gains. Rate limits still at 23%, peak hours ended, wide-open runway ahead.
+### Tier 1: Rules Engine (always on)
 
-**When it fires:**
-- Session start / compact / resume
-- Every user prompt submit (throttled to ≥ 5 min between emissions)
+- Runs on every hook fire.
+- Under 50ms. No API call. No cost.
+- 4-axis scoring: urgency x novelty x actionability x uniqueness.
+- 15+ templates covering: context depletion, burn rate milestones, cache efficiency, rate limit thresholds, peak vs off-peak windows, cost milestones.
+- Output: one advisory sentence matching your current state.
 
-**Tuning:**
-```bash
-export STATUSLINE_NARRATOR_ENABLED=1      # kill switch (default on)
-export STATUSLINE_NARRATOR_HAIKU=auto      # auto = on if ANTHROPIC_API_KEY present
-export STATUSLINE_NARRATOR_HAIKU_INTERVAL_MIN=15
-export STATUSLINE_NARRATOR_THROTTLE_MIN=5
+```
+Burning $18/hr — at this rate your 5-hour budget ends in ~40 min. Consider Sonnet for simple steps.
 ```
 
-**Cross-session memory**: the narrator keeps the last 3 sessions' narratives in `~/.claude/narrator-memory.json`, so on continuation it can reference "last time you were working on X".
+### Tier 2: Haiku Layer (opt-in)
 
-Run `/narrate` to invoke the narrator manually (ignores throttle).
+- Model: `claude-haiku-4-5`.
+- Fires every **5 prompts OR 15 minutes** (whichever comes first). Both thresholds are tunable.
+- Adds 25-35 words of session narrative reasoning over recent observations.
+- Cost: approximately $0.0005 per call.
+- Default: **auto-on** when `ANTHROPIC_API_KEY` is set in the environment. Not enabled otherwise.
+- Requires internet access to the Anthropic API.
+
+```
+Since last check you refactored three components while your cache warmed from 62% to 94%.
+Rate limits at 23%, peak hours ended — wide-open runway ahead.
+```
+
+**Limitation:** the Haiku layer requires Python 3.9+. If you are running Node.js-only, the rules engine still fires but no Haiku call is made.
+
+### When it fires
+
+| Event | Frequency |
+|:------|:----------|
+| Session start / compact / resume | Always, no throttle |
+| User prompt submit | Throttled: minimum 5 min between emissions |
+
+### Session memory
+
+`~/.claude/narrator-memory.json` stores:
+- Rolling observations from the last 2 hours
+- Last 8 delivered narratives (deduplication)
+- Cost milestones crossed this session
+- Prompt count
+- Summaries of the last 3 prior sessions
+
+This lets the narrator say things like "last time you were working on the auth module" when you resume.
+
+### Tuning
+
+```bash
+export STATUSLINE_NARRATOR_ENABLED=1               # set to 0 to disable entirely
+export STATUSLINE_NARRATOR_HAIKU=auto              # "auto" = on if API key present; "off" = disabled
+export STATUSLINE_NARRATOR_HAIKU_INTERVAL_MIN=15   # minimum minutes between Haiku calls
+export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # minimum minutes between any narrator message
+```
+
+Run `/narrate` to invoke the narrator manually, bypassing the throttle.
+
+---
+
+## Telemetry &mdash; Transparency
+
+This plugin sends two kinds of pings. This section documents exactly what is sent, when, and how to stop it.
+
+### What is sent
+
+#### Install ping
+
+Sent **once per machine**: either at install time (if you ran `install.sh`) or on the first engine run (retroactive, to backfire users who cloned the repo directly without running the installer).
+
+```json
+{
+  "id": "sha256(\"hostname:username\")[:16]",
+  "v": "2.1.0",
+  "engine": "python",
+  "tier": "full",
+  "os": "linux",
+  "event": "install"
+}
+```
+
+Stored as `install:<id>` in Cloudflare KV. **First-seen-only**: if the key already exists, the new ping is silently discarded. No TTL (permanent record of "this machine installed").
+
+#### Daily heartbeat
+
+Same payload with `"event": "heartbeat"`, once per calendar day per machine. TTL: 90 days (old machines that stop using the plugin age out automatically).
+
+### What is NOT collected
+
+- No file contents or conversation data.
+- No real names, email addresses, or any directly identifying information.
+- No session IDs or per-prompt telemetry.
+- No IP addresses beyond what the Cloudflare edge sees as part of normal HTTP (and Cloudflare does not log IPs to KV).
+- The `id` field is a 16-character hex prefix of `SHA-256("hostname:username")`. It cannot be reversed to reveal either value.
+
+### Endpoint
+
+```
+https://statusline-telemetry.nadavf.workers.dev/ping
+```
+
+Live stats (public, for transparency):
+
+```
+https://statusline-telemetry.nadavf.workers.dev/stats
+```
+
+### How to opt out
+
+Set `"telemetry": false` in your config file. No ping will ever be sent again from that machine.
+
+```json
+// ~/.claude/statusline-config.json
+{
+  "tier": "full",
+  "telemetry": false
+}
+```
+
+After setting this, the engine checks the flag before every ping attempt. Nothing is queued or deferred.
 
 ---
 
@@ -476,6 +831,10 @@ The plugin detects your timezone automatically and converts peak hours to your l
 | Central Europe (CET) | 2:00 PM &ndash; 8:00 PM |
 | Australia East (AEST) | 11:00 PM &ndash; 5:00 AM (+1) |
 
+### Cross-timezone edge case (fixed)
+
+Previous versions failed to detect peak when a Saturday UTC peak window spilled over into Sunday local time for users in positive-offset timezones (e.g. UTC+3). The fix uses a `peak_day_offset` value returned by `peak_hours_to_local()` so the day-of-week check accounts for the date rollover correctly.
+
 ---
 
 ## Remote Schedule &mdash; Auto-Updating
@@ -516,14 +875,77 @@ The plugin ships with 4 engine implementations. The wrapper script auto-detects 
 
 | Priority | Engine | Platform | Dependencies |
 |:--------:|:-------|:---------|:-------------|
-| 1 | **Python** | macOS, Linux, Windows | Python 3 (no pip packages) |
+| 1 | **Python** | macOS, Linux, Windows | Python 3 (no pip packages required for core; `tzdata` for full DST coverage) |
 | 2 | **Node.js** | All | Node.js |
 | 3 | **Bash** | macOS, Linux | None |
 | 4 | **PowerShell** | Windows | PowerShell 5.1+ (built-in) |
 
-Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is used directly. All engines produce identical output.
+Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is used directly. All engines produce identical statusline output. Feature parity table:
+
+| Feature | Python | Node.js | Bash | PowerShell |
+|:--------|:------:|:-------:|:----:|:----------:|
+| Full statusline | Yes | Yes | Yes | Yes |
+| Narrator hook | Yes (3.9+) | No | No | No |
+| Rolling-window metrics | Yes | Yes | Partial | Partial |
+| `/explain` command | Yes | Yes | No | No |
 
 **Confirmed for CLI / terminal.** VS Code and JetBrains extensions may also work (they share `~/.claude/settings.json`) but are not officially documented yet.
+
+---
+
+## Windows Support
+
+Windows requires a few extra accommodations that the installer and hook scripts handle automatically.
+
+### Runtime resolver
+
+`lib/resolve-runtime.sh` rejects `C:\Program Files\WindowsApps\*.exe` paths. These are Microsoft Store app-execution aliases: the files appear to exist and are named `python.exe`, but when invoked without the Store app installed they print a nag message and exit with a non-zero code instead of running Python. The resolver detects this pattern and skips to the next candidate.
+
+### Portable Python probing
+
+After rejecting Store stubs, the resolver checks these locations in order:
+
+```
+~/tools/python-*/python.exe
+~/AppData/Local/Programs/Python/Python3*/python.exe
+~/AppData/Local/Microsoft/WindowsApps/python.exe   ← rejected if Store stub
+C:/Python3*/python.exe
+```
+
+### Path conversion in hooks
+
+Hook scripts run under Git Bash, where paths use `/c/Users/...` notation. When passing paths to Python or other Windows-native tools, hooks use `cygpath -w` to convert to `C:\Users\...` so the tool can locate modules correctly.
+
+### UTF-8 enforcement
+
+Hook scripts force UTF-8 on stdout before invoking Python. Without this, on systems using the default cp1252 code page, non-ASCII characters in narrator messages (arrows, box-drawing characters) can cause UnicodeEncodeError and silently kill the narrator output.
+
+---
+
+## Testing
+
+The test suite covers the most complex and historically bug-prone parts of the plugin:
+
+```bash
+# Install dependencies
+pip install pytest tzdata
+
+# Run all tests
+python -m pytest tests/ -v
+```
+
+Current status: **81 tests passing**.
+
+Coverage areas:
+
+| Area | What's tested |
+|:-----|:-------------|
+| Peak hours | Edge cases: exact boundary minutes, overnight windows (AEST), DST transitions |
+| Cross-timezone | Saturday UTC peak spilling into Sunday UTC+3, negative-offset zones |
+| Rolling state | Ring buffer overflow, corrupt file recovery, atomic write simulation |
+| Narrator scoring | 4-axis scoring, template selection, deduplication, throttle logic |
+| Narrator memory | Rolling observations, session boundary, prior-session retention |
+| Install ping | First-seen deduplication, opt-out flag, retroactive backfill |
 
 ---
 
@@ -533,8 +955,10 @@ Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is us
 ~/.claude/cc-2x-statusline/
   statusline.sh          # Entry point (engine selector)
   statusline.ps1         # Windows entry point
+  lib/
+    resolve-runtime.sh   # Shared runtime resolver (rejects Store stubs, probes portables)
   engines/
-    python-engine.py     # Primary engine (full features)
+    python-engine.py     # Primary engine (full features + Narrator)
     node-engine.js       # Node.js engine
     bash-engine.sh       # Pure bash fallback
   commands/
@@ -542,7 +966,8 @@ Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is us
     statusline-standard.md
     statusline-full.md
     statusline-tier.md
-  skills/                # Slash command skill definitions
+  skills/                # Slash command skill definitions (explain, narrate, doctor)
+  tests/                 # 81 pytest tests
   schedule.json          # Bundled schedule (fallback)
   plugin.json            # Plugin metadata
   install.sh             # Interactive installer
@@ -550,9 +975,11 @@ Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is us
   uninstall.sh           # Clean uninstaller
 
 ~/.claude/
-  statusline-config.json    # Your config (tier, schedule URL)
-  statusline-schedule.json  # Cached remote schedule
-  settings.json             # Claude Code settings (statusLine entry)
+  statusline-config.json      # Your config (tier, schedule URL, telemetry flag)
+  statusline-schedule.json    # Cached remote schedule
+  statusline-state.json       # Rolling 60-min metrics ring buffer
+  narrator-memory.json        # Narrator session memory
+  settings.json               # Claude Code settings (statusLine entry)
 ```
 
 ---
@@ -563,7 +990,7 @@ Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, PowerShell is us
 STATUSLINE_DEBUG=1 echo '{}' | bash ~/.claude/cc-2x-statusline/statusline.sh
 ```
 
-This runs the statusline with debug output to stderr, showing config loading, schedule resolution, timezone detection, and segment rendering.
+This runs the statusline with debug output to stderr, showing config loading, schedule resolution, timezone detection, runtime selection, and segment rendering.
 
 ## Uninstall
 
@@ -571,7 +998,7 @@ This runs the statusline with debug output to stderr, showing config loading, sc
 bash ~/.claude/cc-2x-statusline/uninstall.sh
 ```
 
-Removes the plugin files, config, cached schedule, and the `statusLine` entry from `settings.json`.
+Removes the plugin files, config, cached schedule, state files, narrator memory, and the `statusLine` entry from `settings.json`.
 
 ---
 
