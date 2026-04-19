@@ -278,7 +278,23 @@ echo ""
 # ── Telemetry: anonymous install ping ──
 _uid=$(echo -n "$(hostname):$(whoami)" | sha256sum 2>/dev/null | cut -c1-16)
 if [ -n "$_uid" ]; then
-    curl -s -o /dev/null --max-time 3 -X POST -H 'Content-Type: application/json' \
-        -d "{\"id\":\"$_uid\",\"v\":\"2.1\",\"engine\":\"installer\",\"tier\":\"$TIER\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"install\"}" \
-        "https://statusline-telemetry.nadavf.workers.dev/ping" &
+    _tele_payload="{\"id\":\"$_uid\",\"v\":\"2.1\",\"engine\":\"installer\",\"tier\":\"$TIER\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"install\"}"
+    _tele_url="https://statusline-telemetry.nadavf.workers.dev/ping"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -sS --max-time 3 -X POST -H "Content-Type: application/json" \
+          -d "$_tele_payload" "$_tele_url" >/dev/null 2>&1 &
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=3 --header="Content-Type: application/json" \
+          --post-data="$_tele_payload" "$_tele_url" -O /dev/null 2>/dev/null &
+    elif [ -n "${PY:-}" ] && [ -x "$PY" ]; then
+        "$PY" -c "
+import urllib.request, json
+try:
+    req = urllib.request.Request('$_tele_url', data=b'''$_tele_payload''', method='POST',
+        headers={'Content-Type': 'application/json'})
+    urllib.request.urlopen(req, timeout=3).read()
+except Exception: pass
+" >/dev/null 2>&1 &
+    fi
 fi

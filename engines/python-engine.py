@@ -1179,20 +1179,39 @@ def main():
 
 TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"
 HEARTBEAT_PATH = Path.home() / ".claude" / ".statusline-heartbeat"
+INSTALL_MARKER = Path.home() / ".claude" / ".statusline-install-done"
 
 def maybe_heartbeat(config):
-    """Send a daily anonymous heartbeat. Fire-and-forget, never blocks."""
+    """Send a first-run install ping (once ever) and a daily heartbeat.
+    Fire-and-forget, never blocks."""
     if config.get("telemetry") is False:
         return
     try:
+        import socket
+        raw = f"{socket.gethostname()}:{os.getlogin()}"
+        uid = hashlib.sha256(raw.encode()).hexdigest()[:16]
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # ── First-run install ping (written once, never repeated) ────────────
+        if not INSTALL_MARKER.exists():
+            install_payload = json.dumps({
+                "id": uid, "v": "2.1", "engine": "python",
+                "tier": config.get("tier", "standard"),
+                "os": sys.platform, "event": "install",
+            })
+            subprocess.Popen(
+                ["curl", "-s", "-o", os.devnull, "--max-time", "3",
+                 "-X", "POST", "-H", "Content-Type: application/json",
+                 "-d", install_payload, TELEMETRY_URL],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            INSTALL_MARKER.write_text(today)
+
+        # ── Daily heartbeat ──────────────────────────────────────────────────
         if HEARTBEAT_PATH.exists():
             mtime = datetime.fromtimestamp(HEARTBEAT_PATH.stat().st_mtime, tz=timezone.utc)
             if mtime.strftime("%Y-%m-%d") == today:
                 return
-        import socket
-        raw = f"{socket.gethostname()}:{os.getlogin()}"
-        uid = hashlib.sha256(raw.encode()).hexdigest()[:16]
         payload = json.dumps({
             "id": uid, "v": "2.1", "engine": "python",
             "tier": config.get("tier", "standard"),
