@@ -1,7 +1,10 @@
 {
   "name": "claude-2x-statusline",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Modular statusline for Claude Code — peak hours tracker, model info, context %, rate limits, burn rate, cache efficiency",
+  "scripts": {
+    "test:worker": "node --test worker/worker.test.mjs"
+  },
   "bin": {
     "claude-2x-statusline": "bin.js"
   },

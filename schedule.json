@@ -25,6 +25,13 @@
     "expires": "",
     "color": "yellow"
   },
+  "release": {
+    "latest_version": "2.2.0",
+    "minimum_version": "2.1.0",
+    "command": "/statusline-update",
+    "available_text": "Update available v2.2.0 via /statusline-update",
+    "required_text": "Update required v2.2.0 via /statusline-update"
+  },
   "features": {
     "show_peak_segment": true,
     "show_rate_limits": true,

@@ -11,7 +11,7 @@ $RED="$E[31m"; $GREEN="$E[32m"; $YELLOW="$E[33m"
 $BLUE="$E[34m"; $MAGENTA="$E[35m"; $CYAN="$E[36m"
 $WHITE="$E[38;2;220;220;220m"
 $BGG="$E[38;5;255;48;5;28m"; $BGY="$E[38;5;16;48;5;220m"
-$BGR="$E[38;5;255;48;5;124m"; $BGGRAY="$E[48;5;236m"
+$BGR="$E[38;5;255;48;5;124m"; $BGGRAY="$E[48;5;236m"; $BGBLUE="$E[38;5;255;48;5;27m"
 
 # Tiers
 $TIERS = @{
@@ -29,6 +29,41 @@ if (Test-Path $configPath) {
         foreach ($p in $userCfg.PSObject.Properties) { $config[$p.Name] = $p.Value }
     } catch {}
 }
+
+function Get-LocalStatuslineVersion {
+    $packagePath = Join-Path $PSScriptRoot 'package.json'
+    if (Test-Path $packagePath) {
+        try {
+            return [string]((Get-Content $packagePath -Raw | ConvertFrom-Json).version)
+        } catch {}
+    }
+    return ''
+}
+
+function Convert-ToVersionObject {
+    param([string]$Value)
+
+    if (-not $Value) { return $null }
+
+    $core = ($Value -split '-', 2)[0]
+    try {
+        return [Version]$core
+    } catch {
+        $parts = @($core -split '\.' | ForEach-Object {
+            if ($_ -match '\d+') { $Matches[0] } else { '0' }
+        })
+        while ($parts.Count -lt 4) {
+            $parts += '0'
+        }
+        try {
+            return [Version]::new([int]$parts[0], [int]$parts[1], [int]$parts[2], [int]$parts[3])
+        } catch {
+            return $null
+        }
+    }
+}
+
+$CurrentVersion = Get-LocalStatuslineVersion
 
 # Schedule (remote with cache)
 function Load-Schedule {
@@ -154,14 +189,42 @@ $ctx = @{ isPeak=$false; gitBranch=''; usageData=$null }
 # -- Segments --
 
 function Seg_banner {
-    $b = $schedule.banner
-    if (-not $b -or -not $b.text) { return '' }
-    if ($b.expires) {
-        try { if ((Get-Date) -gt [DateTime]::Parse($b.expires)) { return '' } } catch {}
+    $badges = @()
+    $release = $schedule.release
+    if ($release -and $CurrentVersion) {
+        $latestVersion = if ($release.latest_version) { [string]$release.latest_version } else { '' }
+        $minimumVersion = if ($release.minimum_version) { [string]$release.minimum_version } else { '' }
+        $command = if ($release.command) { [string]$release.command } else { '/statusline-update' }
+        $targetVersion = if ($latestVersion) { $latestVersion } else { $minimumVersion }
+        $currentVersionObj = Convert-ToVersionObject $CurrentVersion
+        $latestVersionObj = Convert-ToVersionObject $latestVersion
+        $minimumVersionObj = Convert-ToVersionObject $minimumVersion
+
+        if ($currentVersionObj -and $minimumVersionObj -and $currentVersionObj -lt $minimumVersionObj) {
+            $text = if ($release.required_text) { [string]$release.required_text } else { "Update required v$targetVersion via $command" }
+            $badges += "${BGR} ${text} ${RST}"
+        } elseif ($currentVersionObj -and $latestVersionObj -and $currentVersionObj -lt $latestVersionObj) {
+            $text = if ($release.available_text) { [string]$release.available_text } else { "Update available v$latestVersion via $command" }
+            $badges += "${BGY} ${text} ${RST}"
+        }
     }
-    $colors = @{ yellow=$BGY; red=$BGR; green=$BGG; gray=$BGGRAY }
-    $bg = if ($colors[$b.color]) { $colors[$b.color] } else { $BGY }
-    return "${bg} $($b.text) ${RST}"
+
+    $b = $schedule.banner
+    if ($b -and $b.text) {
+        $showBanner = $true
+        if ($b.expires) {
+            try {
+                if ((Get-Date).Date -gt ([DateTime]::Parse($b.expires)).Date) { $showBanner = $false }
+            } catch {}
+        }
+        if ($showBanner) {
+            $colors = @{ yellow=$BGY; red=$BGR; green=$BGG; blue=$BGBLUE; gray=$BGGRAY }
+            $bg = if ($colors[$b.color]) { $colors[$b.color] } else { $BGY }
+            $badges += "${bg} $($b.text) ${RST}"
+        }
+    }
+
+    return ($badges -join ' ')
 }
 
 function Seg_peak_hours {
