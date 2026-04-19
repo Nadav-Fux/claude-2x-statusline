@@ -129,6 +129,10 @@ Cross-session: the last 3 sessions are retained so the narrator can open with co
 /narrate
 ```
 
+### Language support
+
+The narrator ships with full bilingual support (English + Hebrew). Language is auto-detected from your system locale (`$LC_ALL` / `$LC_MESSAGES` / `$LANG`): if the locale starts with `he`, the narrator speaks Hebrew; otherwise English. Override with `STATUSLINE_NARRATOR_LANGS`. See [2026-04-20 — Bilingual narrator](2026-04-20-bilingual-narrator.md) for the full write-up.
+
 ### Environment variables
 
 | Variable                      | Default | Effect                                  |
@@ -175,5 +179,9 @@ Claude Code תופס את הטקסט ומציג אותו בראש התגובה �
 ### `/narrate`
 
 עוקף את כל ה-throttles ומפעיל את ה-narrator מיד. שימושי כשרוצים check-in ידני.
+
+### תמיכת שפות
+
+ה-narrator תומך בעברית ואנגלית. זיהוי אוטומטי מה-locale של המערכת (`$LANG` / `$LC_ALL`): אם מתחיל ב-`he` — עברית; אחרת אנגלית. עקיפה עם `STATUSLINE_NARRATOR_LANGS`. פרטים נוספים: [2026-04-20 — Bilingual narrator](2026-04-20-bilingual-narrator.md).
 
 </div>

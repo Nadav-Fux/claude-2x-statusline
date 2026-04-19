@@ -165,6 +165,12 @@ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k savi
 
 **זיכרון בין סשנים:** `~/.claude/narrator-memory.json` &mdash; תצפיות עד 2 שעות, 8 נרטיבים אחרונים, 3 סשנים קודמים, ספירת פרומפטים, אבני דרך עלות.
 
+### שפת ה-narrator
+
+זיהוי אוטומטי: אם המערכת שלך עברית (`LANG=he_IL.UTF-8` וכו') — ה-narrator מדבר עברית. אחרת אנגלית.
+
+עקיפה ידנית: `STATUSLINE_NARRATOR_LANGS=en` / `=he` / `=en,he`.
+
 **כיוונון:**
 
 <div dir="ltr" align="left">
@@ -708,6 +714,19 @@ Rate limits at 23%, peak hours ended — wide-open runway ahead.
 - Summaries of the last 3 prior sessions
 
 This lets the narrator say things like "last time you were working on the auth module" when you resume.
+
+### Narrator language
+
+Auto-detect: if `$LANG` / `$LC_ALL` starts with `he` (Hebrew locale),
+narrator emits Hebrew. Otherwise English.
+
+Override:
+
+```bash
+export STATUSLINE_NARRATOR_LANGS=en      # English only
+export STATUSLINE_NARRATOR_LANGS=he      # Hebrew only
+export STATUSLINE_NARRATOR_LANGS=en,he   # Both (two lines per emission)
+```
 
 ### Tuning
 
