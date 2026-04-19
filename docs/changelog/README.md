@@ -8,6 +8,8 @@ All posts are **bilingual (English + Hebrew)** — English first, Hebrew below i
 
 ## 2026-04-20
 
+- [2026-04-20 — Plugin manifest + /narrator-lang slash command](2026-04-20-plugin-manifest-and-language-command.md) — Bump to 2.2.0, add `"hooks": "./hooks/"` to plugin.json so marketplace installs auto-wire narrator; new /narrator-lang command for runtime language switch.
+
 - [2026-04-20 — Bilingual narrator — Hebrew auto-detect and full translation coverage](2026-04-20-bilingual-narrator.md) — Locale auto-detect from `$LANG`/`$LC_ALL`; all 18 insight templates now carry `text_he`; three output modes (`en`, `he`, `en,he`); structural test enforces bilingual contract on new templates.
 
 ---

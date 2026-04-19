@@ -522,30 +522,67 @@ check_settings() {
 }
 
 # ── Check 2: statusLine points at THIS project (not a hijack) ───────────
+#
+# Hijack = another plugin overwrote our statusLine stanza without asking.
+# Logic:
+#   1. If it points at us (cc-2x-statusline / statusline.sh / wrapper) → ok.
+#   2. If a *known* statusline-hijacker plugin pattern → fail + offer restore.
+#   3. If our install marker exists AND statusLine now points elsewhere →
+#      definitely a hijack (we were installed, now we're not) → fail + restore.
+#   4. Otherwise (unknown command, no marker) → warn. User may have a
+#      custom statusline on purpose.
 check_hijack() {
     local cmd
     cmd=$(json_get_statusline_command "$SETTINGS" 2>/dev/null)
     [ -z "$cmd" ] && return
+
+    # 1. Known-us patterns
     case "$cmd" in
-        *token-optimizer*|*token_optimizer*)
-            add_result fail hijack \
-                "token-optimizer hijacked statusLine" \
-                "Your statusLine command points to token-optimizer, not cc-2x-statusline. Installing token-optimizer overwrites the stanza silently." \
-                1 "restore-statusline"
-            ;;
         *claude-2x-statusline*|*cc-2x-statusline*|*statusline.sh*|*statusline.ps1*|*statusline-wrapper*)
             add_result ok hijack \
                 "statusLine owned by cc-2x-statusline" \
                 "" \
                 0 ""
-            ;;
-        *)
-            add_result warn hijack \
-                "statusLine points elsewhere" \
-                "Not cc-2x-statusline, not a known plugin. Intentional?" \
-                0 ""
+            return
             ;;
     esac
+
+    # 2. Known-bad patterns. Extend this list when new hijackers are observed.
+    local hijacker_pattern=""
+    case "$cmd" in
+        *token-optimizer*|*token_optimizer*)
+            hijacker_pattern="token-optimizer"
+            ;;
+        *claude-goblin*)
+            hijacker_pattern="claude-goblin"
+            ;;
+        *ccstatusline*|*cc-statusline*)
+            hijacker_pattern="ccstatusline (another statusline plugin)"
+            ;;
+    esac
+    if [ -n "$hijacker_pattern" ]; then
+        add_result fail hijack \
+            "$hijacker_pattern hijacked statusLine" \
+            "Your statusLine command points to $hijacker_pattern, not cc-2x-statusline. Installing another statusline plugin overwrites the stanza silently. Run with --fix to restore." \
+            1 "restore-statusline"
+        return
+    fi
+
+    # 3. Marker-based detection: we were installed but are no longer wired.
+    local install_marker="$HOME/.claude/cc-2x-statusline"
+    if [ -d "$install_marker" ]; then
+        add_result fail hijack \
+            "Unknown plugin hijacked statusLine" \
+            "cc-2x-statusline is installed at ~/.claude/cc-2x-statusline but settings.json points elsewhere: $cmd. Something else overwrote the stanza. Run with --fix to restore." \
+            1 "restore-statusline"
+        return
+    fi
+
+    # 4. Otherwise — unknown command, no install marker → possibly intentional
+    add_result warn hijack \
+        "statusLine points elsewhere" \
+        "Points to: $cmd. Not cc-2x-statusline, no known-hijacker signature, no install marker. If this is a custom statusline on purpose — fine. Otherwise, run with --fix to reclaim." \
+        0 ""
 }
 
 # ── Check 3: Windows PATH-inline syntax (cmd.exe can't parse) ───────────
