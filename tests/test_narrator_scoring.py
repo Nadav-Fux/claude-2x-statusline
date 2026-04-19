@@ -6,10 +6,15 @@ Tests cover:
 - Actionability: "Consider Sonnet" rates higher than "Cache is saving"
 - Cost milestone fires once per threshold
 - Off-peak + low rate limit → "good moment for refactors"
+- Session-management templates (long session, high ctx + session, very high ctx,
+  many prompts, pivot suggestion, subagent suggestion)
+- Bilingual output (STATUSLINE_NARRATOR_LANGS=en,he)
 """
 
+import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -366,3 +371,200 @@ class TestScoreFormula:
         # off_peak_wide_open fires for default obs (is_peak=False, both rate limits = 0 < 50)
         assert isinstance(results, list)
         assert len(results) <= 2
+
+
+# ---------------------------------------------------------------------------
+# 7. Session-management templates
+# ---------------------------------------------------------------------------
+
+class TestSessionManagementTemplates:
+
+    def test_long_session_advice_fires_after_2h(self):
+        """session_duration_min=130 → long_session template fires."""
+        mem = _empty_memory()
+        obs = _obs(session_duration_min=130.0)
+        insights = _build_insights(obs, mem)
+        long_sess = [i for i in insights if i.template_key == "long_session"]
+        assert long_sess, f"Expected long_session insight, got: {[i.template_key for i in insights]}"
+        assert "2h" in long_sess[0].text or "h " in long_sess[0].text
+        assert long_sess[0].actionability == 8
+
+    def test_long_session_does_not_fire_under_2h(self):
+        """session_duration_min=90 → long_session should NOT fire."""
+        mem = _empty_memory()
+        obs = _obs(session_duration_min=90.0)
+        insights = _build_insights(obs, mem)
+        long_sess = [i for i in insights if i.template_key == "long_session"]
+        assert not long_sess
+
+    def test_high_context_compact_directive_fires(self):
+        """ctx_pct=75, session_duration_min=80 → ctx_high_long_session fires."""
+        mem = _empty_memory()
+        obs = _obs(ctx_pct=75.0, session_duration_min=80.0)
+        insights = _build_insights(obs, mem)
+        high_ctx = [i for i in insights if i.template_key == "ctx_high_long_session"]
+        assert high_ctx, f"Expected ctx_high_long_session insight, got: {[i.template_key for i in insights]}"
+        assert "compact" in high_ctx[0].text.lower()
+        assert high_ctx[0].actionability == 10
+        assert high_ctx[0].urgency == 6
+
+    def test_high_context_compact_directive_does_not_fire_short_session(self):
+        """ctx_pct=75 but session_duration_min=30 → ctx_high_long_session should NOT fire."""
+        mem = _empty_memory()
+        obs = _obs(ctx_pct=75.0, session_duration_min=30.0)
+        insights = _build_insights(obs, mem)
+        high_ctx = [i for i in insights if i.template_key == "ctx_high_long_session"]
+        assert not high_ctx
+
+    def test_very_high_context_fires_at_95(self):
+        """ctx_pct=95 → ctx_very_high fires with urgency=9."""
+        mem = _empty_memory()
+        obs = _obs(ctx_pct=95.0)
+        insights = _build_insights(obs, mem)
+        very_high = [i for i in insights if i.template_key == "ctx_very_high"]
+        assert very_high, f"Expected ctx_very_high insight, got: {[i.template_key for i in insights]}"
+        assert very_high[0].urgency == 9
+        assert very_high[0].actionability == 10
+        assert "auto-compact" in very_high[0].text.lower() or "/compact" in very_high[0].text
+
+    def test_many_prompts_fires_above_30(self):
+        """prompt_count=35 → many_prompts template fires."""
+        mem = _empty_memory()
+        obs = _obs(prompt_count=35)
+        insights = _build_insights(obs, mem)
+        many = [i for i in insights if i.template_key == "many_prompts"]
+        assert many, f"Expected many_prompts insight, got: {[i.template_key for i in insights]}"
+        assert "35" in many[0].text
+        assert many[0].urgency == 3
+        assert many[0].actionability == 8
+
+    def test_many_prompts_does_not_fire_under_30(self):
+        """prompt_count=25 → many_prompts should NOT fire."""
+        mem = _empty_memory()
+        obs = _obs(prompt_count=25)
+        insights = _build_insights(obs, mem)
+        many = [i for i in insights if i.template_key == "many_prompts"]
+        assert not many
+
+    def test_pivot_suggestion_fires_when_deep_no_milestone(self):
+        """ctx_pct=60, prompt_count=25, no recent milestone → pivot_suggestion fires."""
+        mem = _empty_memory()
+        # No active milestone crossing: cost_usd < any milestone, milestones_hit = []
+        obs = _obs(ctx_pct=60.0, prompt_count=25, cost_usd=0.0, cost_milestones_hit=[])
+        insights = _build_insights(obs, mem)
+        pivot = [i for i in insights if i.template_key == "pivot_suggestion"]
+        assert pivot, f"Expected pivot_suggestion insight, got: {[i.template_key for i in insights]}"
+        assert "rewind" in pivot[0].text.lower()
+        assert pivot[0].urgency == 5
+
+    def test_pivot_suggestion_suppressed_when_milestone_fresh(self):
+        """pivot_suggestion should NOT fire when a fresh milestone is being crossed."""
+        mem = _empty_memory()
+        # cost_usd just crossed $5 and not yet recorded in milestones_hit
+        obs = _obs(ctx_pct=60.0, prompt_count=25, cost_usd=6.0, cost_milestones_hit=[])
+        insights = _build_insights(obs, mem)
+        pivot = [i for i in insights if i.template_key == "pivot_suggestion"]
+        assert not pivot
+
+    def test_subagent_suggestion_fires_heavy_session(self):
+        """session_duration_min=20, burn_10m=9 → subagent_suggestion fires."""
+        mem = _empty_memory()
+        obs = _obs(session_duration_min=20.0, burn_10m=9.0)
+        insights = _build_insights(obs, mem)
+        subagent = [i for i in insights if i.template_key == "subagent_suggestion"]
+        assert subagent, f"Expected subagent_suggestion insight, got: {[i.template_key for i in insights]}"
+        assert "subagent" in subagent[0].text.lower()
+        assert subagent[0].urgency == 2
+
+    def test_subagent_suggestion_does_not_fire_light_session(self):
+        """burn_10m=5 → subagent_suggestion should NOT fire (threshold is > 8)."""
+        mem = _empty_memory()
+        obs = _obs(session_duration_min=20.0, burn_10m=5.0)
+        insights = _build_insights(obs, mem)
+        subagent = [i for i in insights if i.template_key == "subagent_suggestion"]
+        assert not subagent
+
+
+# ---------------------------------------------------------------------------
+# 8. Bilingual output
+# ---------------------------------------------------------------------------
+
+class TestBilingualOutput:
+
+    def test_bilingual_output_has_both_languages(self):
+        """STATUSLINE_NARRATOR_LANGS=en,he → output contains English and Hebrew text."""
+        import time
+        import narrator.memory as _mem
+
+        # Build a memory dict that will trigger at least one session-management template
+        data = {
+            "current": {
+                "session_id": "test-bilingual",
+                "started_at": time.time() - 130 * 60,  # 130 min ago → long_session fires
+                "last_emit_at": 0.0,
+                "last_haiku_at": 0.0,
+                "rolling_observations": [],
+                "delivered_narratives": [],
+                "cost_milestones_hit": [],
+                "prompt_count": 1,
+            },
+            "prior_sessions": [],
+        }
+
+        obs = _obs(session_duration_min=130.0)
+
+        from narrator.scoring import pick as _pick
+        insights = _pick(obs, data)
+        assert insights, "Expected at least one insight for bilingual test"
+
+        # Build lines as engine.py would, with both langs
+        en_parts = [i.text for i in insights]
+        he_parts = [i.text_he for i in insights if i.text_he]
+
+        assert en_parts, "Expected English parts"
+        assert he_parts, "Expected Hebrew parts — new templates must have text_he"
+
+        en_line = " · ".join(en_parts)
+        he_line = " · ".join(he_parts)
+
+        # Verify English keyword present
+        assert any(kw in en_line for kw in ("Context", "session", "prompts", "Long")), \
+            f"Expected English keyword in: {en_line}"
+        # Verify Hebrew content present (at least one Hebrew character)
+        assert any("\u05d0" <= c <= "\u05ea" for c in he_line), \
+            f"Expected Hebrew characters in: {he_line}"
+
+    def test_insight_has_text_he_field(self):
+        """New session-management insights carry a non-empty text_he."""
+        mem = _empty_memory()
+        obs = _obs(session_duration_min=130.0)
+        insights = _build_insights(obs, mem)
+        long_sess = [i for i in insights if i.template_key == "long_session"]
+        assert long_sess
+        assert long_sess[0].text_he, "long_session insight must have a Hebrew text"
+        # Hebrew must contain at least one Hebrew character
+        assert any("\u05d0" <= c <= "\u05ea" for c in long_sess[0].text_he)
+
+    def test_engine_languages_default_en(self):
+        """Without STATUSLINE_NARRATOR_LANGS set, _languages() returns ['en']."""
+        from narrator.engine import _languages
+        with patch.dict(os.environ, {}, clear=False):
+            env = os.environ.copy()
+            env.pop("STATUSLINE_NARRATOR_LANGS", None)
+            with patch.dict(os.environ, env, clear=True):
+                result = _languages()
+        assert result == ["en"]
+
+    def test_engine_languages_parses_en_he(self):
+        """STATUSLINE_NARRATOR_LANGS=en,he → ['en', 'he']."""
+        from narrator.engine import _languages
+        with patch.dict(os.environ, {"STATUSLINE_NARRATOR_LANGS": "en,he"}):
+            result = _languages()
+        assert result == ["en", "he"]
+
+    def test_engine_languages_rejects_unknown(self):
+        """STATUSLINE_NARRATOR_LANGS=en,fr → only 'en' kept."""
+        from narrator.engine import _languages
+        with patch.dict(os.environ, {"STATUSLINE_NARRATOR_LANGS": "en,fr"}):
+            result = _languages()
+        assert result == ["en"]
