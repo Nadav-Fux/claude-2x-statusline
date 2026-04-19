@@ -39,6 +39,11 @@ def _env_bool(name: str, default: bool) -> bool:
     return val.strip() not in ("0", "false", "False", "no", "No")
 
 
+def _languages() -> list:
+    raw = os.environ.get("STATUSLINE_NARRATOR_LANGS", "en")
+    return [s.strip() for s in raw.split(",") if s.strip() in ("en", "he")]
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -116,7 +121,12 @@ def _run_inner(mode: str) -> Optional[str]:
         _mem.save(data)
         return None
 
+    langs = _languages()
     rules_text = " · ".join(i.text for i in insights)
+
+    # Build Hebrew line if requested
+    he_parts = [i.text_he for i in insights if i.text_he]
+    rules_text_he = " · ".join(he_parts) if he_parts else ""
 
     # ── 7. Haiku gate ─────────────────────────────────────────────────────────
     haiku_text: Optional[str] = None
@@ -129,10 +139,20 @@ def _run_inner(mode: str) -> Optional[str]:
             haiku_text = None
 
     # ── 8. Build output ───────────────────────────────────────────────────────
+    # Assemble narrator line(s) respecting language selection
+    lines: list = []
+    if "en" in langs:
+        lines.append(rules_text)
+    if "he" in langs and rules_text_he:
+        lines.append(rules_text_he)
+    # If only "he" selected but no Hebrew text available, fall back to English
+    if not lines:
+        lines.append(rules_text)
+
+    combined = "\n".join(lines)
+
     if haiku_text:
-        combined = f"{rules_text}\n{haiku_text}"
-    else:
-        combined = rules_text
+        combined = f"{combined}\n{haiku_text}"
 
     directive = (
         "⟨ narrator ⟩ Surface this line(s) briefly at the start of your next "

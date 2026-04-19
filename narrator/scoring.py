@@ -7,7 +7,7 @@ The pick() function returns up to 2 Insight objects, sorted by weighted score.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,6 +26,7 @@ class Insight:
     actionability: int = 5   # 10=strong action, 5=info+suggestion, 2=pure info
     uniqueness: int = 10     # 10=novel fact, 5=adds meaning, 0=restatement
     template_key: str = ""   # used for novelty dedup
+    text_he: str = ""        # Hebrew translation (optional)
 
     @property
     def score(self) -> int:
@@ -249,6 +250,137 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             novelty=_novelty(key, memory),
             actionability=7,
             uniqueness=10,
+            template_key=key,
+        ))
+
+    # ── Session management templates ──────────────────────────────────────────
+
+    # ── 1. Long session (> 2h) ────────────────────────────────────────────────
+    if obs.session_duration_min > 120:
+        dur_h = int(obs.session_duration_min // 60)
+        dur_m = int(obs.session_duration_min % 60)
+        key = "long_session"
+        results.append(Insight(
+            text=(
+                f"Long session ({dur_h}h {dur_m}m) — context rot starts compounding. "
+                f"Consider /clear for a fresh start if you've moved past the original task."
+            ),
+            text_he=(
+                f"סשן ארוך ({dur_h} שעות {dur_m} דקות) — "
+                f"הקשב של המודל מתפזר על יותר מדי דברים ישנים. "
+                f"שקול /clear אם עברת לנושא חדש ממה שהתחלת."
+            ),
+            urgency=4,
+            novelty=_novelty(key, memory),
+            actionability=8,
+            uniqueness=10,
+            template_key=key,
+        ))
+
+    # ── 2. High context + long session ───────────────────────────────────────
+    if obs.ctx_pct > 70 and obs.session_duration_min > 60:
+        key = "ctx_high_long_session"
+        results.append(Insight(
+            text=(
+                f"Context {obs.ctx_pct:.0f}% full + {obs.session_duration_min:.0f} min of session — "
+                f"noise accumulating. Try /compact with a directive ('keep the migration plan, "
+                f"drop the debugging'), not plain auto-compact."
+            ),
+            text_he=(
+                f"Context ב-{obs.ctx_pct:.0f}% ו-{obs.session_duration_min:.0f} דקות של סשן — "
+                f"רעש מצטבר. עדיף /compact עם הנחיה ('תשמור את תכנית המיגרציה, תוריד את ה-debug') "
+                f"במקום auto-compact."
+            ),
+            urgency=6,
+            novelty=_novelty(key, memory),
+            actionability=10,
+            uniqueness=10,
+            template_key=key,
+        ))
+
+    # ── 3. Very high context (> 90 %) ────────────────────────────────────────
+    if obs.ctx_pct > 90:
+        key = "ctx_very_high"
+        results.append(Insight(
+            text=(
+                f"Context nearly full ({obs.ctx_pct:.0f}%). "
+                f"Auto-compact will probably drop what's currently relevant — "
+                f"it summarizes the main thread, not the latest pivot. "
+                f"Manual /compact with 'focus on current task' is safer."
+            ),
+            text_he=(
+                f"Context כמעט מלא ({obs.ctx_pct:.0f}%). "
+                f"Auto-compact יכול לאבד את מה שחשוב עכשיו — "
+                f"הוא מסכם לפי הקו המרכזי, לא לפי הכיוון האחרון. "
+                f"עדיף /compact ידני עם 'תתמקד במשימה הנוכחית'."
+            ),
+            urgency=9,
+            novelty=_novelty(key, memory),
+            actionability=10,
+            uniqueness=10,
+            template_key=key,
+        ))
+
+    # ── 4. Many prompts in session (> 30) ────────────────────────────────────
+    if obs.prompt_count > 30:
+        key = "many_prompts"
+        results.append(Insight(
+            text=(
+                f"{obs.prompt_count} prompts in this session. "
+                f"If you're shifting to a new task, a fresh session is usually faster than "
+                f"compacting — same advice Anthropic gives for 1M context."
+            ),
+            text_he=(
+                f"{obs.prompt_count} פרומפטים בסשן הזה. "
+                f"אם אתה עובר למשימה חדשה, סשן חדש בדרך כלל מהיר יותר מcompact — "
+                f"אותה ההמלצה של Anthropic ל-1M context."
+            ),
+            urgency=3,
+            novelty=_novelty(key, memory),
+            actionability=8,
+            uniqueness=8,
+            template_key=key,
+        ))
+
+    # ── 5. Pivot suggestion (deep in session, no recent milestone) ────────────
+    milestone = _next_milestone(obs.cost_usd)
+    recent_milestone = milestone is not None and milestone not in obs.cost_milestones_hit
+    if obs.ctx_pct > 50 and obs.prompt_count > 20 and not recent_milestone:
+        key = "pivot_suggestion"
+        results.append(Insight(
+            text=(
+                f"Deep in this session ({obs.ctx_pct:.0f}% context, {obs.prompt_count} prompts). "
+                f"If this is turning into a new direction, consider rewind + fresh prompt "
+                f"rather than pushing forward with all the prior dead-ends in context."
+            ),
+            text_he=(
+                f"עמוק בתוך הסשן ({obs.ctx_pct:.0f}% context, {obs.prompt_count} פרומפטים). "
+                f"אם זה נהיה כיוון חדש — עדיף rewind והמשך נקי, "
+                f"במקום לגרור אחריך את כל הניסיונות שכבר לא רלוונטיים."
+            ),
+            urgency=5,
+            novelty=_novelty(key, memory),
+            actionability=7,
+            uniqueness=9,
+            template_key=key,
+        ))
+
+    # ── 6. Subagent suggestion (heavy work, early session) ───────────────────
+    if obs.session_duration_min > 15 and obs.burn_10m is not None and obs.burn_10m > 8:
+        key = "subagent_suggestion"
+        results.append(Insight(
+            text=(
+                "Heavy work? Subagents keep the main session clean — "
+                "spawn one for anything that generates lots of intermediate output you won't need back."
+            ),
+            text_he=(
+                "עבודה כבדה? Subagents שומרים את הסשן הראשי נקי — "
+                "שלח סוכן נפרד לכל משימה שמייצרת הרבה פלט ביניים שלא תצטרך בחזרה."
+            ),
+            urgency=2,
+            novelty=_novelty(key, memory),
+            actionability=6,
+            uniqueness=7,
             template_key=key,
         ))
 
