@@ -4,11 +4,11 @@
 
 # claude-2x-statusline
 
-### v2.1 &mdash; Modular Statusline for Claude Code
+### v2.2 &mdash; Modular Statusline for Claude Code
 
 Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash; all live, all auto-updating.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)](#installation--30-seconds)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#engines-auto-detected)
 [![Works in](https://img.shields.io/badge/Works_in-CLI%20%7C%20Terminal-blue)](#)
@@ -46,6 +46,16 @@ Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash;
 רואים במבט אחד: האם עכשיו שעות עומס, כמה context נשאר, מה ה-rate limit, כמה עולה הסשן, ומה מצב ה-git.
 
 **הקילר-פיצ'ר:** שעות העומס מתעדכנות אוטומטית מ-GitHub &mdash; אם Anthropic ישנו את המדיניות, אתה מקבל את העדכון בלי לגעת בתוסף.
+
+### רישיון ושימוש מסחרי
+
+הקוד בריפו הזה זמין תחת `PolyForm Noncommercial 1.0.0`.
+
+מותר להשתמש, לשנות ולהפיץ אותו למטרות לא־מסחריות, בכפוף לתנאי הרישיון.
+
+שימוש מסחרי, שילוב במוצר או שירות בתשלום, הפצה בתשלום, או פריסה פנימית בארגון מסחרי דורשים אישור כתוב נפרד מ-Nadav Fux.
+
+`Copyright (c) 2026 Nadav Fux.` אלא אם צוין אחרת עבור חומר צד שלישי. זהו רישיון source-available ולא רישיון open-source מאושר OSI, משום ששימוש מסחרי מוגבל.
 
 ### 3 רמות תצוגה
 
@@ -427,6 +437,16 @@ npm run test:worker
 A modular statusline plugin for Claude Code that shows a **live dashboard** at the bottom of your terminal. At a glance you see: peak hours status, model info, context usage, rate limits, session cost, burn rate, cache efficiency, and git status.
 
 **The killer feature:** Peak hours schedule auto-updates from GitHub. When Anthropic changes their policy, the maintainer updates one JSON file and every user gets the new schedule automatically &mdash; no `git pull`, no reinstall.
+
+### License and Commercial Use
+
+This repository is available under `PolyForm Noncommercial 1.0.0`.
+
+Noncommercial use, modification, and redistribution are allowed, subject to the license terms.
+
+Commercial use, paid distribution, inclusion in a paid product or service, or internal deployment inside a commercial organization require separate written permission from Nadav Fux.
+
+`Copyright (c) 2026 Nadav Fux.` Unless noted otherwise for third-party material, this repository is published as source-available rather than an OSI-approved open-source project, because commercial use is restricted.
 
 ---
 
@@ -1128,6 +1148,6 @@ cp ~/.claude/cc-2x-statusline/commands/statusline-*.md ~/.claude/commands/
 
 <div align="center">
 
-**[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; [MIT License](LICENSE) &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
+**[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; [PolyForm Noncommercial 1.0.0](LICENSE) &nbsp;&bull;&nbsp; [Copyright](COPYRIGHT.md) &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
 
 </div>
