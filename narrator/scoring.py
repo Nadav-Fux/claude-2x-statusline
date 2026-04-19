@@ -83,6 +83,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "ctx_critical"
         results.append(Insight(
             text=f"Context fills in ~{n}m — compact now or history gets truncated.",
+            text_he=f"ה-context מתמלא תוך ~{n} דקות — /compact עכשיו, אחרת ההיסטוריה תיחתך.",
             urgency=10,
             novelty=_novelty(key, memory),
             actionability=10,
@@ -97,6 +98,8 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         results.append(Insight(
             text=f"Context at ~{ctx:.0f}% with {n}m until full. "
                  f"Finish current thread before starting new work.",
+            text_he=f"Context ב-~{ctx:.0f}% — {n} דקות עד שהוא מתמלא. "
+                    f"סיים את הנושא הנוכחי לפני שמתחילים משהו חדש.",
             urgency=7,
             novelty=_novelty(key, memory),
             actionability=7,
@@ -109,6 +112,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "ctx_80_headroom"
         results.append(Insight(
             text=f"Context at {ctx:.0f}% — headroom shrinking, plan a natural break soon.",
+            text_he=f"Context ב-{ctx:.0f}% — המרווח מצטמצם, תתכנן עצירה טבעית בקרוב.",
             urgency=7,
             novelty=_novelty(key, memory),
             actionability=7,
@@ -130,6 +134,8 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         results.append(Insight(
             text=f"Burning ${rate_display:.1f}/hr — at this rate your 5-hour budget ends in "
                  f"~{mins_left}m. Consider Sonnet for simple steps.",
+            text_he=f"שורף ${rate_display:.1f}/hr — בקצב הזה תגמור את budget 5 השעות בעוד ~{mins_left} דקות. "
+                    f"שקול Sonnet לצעדים פשוטים.",
             urgency=10,
             novelty=_novelty(key, memory),
             actionability=10,
@@ -143,6 +149,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         label = "(10m)" if burn_10m is not None else "(session)"
         results.append(Insight(
             text=f"Spending ${effective_burn:.1f}/hr {label} — steady pace for complex work. Budget OK.",
+            text_he=f"מוציא ${effective_burn:.1f}/hr {label} — קצב יציב לעבודה מורכבת. Budget בסדר.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=5,
@@ -155,6 +162,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "burn_low"
         results.append(Insight(
             text=f"Spending ${effective_burn:.1f}/hr — cheap session, cache doing its job.",
+            text_he=f"מוציא ${effective_burn:.1f}/hr — סשן זול, ה-cache עושה את שלו.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=2,
@@ -168,6 +176,8 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         results.append(Insight(
             text=f"Cache hit ratio is {obs.cache_pct:.0f}% — most tokens are being created fresh. "
                  f"If looping on same files they should warm up shortly.",
+            text_he=f"אחוז ה-cache hit הוא {obs.cache_pct:.0f}% — רוב הטוקנים נוצרים מחדש. "
+                    f"אם חוזרים על אותם קבצים, ה-cache יתחמם בקרוב.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=5,
@@ -185,6 +195,8 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         results.append(Insight(
             text=f"Cache saving ~{delta_k:.0f}k tokens / 5 min — "
                  f"keeping effective cost ~{savings_pct:.0f}% below raw.",
+            text_he=f"Cache חוסך ~{delta_k:.0f}k טוקנים ב-5 דקות — "
+                    f"העלות האפקטיבית נמוכה ב-~{savings_pct:.0f}% ממה שהייתה בלי cache.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=5,
@@ -209,6 +221,8 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             results.append(Insight(
                 text=f"You've crossed ${milestone:.0f} — at current rate, extrapolates to "
                      f"~${projected:.0f} by 5h mark. Worth it?",
+                text_he=f"חצית את ה-${milestone:.0f} — בקצב הנוכחי זה מתורגם ל-~${projected:.0f} "
+                        f"עד סוף 5 שעות. שווה את זה?",
                 urgency=7,
                 novelty=_novelty(key, memory),
                 actionability=5,
@@ -222,6 +236,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "rate_limit_high"
         results.append(Insight(
             text=f"Rate limit at {max_rl:.0f}% — close to cap. Plan break before compact.",
+            text_he=f"ה-rate limit הגיע ל-{max_rl:.0f}% — קרוב לתקרה. תכנן הפסקה לפני /compact.",
             urgency=10,
             novelty=_novelty(key, memory),
             actionability=10,
@@ -234,6 +249,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "peak_rate_ok"
         results.append(Insight(
             text=f"Peak hours — rate limits drain faster. Budget: {max_rl:.0f}% used.",
+            text_he=f"שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: {max_rl:.0f}% בשימוש.",
             urgency=7,
             novelty=_novelty(key, memory),
             actionability=5,
@@ -246,6 +262,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "off_peak_wide_open"
         results.append(Insight(
             text=f"Off-peak with wide-open limits — good moment for heavy refactors.",
+            text_he="מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=7,

@@ -568,3 +568,113 @@ class TestBilingualOutput:
         with patch.dict(os.environ, {"STATUSLINE_NARRATOR_LANGS": "en,fr"}):
             result = _languages()
         assert result == ["en"]
+
+
+# ---------------------------------------------------------------------------
+# 9. Locale-detection tests
+# ---------------------------------------------------------------------------
+
+class TestLocaleDetection:
+
+    def test_locale_hebrew_sets_default_he(self):
+        """LANG=he_IL.UTF-8, no STATUSLINE_NARRATOR_LANGS → _languages() == ['he']."""
+        from narrator.engine import _languages
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("STATUSLINE_NARRATOR_LANGS", "LC_ALL", "LC_MESSAGES", "LANG")}
+        env["LANG"] = "he_IL.UTF-8"
+        with patch.dict(os.environ, env, clear=True):
+            result = _languages()
+        assert result == ["he"], f"Expected ['he'], got {result}"
+
+    def test_locale_english_sets_default_en(self):
+        """LANG=en_US.UTF-8, no override → _languages() == ['en']."""
+        from narrator.engine import _languages
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("STATUSLINE_NARRATOR_LANGS", "LC_ALL", "LC_MESSAGES", "LANG")}
+        env["LANG"] = "en_US.UTF-8"
+        with patch.dict(os.environ, env, clear=True):
+            result = _languages()
+        assert result == ["en"], f"Expected ['en'], got {result}"
+
+    def test_env_override_wins_over_locale(self):
+        """LANG=he_IL AND STATUSLINE_NARRATOR_LANGS=en → explicit override wins → ['en']."""
+        from narrator.engine import _languages
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("STATUSLINE_NARRATOR_LANGS", "LC_ALL", "LC_MESSAGES", "LANG")}
+        env["LANG"] = "he_IL"
+        env["STATUSLINE_NARRATOR_LANGS"] = "en"
+        with patch.dict(os.environ, env, clear=True):
+            result = _languages()
+        assert result == ["en"], f"Expected ['en'], got {result}"
+
+    def test_lc_all_takes_priority_over_lang(self):
+        """LC_ALL=he wins over LANG=en."""
+        from narrator.engine import _languages
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("STATUSLINE_NARRATOR_LANGS", "LC_ALL", "LC_MESSAGES", "LANG")}
+        env["LC_ALL"] = "he_IL.UTF-8"
+        env["LANG"] = "en_US.UTF-8"
+        with patch.dict(os.environ, env, clear=True):
+            result = _languages()
+        assert result == ["he"], f"Expected ['he'], got {result}"
+
+
+# ---------------------------------------------------------------------------
+# 10. Structural: every template that can fire has text_he
+# ---------------------------------------------------------------------------
+
+class TestEveryTemplateHasHebrew:
+
+    def _universal_obs(self) -> "Observation":
+        """Build an Observation that triggers all template conditions simultaneously."""
+        return _obs(
+            ctx_pct=85.0,
+            ctx_mins_left=20.0,          # < 30 → ctx_critical
+            ctx_window_size=200000,
+            total_input_tokens=170000,
+            burn_10m=12.0,               # >= 10 → burn_high
+            burn_session=12.0,
+            cache_pct=30.0,              # < 50 → cache_low
+            cache_delta_5m=2000,         # > 500 → cache_active
+            cache_read_tokens=30000,
+            is_peak=True,
+            rate_limit_5h_pct=85.0,      # > 80 → rate_limit_high
+            rate_limit_7d_pct=20.0,
+            session_duration_min=130.0,  # > 120 → long_session; > 60 → ctx_high_long_session
+            cost_usd=6.0,                # crosses $5 milestone
+            cost_milestones_hit=[],
+            prompt_count=35,             # > 30 → many_prompts
+        )
+
+    def test_every_template_has_hebrew(self):
+        """All insights that _build_insights() can return must have a non-empty text_he."""
+        mem = _empty_memory()
+        obs = self._universal_obs()
+        insights = _build_insights(obs, mem)
+        assert insights, "Expected at least one insight from universal observation"
+
+        missing = [
+            (i.template_key, i.text[:60])
+            for i in insights
+            if not i.text_he
+        ]
+        assert not missing, (
+            "The following templates are missing text_he:\n"
+            + "\n".join(f"  key={k!r}  text={t!r}" for k, t in missing)
+        )
+
+    def test_hebrew_contains_hebrew_characters(self):
+        """Every text_he that is set must contain at least one Hebrew character."""
+        mem = _empty_memory()
+        obs = self._universal_obs()
+        insights = _build_insights(obs, mem)
+
+        bad = []
+        for i in insights:
+            if i.text_he and not any("\u05d0" <= c <= "\u05ea" for c in i.text_he):
+                bad.append((i.template_key, i.text_he[:60]))
+
+        assert not bad, (
+            "text_he fields that lack Hebrew characters:\n"
+            + "\n".join(f"  key={k!r}  text_he={t!r}" for k, t in bad)
+        )

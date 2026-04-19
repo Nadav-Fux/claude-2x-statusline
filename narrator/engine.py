@@ -40,8 +40,25 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _languages() -> list:
-    raw = os.environ.get("STATUSLINE_NARRATOR_LANGS", "en")
-    return [s.strip() for s in raw.split(",") if s.strip() in ("en", "he")]
+    """Pick narrator output languages.
+
+    Priority:
+      1. STATUSLINE_NARRATOR_LANGS env var (explicit override, wins always).
+      2. LC_ALL / LC_MESSAGES / LANG env vars — if first letters match 'he',
+         default to Hebrew.
+      3. Fallback: English.
+    """
+    raw = os.environ.get("STATUSLINE_NARRATOR_LANGS")
+    if raw:
+        langs = [s.strip() for s in raw.split(",") if s.strip() in ("en", "he")]
+        return langs or ["en"]
+
+    # Locale sniff — check the usual POSIX env vars in priority order.
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        val = os.environ.get(var, "")
+        if val.lower().startswith("he"):
+            return ["he"]
+    return ["en"]
 
 
 def _env_int(name: str, default: int) -> int:

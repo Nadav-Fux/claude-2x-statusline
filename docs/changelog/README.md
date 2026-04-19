@@ -6,6 +6,12 @@ All posts are **bilingual (English + Hebrew)** — English first, Hebrew below i
 
 ---
 
+## 2026-04-20
+
+- [2026-04-20 — Bilingual narrator — Hebrew auto-detect and full translation coverage](2026-04-20-bilingual-narrator.md) — Locale auto-detect from `$LANG`/`$LC_ALL`; all 18 insight templates now carry `text_he`; three output modes (`en`, `he`, `en,he`); structural test enforces bilingual contract on new templates.
+
+---
+
 ## 2026-04-19
 
 - [2026-04-19 — Rolling-window metrics — spending & cache, not lifetime averages](2026-04-19-rolling-window-metrics.md) — Burn rate now uses a 10-minute rolling window with severity labels; cache segment shows reuse %, delta, and state word; spike guards prevent $800/hr absurdities.
