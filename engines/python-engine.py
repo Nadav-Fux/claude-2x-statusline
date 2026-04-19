@@ -779,15 +779,21 @@ def seg_cache_hit(ctx):
         return ""  # Not enough cache data to be meaningful
     hit_pct = cache_read * 100 // total_cache if total_cache > 0 else 0
 
+    # Cache "savings %": reused tokens cost ~10% of fresh input, so
+    # effective cost reduction ≈ hit_ratio × 0.90. Clamp to 0-90.
+    savings_pct = max(0, min(90, int(hit_pct * 0.9)))
+
     delta = _rs_cache_delta(5)
     if delta is not None and delta > 0:
         delta_str = f"{delta / 1000:.1f}k" if delta >= 1000 else str(delta)
         pct_color = GREEN if delta > 500 else DIM
-        # "reuse" clarifies what cache does: reused tokens cost ~10% of fresh
-        # input, so a high % = you're paying less. "saving" = right now.
-        return f"{DIM}cache reuse{RST} {pct_color}{hit_pct}% \u2191{delta_str} saving{RST}"
+        # Active: ratio + delta + "saving X% cost" so user sees the money impact
+        return (f"{DIM}cache reuse{RST} {pct_color}{hit_pct}% "
+                f"\u2191{delta_str} saving ~{savings_pct}% cost{RST}")
 
-    return f"{DIM}cache reuse{RST} {DIM}{hit_pct}% idle{RST}"
+    # Idle: still show the savings the cache unlocks when active
+    return (f"{DIM}cache reuse{RST} {DIM}{hit_pct}% idle "
+            f"(saves ~{savings_pct}% when active){RST}")
 
 
 def seg_vim_mode(ctx):
