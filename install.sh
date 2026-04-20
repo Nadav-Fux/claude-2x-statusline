@@ -260,6 +260,66 @@ wire_settings() {
 
     hook_ss="$INSTALL_DIR/hooks/narrator-session-start.sh"
     hook_ps="$INSTALL_DIR/hooks/narrator-prompt-submit.sh"
+
+    # Migration: clean up narrator entries from older installers that wrote
+    # the flat {type, command} form directly into event arrays (invalid —
+    # Claude Code expects {hooks:[{type,command}]} wrappers). Without this,
+    # re-running install leaves the broken entry alongside the new correct one.
+    if [ -n "$PY" ] && [ -f "$SETTINGS" ]; then
+        "$PY" - "$SETTINGS" << 'PY' >/dev/null 2>&1 || true
+import json, os, sys, tempfile
+
+path = sys.argv[1]
+NARRATOR_BASENAMES = ("narrator-session-start.sh", "narrator-prompt-submit.sh")
+
+def is_legacy_narrator_entry(e):
+    if not isinstance(e, dict):
+        return False
+    if "hooks" in e:
+        return False
+    cmd = e.get("command", "")
+    if not isinstance(cmd, str):
+        return False
+    return any(b in cmd for b in NARRATOR_BASENAMES)
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(0)
+
+hooks = data.get("hooks")
+if not isinstance(hooks, dict):
+    sys.exit(0)
+
+changed = False
+for event in ("SessionStart", "UserPromptSubmit"):
+    arr = hooks.get(event)
+    if not isinstance(arr, list):
+        continue
+    cleaned = [e for e in arr if not is_legacy_narrator_entry(e)]
+    if len(cleaned) != len(arr):
+        hooks[event] = cleaned
+        changed = True
+
+if not changed:
+    sys.exit(0)
+
+target_dir = os.path.dirname(path) or "."
+fd, temp = tempfile.mkstemp(dir=target_dir, suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.replace(temp, path)
+except Exception:
+    try: os.unlink(temp)
+    except OSError: pass
+    raise
+PY
+        echo "  ✓ Legacy narrator hook entries cleaned (if any)"
+    fi
+
     hook_merge=$(printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s"}]}]}}' \
         "$hook_ss" "$hook_ps")
 

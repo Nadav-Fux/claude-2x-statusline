@@ -518,10 +518,51 @@ if ($bashPath) {
     $hooksExpected = $true
     $hookSessionCommand = Format-CommandString -Executable $bashPath -Arguments @((Convert-ToBashPath $hookSessionStart))
     $hookPromptCommand = Format-CommandString -Executable $bashPath -Arguments @((Convert-ToBashPath $hookPromptSubmit))
+
+    # Migration: strip legacy narrator entries written in the flat
+    # {type, command} form by older installers. Without this, re-running
+    # install leaves the broken entry alongside the new correct one.
+    if (Test-Path $SettingsFile) {
+        try {
+            $raw = Get-Content $SettingsFile -Raw -Encoding UTF8
+            $obj = $raw | ConvertFrom-Json
+            $changed = $false
+            if ($obj.PSObject.Properties.Name -contains 'hooks' -and $obj.hooks) {
+                foreach ($event in 'SessionStart', 'UserPromptSubmit') {
+                    if ($obj.hooks.PSObject.Properties.Name -contains $event) {
+                        $arr = @($obj.hooks.$event)
+                        $kept = @()
+                        foreach ($entry in $arr) {
+                            $isLegacy = $false
+                            if ($entry -and $entry.PSObject.Properties.Name -contains 'command' `
+                                -and -not ($entry.PSObject.Properties.Name -contains 'hooks')) {
+                                $cmd = [string]$entry.command
+                                if ($cmd -match 'narrator-session-start\.sh' -or $cmd -match 'narrator-prompt-submit\.sh') {
+                                    $isLegacy = $true
+                                }
+                            }
+                            if (-not $isLegacy) { $kept += ,$entry }
+                        }
+                        if ($kept.Count -ne $arr.Count) {
+                            $obj.hooks.$event = $kept
+                            $changed = $true
+                        }
+                    }
+                }
+            }
+            if ($changed) {
+                ($obj | ConvertTo-Json -Depth 100) | Set-Content -Path $SettingsFile -Encoding UTF8
+                Write-Host '  Legacy narrator hook entries cleaned.' -ForegroundColor Green
+            }
+        } catch {
+            # Non-fatal: proceed to wire the new entries anyway.
+        }
+    }
+
     Set-SettingsEntry -TargetPath $SettingsFile -Merge @{
         hooks = @{
-            SessionStart = @(@{ type = 'command'; command = $hookSessionCommand })
-            UserPromptSubmit = @(@{ type = 'command'; command = $hookPromptCommand })
+            SessionStart = @(@{ hooks = @(@{ type = 'command'; command = $hookSessionCommand }) })
+            UserPromptSubmit = @(@{ hooks = @(@{ type = 'command'; command = $hookPromptCommand }) })
         }
     }
     if ($python39) {
