@@ -28,11 +28,13 @@ rm -f "$HOME/.claude/commands/statusline-update.md"
 rm -f "$HOME/.claude/bin/statusline.sh"
 
 # Remove usage cache
+rm -f "$HOME/.claude/statusline-usage-cache.json" 2>/dev/null
 rm -f /tmp/claude/statusline-usage-cache.json 2>/dev/null
 
 # Remove heartbeat and install markers
 rm -f "$HOME/.claude/.statusline-heartbeat"
 rm -f "$HOME/.claude/.statusline-install-done"
+rm -f "$HOME/.claude/.statusline-telemetry-id"
 
 # Clean settings.json: statusLine key, narrator hooks, enabledPlugins entry
 SETTINGS="$HOME/.claude/settings.json"

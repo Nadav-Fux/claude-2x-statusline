@@ -12,6 +12,50 @@ WHITE='\033[38;2;220;220;220m'
 ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_ROOT="$(cd "$ENGINE_DIR/.." && pwd)"
 PACKAGE_JSON="$INSTALL_ROOT/package.json"
+TELEMETRY_ID_FILE="$HOME/.claude/.statusline-telemetry-id"
+
+get_telemetry_id() {
+    local id=""
+
+    mkdir -p "$HOME/.claude" >/dev/null 2>&1 || true
+    if [ -f "$TELEMETRY_ID_FILE" ]; then
+        id=$(tr -d '\r\n' < "$TELEMETRY_ID_FILE" | tr '[:upper:]' '[:lower:]')
+        if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
+            printf '%s' "$id"
+            return 0
+        fi
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        id=$(python3 - <<'PY'
+import secrets
+
+print(secrets.token_hex(8))
+PY
+)
+    elif command -v python >/dev/null 2>&1; then
+        id=$(python - <<'PY'
+import secrets
+
+print(secrets.token_hex(8))
+PY
+)
+    elif command -v openssl >/dev/null 2>&1; then
+        id=$(openssl rand -hex 8 2>/dev/null | tr -d '\r\n')
+    elif [ -r /dev/urandom ]; then
+        id=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \r\n')
+    fi
+
+    if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
+        umask 177
+        printf '%s' "$id" > "$TELEMETRY_ID_FILE"
+        chmod 600 "$TELEMETRY_ID_FILE" 2>/dev/null || true
+        printf '%s' "$id"
+        return 0
+    fi
+
+    return 1
+}
 
 # ── Telemetry heartbeat (daily, fire-and-forget) ──
 HEARTBEAT_FILE="$HOME/.claude/.statusline-heartbeat"
@@ -21,7 +65,7 @@ if [ ! -f "$HEARTBEAT_FILE" ]; then _do_ping=1
 elif [ "$(cat "$HEARTBEAT_FILE" 2>/dev/null)" != "$_today" ]; then _do_ping=1
 fi
 if [ "$_do_ping" -eq 1 ]; then
-    _uid=$(echo -n "$(hostname):$(whoami)" | sha256sum 2>/dev/null | cut -c1-16)
+    _uid=$(get_telemetry_id 2>/dev/null || true)
     if [ -n "$_uid" ]; then
         echo "$_today" > "$HEARTBEAT_FILE"
         curl -s -o /dev/null --max-time 3 -X POST -H 'Content-Type: application/json' \
@@ -47,21 +91,84 @@ utc_offset_sec=$(( (tz_hh * 3600 + tz_mm * 60) ))
 [ "$tz_sign" = "-" ] && utc_offset_sec=$(( -utc_offset_sec ))
 local_offset_hours=$(( utc_offset_sec / 3600 ))
 
-# ── Pacific Time DST calculation ──
-utc_year=$(date -u +%Y)
-utc_month=$(date -u +%-m 2>/dev/null || date -u +%m)
-utc_day=$(date -u +%-d 2>/dev/null || date -u +%d)
+parse_offset_hours() {
+    local tz_name="$1"
+    local offset=""
+    local sign hh
 
-# US DST: Second Sunday of March (8-14) to First Sunday of November (1-7)
-if [ "$utc_month" -gt 3 ] && [ "$utc_month" -lt 11 ]; then
-    pt_offset=-7  # PDT
-elif [ "$utc_month" -eq 3 ] && [ "$utc_day" -ge 8 ]; then
-    pt_offset=-7  # PDT (second Sunday is 8th at earliest)
-elif [ "$utc_month" -eq 11 ] && [ "$utc_day" -le 7 ]; then
-    pt_offset=-7  # PDT (first Sunday is 7th at latest)
-else
-    pt_offset=-8  # PST
-fi
+    if [ -n "$tz_name" ]; then
+        offset=$(TZ="$tz_name" date +%z 2>/dev/null || true)
+    else
+        offset=$(date +%z 2>/dev/null || true)
+    fi
+
+    case "$offset" in
+        [+-][0-9][0-9][0-9][0-9])
+            sign=${offset:0:1}
+            hh=${offset:1:2}
+            hh=$((10#$hh))
+            [ "$sign" = "-" ] && hh=$(( -hh ))
+            printf '%s\n' "$hh"
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+csv_has_day() {
+    case ",$1," in
+        *",$2,"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+floor_div() {
+    local num="$1" den="$2"
+    if [ "$num" -ge 0 ]; then
+        echo $(( num / den ))
+    else
+        echo $(( - (( -num + den - 1 ) / den ) ))
+    fi
+}
+
+mod_positive() {
+    local num="$1" den="$2" result
+    result=$(( num % den ))
+    [ "$result" -lt 0 ] && result=$(( result + den ))
+    echo "$result"
+}
+
+shift_weekday() {
+    local day="$1" delta="$2"
+    echo $(( ((day - 1 + delta) % 7 + 7) % 7 + 1 ))
+}
+
+shift_days_csv() {
+    local csv="$1" delta="$2" out="" day shifted
+    local old_ifs="$IFS"
+    IFS=',' read -r -a _days <<< "$csv"
+    IFS="$old_ifs"
+    for day in "${_days[@]}"; do
+        [ -n "$day" ] || continue
+        shifted=$(shift_weekday "$day" "$delta")
+        out="${out}${out:+,}${shifted}"
+    done
+    printf '%s' "$out"
+}
+
+mins_until_next_peak() {
+    local current_day="$1" current_mins="$2" start_mins="$3" days_csv="$4"
+    local offset next_day
+    for offset in 1 2 3 4 5 6 7; do
+        next_day=$(( ((current_day - 1 + offset) % 7) + 1 ))
+        if csv_has_day "$days_csv" "$next_day"; then
+            echo $(( (1440 - current_mins) + (offset - 1) * 1440 + start_mins ))
+            return 0
+        fi
+    done
+    echo 0
+}
 
 # ── Remote schedule (try cached, skip fetch in bash for speed) ──
 SCHEDULE_CACHE="$HOME/.claude/statusline-schedule.json"
@@ -69,6 +176,7 @@ peak_start_h=5
 peak_end_h=11
 peak_tz="America/Los_Angeles"
 peak_enabled=1
+peak_days_csv="1,2,3,4,5"
 
 if [ -f "$SCHEDULE_CACHE" ]; then
     if command -v python3 >/dev/null 2>&1; then
@@ -81,21 +189,28 @@ try:
     print(p.get('end',11))
     print(p.get('tz','America/Los_Angeles'))
     print(1 if p.get('enabled',True) else 0)
+    print(','.join(str(int(x)) for x in p.get('days',[1,2,3,4,5])))
 except: pass
 " 2>/dev/null)"
-        # Read exactly 4 lines; validate each before assigning
+        # Read exactly 5 lines; validate each before assigning
         {
             IFS= read -r _v_start
             IFS= read -r _v_end
             IFS= read -r _v_tz
             IFS= read -r _v_enabled
+            IFS= read -r _v_days
         } <<< "$_sched_out"
         # Only assign if values look sane (integers / safe string)
         [[ "$_v_start"   =~ ^[0-9]+$ ]]          && peak_start_h="$_v_start"
         [[ "$_v_end"     =~ ^[0-9]+$ ]]          && peak_end_h="$_v_end"
         [[ "$_v_tz"      =~ ^[A-Za-z/_+-]+$ ]]   && peak_tz="$_v_tz"
         [[ "$_v_enabled" =~ ^[01]$ ]]            && peak_enabled="$_v_enabled"
-        unset _sched_out _v_start _v_end _v_tz _v_enabled
+        [[ "$_v_days"    =~ ^[0-9,]+$ ]]         && peak_days_csv="$_v_days"
+        unset _sched_out _v_start _v_end _v_tz _v_enabled _v_days
+    else
+        _days_csv=$(grep -o '"days"[[:space:]]*:[[:space:]]*\[[^]]*\]' "$SCHEDULE_CACHE" 2>/dev/null | head -1 | sed -E 's/.*\[([^]]*)\].*/\1/' | tr -d ' \r\n')
+        [[ "$_days_csv" =~ ^[0-9,]+$ ]] && peak_days_csv="$_days_csv"
+        unset _days_csv
     fi
 fi
 
@@ -158,14 +273,15 @@ fi
 if [ "$peak_tz" = "UTC" ] || [ "$peak_tz" = "Etc/UTC" ] || [ "$peak_tz" = "GMT" ]; then
     src_offset=0
 else
-    src_offset=$pt_offset
+    src_offset=$(parse_offset_hours "$peak_tz" 2>/dev/null || echo -8)
 fi
 
 # ── Convert peak hours to local time ──
-peak_start_local=$(( (peak_start_h - src_offset + local_offset_hours) % 24 ))
-[ "$peak_start_local" -lt 0 ] && peak_start_local=$(( peak_start_local + 24 ))
-peak_end_local=$(( (peak_end_h - src_offset + local_offset_hours) % 24 ))
-[ "$peak_end_local" -lt 0 ] && peak_end_local=$(( peak_end_local + 24 ))
+raw_start_local=$(( peak_start_h - src_offset + local_offset_hours ))
+peak_day_offset=$(floor_div "$raw_start_local" 24)
+peak_start_local=$(mod_positive "$raw_start_local" 24)
+peak_end_local=$(mod_positive $(( peak_end_h - src_offset + local_offset_hours )) 24)
+effective_peak_days_csv=$(shift_days_csv "$peak_days_csv" "$peak_day_offset")
 
 # ── Format hours for display ──
 fmt_hour() {
@@ -186,8 +302,8 @@ peak_e_mins=$(( peak_end_local * 60 ))
 # Check if today or previous day (for midnight spillover) is a peak day
 prev_dow=$(( dow == 1 ? 7 : dow - 1 ))
 is_peak_day=0; prev_peak_day=0
-[ "$dow" -ge 1 ] && [ "$dow" -le 5 ] && is_peak_day=1
-[ "$prev_dow" -ge 1 ] && [ "$prev_dow" -le 5 ] && prev_peak_day=1
+csv_has_day "$effective_peak_days_csv" "$dow" && is_peak_day=1
+csv_has_day "$effective_peak_days_csv" "$prev_dow" && prev_peak_day=1
 
 # A previous peak day only matters when the peak actually crosses midnight
 # AND we're still inside the spillover window. Otherwise Saturday morning
@@ -207,13 +323,7 @@ if [ "$is_peak_day" -eq 1 ] || [ "$in_spillover" -eq 1 ]; then
         elif [ "$now_mins" -lt "$peak_s_mins" ]; then
             mins_until=$(( peak_s_mins - now_mins ))
         else
-            # After peak today, calculate to next weekday
-            if [ "$dow" -lt 5 ]; then
-                mins_until=$(( (1440 - now_mins) + peak_s_mins ))
-            else
-                # Friday after peak → Monday
-                mins_until=$(( (1440 - now_mins) + 2 * 1440 + peak_s_mins ))
-            fi
+            mins_until=$(mins_until_next_peak "$dow" "$now_mins" "$peak_s_mins" "$effective_peak_days_csv")
         fi
     else
         # Crosses midnight — check spillover from previous day
@@ -226,16 +336,13 @@ if [ "$is_peak_day" -eq 1 ] || [ "$in_spillover" -eq 1 ]; then
         else
             if [ "$is_peak_day" -eq 1 ] && [ "$now_mins" -lt "$peak_s_mins" ]; then
                 mins_until=$(( peak_s_mins - now_mins ))
+            else
+                mins_until=$(mins_until_next_peak "$dow" "$now_mins" "$peak_s_mins" "$effective_peak_days_csv")
             fi
         fi
     fi
 else
-    # Weekend — find Monday
-    if [ "$dow" -eq 6 ]; then
-        mins_until=$(( (1440 - now_mins) + 1440 + peak_s_mins ))
-    else  # Sunday
-        mins_until=$(( (1440 - now_mins) + peak_s_mins ))
-    fi
+    mins_until=$(mins_until_next_peak "$dow" "$now_mins" "$peak_s_mins" "$effective_peak_days_csv")
 fi
 
 # ── Build status display ──

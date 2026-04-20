@@ -217,9 +217,15 @@ function peakHoursToLocal(schedule, localOffset) {
   const endH = peak.end || 11;
   const srcOffset = getSourceOffset(peak.tz);
 
-  const startLocal = ((startH - srcOffset + localOffset) % 24 + 24) % 24;
+  const rawStartLocal = startH - srcOffset + localOffset;
+  const peakDayOffset = Math.floor(rawStartLocal / 24);
+  const startLocal = ((rawStartLocal % 24) + 24) % 24;
   const endLocal = ((endH - srcOffset + localOffset) % 24 + 24) % 24;
-  return { startLocal, endLocal, duration: endH - startH };
+  return { startLocal, endLocal, duration: endH - startH, peakDayOffset };
+}
+
+function shiftWeekday(day, delta) {
+  return ((day - 1 + delta) % 7 + 7) % 7 + 1;
 }
 
 function minsUntilNextPeak(now, peakDays, startLocalHour) {
@@ -275,15 +281,16 @@ const SEGMENTS = {
     const hour = now.getHours() + now.getMinutes() / 60;
     const weekday = now.getDay() === 0 ? 7 : now.getDay();
     const peakDays = peak.days || [1,2,3,4,5];
-    const { startLocal, endLocal } = peakHoursToLocal(schedule, offsetHours);
+    const { startLocal, endLocal, peakDayOffset } = peakHoursToLocal(schedule, offsetHours);
+    const effectivePeakDays = peakDays.map(day => shiftWeekday(day, peakDayOffset));
 
     ctx.peakStartLocal = startLocal;
     ctx.peakEndLocal = endLocal;
-    ctx.peakDays = peakDays;
+    ctx.peakDays = effectivePeakDays;
 
-    const isPeakDay = peakDays.includes(weekday);
+    const isPeakDay = effectivePeakDays.includes(weekday);
     const prevWeekday = weekday === 1 ? 7 : weekday - 1;
-    const prevWasPeak = peakDays.includes(prevWeekday);
+    const prevWasPeak = effectivePeakDays.includes(prevWeekday);
     let isPeak = false, minsLeft = 0, minsUntil = 0;
 
     if (isPeakDay || prevWasPeak) {
@@ -291,7 +298,7 @@ const SEGMENTS = {
         if (isPeakDay) { isPeak = hour >= startLocal && hour < endLocal; }
         if (isPeak) { minsLeft = Math.floor((endLocal - hour) * 60); }
         else if (isPeakDay && hour < startLocal) { minsUntil = Math.floor((startLocal - hour) * 60); }
-        else { minsUntil = minsUntilNextPeak(now, peakDays, startLocal); }
+        else { minsUntil = minsUntilNextPeak(now, effectivePeakDays, startLocal); }
       } else {
         // Crosses midnight: peak if today is peak day and past start,
         // OR previous day was peak and before end (spillover)
@@ -304,11 +311,11 @@ const SEGMENTS = {
         } else {
           minsUntil = (isPeakDay && hour < startLocal)
             ? Math.floor((startLocal - hour) * 60)
-            : minsUntilNextPeak(now, peakDays, startLocal);
+            : minsUntilNextPeak(now, effectivePeakDays, startLocal);
         }
       }
     } else {
-      minsUntil = minsUntilNextPeak(now, peakDays, startLocal);
+      minsUntil = minsUntilNextPeak(now, effectivePeakDays, startLocal);
     }
 
     ctx.isPeak = isPeak;
@@ -382,6 +389,27 @@ SEGMENTS.promo_2x = SEGMENTS.peak_hours;
 // ── Telemetry ──
 const TELEMETRY_URL = 'https://statusline-telemetry.nadavf.workers.dev/ping';
 const HEARTBEAT_PATH = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', '.statusline-heartbeat');
+const TELEMETRY_ID_PATH = path.join(process.env.HOME || process.env.USERPROFILE, '.claude', '.statusline-telemetry-id');
+
+function getTelemetryId() {
+  try {
+    const dir = path.dirname(TELEMETRY_ID_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    if (fs.existsSync(TELEMETRY_ID_PATH)) {
+      const existing = fs.readFileSync(TELEMETRY_ID_PATH, 'utf8').trim().toLowerCase();
+      if (/^[0-9a-f]{16}$/.test(existing)) {
+        return existing;
+      }
+    }
+    const id = crypto.randomBytes(8).toString('hex');
+    fs.writeFileSync(TELEMETRY_ID_PATH, id, { mode: 0o600 });
+    return id;
+  } catch {
+    return '';
+  }
+}
 
 function maybeHeartbeat(config) {
   if (config.telemetry === false) return;
@@ -391,7 +419,8 @@ function maybeHeartbeat(config) {
       const mtime = fs.statSync(HEARTBEAT_PATH).mtime.toISOString().slice(0, 10);
       if (mtime === today) return;
     }
-    const uid = crypto.createHash('sha256').update(`${os.hostname()}:${os.userInfo().username}`).digest('hex').slice(0, 16);
+    const uid = getTelemetryId();
+    if (!uid) return;
     const payload = JSON.stringify({
       id: uid, v: '2.1', engine: 'node', tier: config.tier || 'standard',
       os: process.platform, event: 'heartbeat',

@@ -46,6 +46,35 @@ async function postPing(env, body) {
   );
 }
 
+test('GET /stats counts unique ping records for today', async () => {
+  const env = makeEnv();
+
+  await postPing(env, {
+    id: 'aaaaaaaaaaaa',
+    v: '2.2',
+    engine: 'python',
+    tier: 'full',
+    os: 'windows',
+    event: 'heartbeat',
+  });
+  await postPing(env, {
+    id: 'bbbbbbbbbbbb',
+    v: '2.2',
+    engine: 'node',
+    tier: 'standard',
+    os: 'linux',
+    event: 'heartbeat',
+  });
+
+  const response = await worker.fetch(new Request('https://statusline.test/stats'), env);
+  const data = await readJson(response);
+
+  assert.equal(response.status, 200);
+  assert.equal(data.dau_today, 2);
+  assert.equal(data.pings_today, 2);
+  assert.deepEqual(data.engines_today, { node: 1, python: 1 });
+});
+
 test('GET /failures stays open when auth token is not configured', async () => {
   const env = makeEnv();
 
@@ -168,7 +197,7 @@ test('GET /failures aggregates install, update, doctor and fail-index rollups', 
 
   const topChecks = Object.fromEntries(data.top_failed_checks.map(entry => [entry.id, entry.count]));
   assert.equal(topChecks.hook_invalid, 3);
-  assert.equal(topChecks.python_missing, 3);
+  assert.equal(topChecks.python_missing, 4);
   assert.equal(topChecks.schedule_missing, 1);
   assert.equal(topChecks.doctor_unavailable, 1);
   assert.equal(topChecks.legacy_hook, 1);

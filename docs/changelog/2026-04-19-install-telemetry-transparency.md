@@ -10,29 +10,29 @@
 
 ### What we collect
 
-One event fires per install (ever), plus a daily heartbeat. Here is the **complete** JSON payload — nothing is omitted:
+The installer emits `install` / `install_result` (or `update`), and the runtime engines emit a daily `heartbeat`. Here is a representative payload shape — nothing sensitive is omitted:
 
 ```json
 {
   "id": "a3f9c2b7e10d5a84",
+  "v": "2.2",
   "engine": "python",
   "tier": "standard",
   "os": "linux",
-  "version": "1.4.2",
   "event": "install"
 }
 ```
 
 | Field     | Value                                         | Notes                                     |
 |-----------|-----------------------------------------------|-------------------------------------------|
-| `id`      | 16 hex chars                                  | SHA-256 of `hostname:username`, truncated. Irreversible — cannot be reversed to identify you. |
+| `id`      | 16 hex chars                                  | Random local ID stored in `~/.claude/.statusline-telemetry-id` and reused until that file is deleted. |
+| `v`       | short version string                          | Telemetry payload version                 |
 | `engine`  | `python` / `node` / `bash` / `installer`      | Which engine ran the ping                 |
 | `tier`    | `minimal` / `standard` / `full`               | Your configured statusline tier           |
 | `os`      | `linux` / `macos` / `windows`                 | Detected OS                               |
-| `version` | semver string                                 | Statusline version from `package.json`    |
-| `event`   | `install` / `heartbeat`                       | Install fires once ever; heartbeat daily  |
+| `event`   | `install` / `install_result` / `update` / `heartbeat` | Installer lifecycle or daily runtime ping |
 
-That's it. Seven fields. No session IDs from Claude Code. No file contents. No conversation data. No real username or hostname. No IP addresses retained by us (Cloudflare's edge may log your IP transiently, like any HTTP server, but we don't access or store those logs).
+That's it. Six fields in the common case. No session IDs from Claude Code. No file contents. No conversation data. No real username or hostname. No IP addresses retained by us (Cloudflare's edge may log your IP transiently, like any HTTP server, but we don't access or store those logs).
 
 ### What we do NOT collect
 
@@ -50,15 +50,15 @@ To be explicit:
 
 #### `install` event
 
-- Fired **once per machine, ever** — not once per install.
-- Written by `install.sh` at install time.
-- Also fired on **first engine run** if `install.sh` was skipped (e.g., manual clone). This is a retroactive backfill so machines that never ran the installer are still counted.
-- The `id` is stored in `~/.claude/statusline-telemetry-id` after the first ping, so subsequent events reuse the same identifier.
+- Emitted by the installer flow at install time.
+- Followed by `install_result` (or `update`) with aggregated doctor results.
+- Runtime engines no longer backfill `install` on first run.
+- The `id` is stored in `~/.claude/.statusline-telemetry-id` after the first local generation, so subsequent events reuse the same identifier.
 
 #### `heartbeat` event
 
 - Fired **once per day** from the engine.
-- Gated by a timestamp in `~/.claude/statusline-state.json`. If the last heartbeat was < 23 hours ago, it's skipped.
+- Gated by `~/.claude/.statusline-heartbeat`. If today's marker already exists, it is skipped.
 - The heartbeat is what powers the DAU/WAU numbers on the public stats page.
 
 ### Storage
@@ -153,11 +153,11 @@ wget -q --post-data="$PAYLOAD" --header="Content-Type: application/json" "$ENDPO
 python -c "import urllib.request, json; ..."
 ```
 
-If all three are missing (unusual but possible on minimal Linux containers), the ping is silently skipped. The retroactive `install` event from the engine's first run will cover these machines when the engine does run.
+If all three are missing (unusual but possible on minimal Linux containers), the installer ping is silently skipped.
 
 ### Tradeoffs acknowledged
 
-- The hash `hostname:username` is deterministic — the same machine always produces the same ID. This is intentional (deduplication), but it means the ID is stable across time. If you share your config with someone, they'll have your ID. Don't share your `statusline-telemetry-id` file.
+- The local random ID is stable for as long as you keep `~/.claude/.statusline-telemetry-id`. If you copy that file to another machine, you also copy the telemetry identity.
 - Daily heartbeats mean we can infer rough usage patterns per ID (e.g., "this machine used it 5 days this week"). We don't act on this, but the data is technically there for 90 days.
 
 ---
@@ -183,13 +183,13 @@ If all three are missing (unusual but possible on minimal Linux containers), the
 }
 ```
 
-שבעה שדות. ה-`id` הוא SHA-256 של `hostname:username` — 16 תווים הקסדצימלים, לא הפיך. אי-אפשר לחלץ ממנו שם משתמש או hostname.
+שישה שדות במקרה הרגיל. ה-`id` הוא מזהה אקראי בן 16 תווים הקסדצימליים, שנשמר מקומית ב-`~/.claude/.statusline-telemetry-id` וממוחזר כל עוד הקובץ נשאר קיים.
 
 **מה לא נאסף**: תוכן קבצים, היסטוריית שיחות, מפתחות API, session IDs מ-Claude Code, זהות אמיתית, לוגי שגיאות — כלום.
 
 ### אירועים
 
-- **`install`**: פעם אחת לכל מכונה, לנצח. אם דילגת על `install.sh` — נשלח בריצה הראשונה של ה-engine (retroactive backfill).
+- **`install`**: נשלח מתוך ה-installer בזמן התקנה, ואחריו `install_result` או `update` עם תוצאות ה-doctor.
 - **`heartbeat`**: פעם ביום. זה מה שמאכיל את מספרי ה-DAU/WAU בעמוד הסטטיסטיקות הציבורי.
 
 ### אחסון
@@ -213,6 +213,6 @@ If all three are missing (unusual but possible on minimal Linux containers), the
 
 ### tradeoffs שצריך לדעת
 
-ה-hash יציב לאורך זמן ובין סשנים — אותה מכונה תמיד מייצרת אותו ID. אל תשתף את קובץ `statusline-telemetry-id`. ה-heartbeat מאפשר לאמוד בגסות כמה ימים בשבוע המכונה פעילה — זה קיים ב-KV למשך 90 יום, אפילו שאנחנו לא פועלים על פיו.
+ה-ID האקראי יציב כל עוד קובץ `statusline-telemetry-id` נשאר במקום. אם מעתיקים את הקובץ הזה למכונה אחרת, מעתיקים גם את הזהות הטלמטרית. ה-heartbeat מאפשר לאמוד בגסות כמה ימים בשבוע המכונה פעילה — זה קיים ב-KV למשך 90 יום, אפילו שאנחנו לא פועלים על פיו.
 
 </div>

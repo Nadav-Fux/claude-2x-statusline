@@ -730,7 +730,7 @@ def seg_ts_errors(ctx):
     if not cwd:
         return ""
     import tempfile as _tf
-    h = hashlib.md5(cwd.encode()).hexdigest()
+    h = hashlib.sha256(cwd.encode()).hexdigest()[:16]
     cache = Path(_tf.gettempdir()) / f"tsc-errors-{h}.txt"
     if not cache.exists():
         return ""
@@ -889,8 +889,7 @@ def seg_agent(ctx):
 
 def seg_rate_limits(ctx):
     """Fetch rate limits from Claude OAuth API (cached 60s)."""
-    import tempfile
-    cache_dir = Path(tempfile.gettempdir()) / "claude"
+    cache_dir = Path.home() / ".claude"
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     cache_file = cache_dir / "statusline-usage-cache.json"
 
@@ -925,6 +924,10 @@ def seg_rate_limits(ctx):
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     usage_data = json.loads(resp.read())
                     cache_file.write_text(json.dumps(usage_data))
+                    try:
+                        os.chmod(cache_file, 0o600)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -1249,33 +1252,38 @@ def main():
 
 TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"
 HEARTBEAT_PATH = Path.home() / ".claude" / ".statusline-heartbeat"
-INSTALL_MARKER = Path.home() / ".claude" / ".statusline-install-done"
+TELEMETRY_ID_PATH = Path.home() / ".claude" / ".statusline-telemetry-id"
+
+
+def _get_telemetry_id():
+    try:
+        TELEMETRY_ID_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if TELEMETRY_ID_PATH.exists():
+            existing = TELEMETRY_ID_PATH.read_text().strip().lower()
+            if len(existing) == 16 and all(ch in "0123456789abcdef" for ch in existing):
+                return existing
+
+        import secrets
+
+        uid = secrets.token_hex(8)
+        TELEMETRY_ID_PATH.write_text(uid)
+        try:
+            os.chmod(TELEMETRY_ID_PATH, 0o600)
+        except Exception:
+            pass
+        return uid
+    except Exception:
+        return ""
 
 def maybe_heartbeat(config):
-    """Send a first-run install ping (once ever) and a daily heartbeat.
-    Fire-and-forget, never blocks."""
+    """Send a daily heartbeat. Fire-and-forget, never blocks."""
     if config.get("telemetry") is False:
         return
     try:
-        import socket
-        raw = f"{socket.gethostname()}:{os.getlogin()}"
-        uid = hashlib.sha256(raw.encode()).hexdigest()[:16]
+        uid = _get_telemetry_id()
+        if not uid:
+            return
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-        # ── First-run install ping (written once, never repeated) ────────────
-        if not INSTALL_MARKER.exists():
-            install_payload = json.dumps({
-                "id": uid, "v": "2.1", "engine": "python",
-                "tier": config.get("tier", "standard"),
-                "os": sys.platform, "event": "install",
-            })
-            subprocess.Popen(
-                ["curl", "-s", "-o", os.devnull, "--max-time", "3",
-                 "-X", "POST", "-H", "Content-Type: application/json",
-                 "-d", install_payload, TELEMETRY_URL],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            INSTALL_MARKER.write_text(today)
 
         # ── Daily heartbeat ──────────────────────────────────────────────────
         if HEARTBEAT_PATH.exists():

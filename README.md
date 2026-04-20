@@ -339,7 +339,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 ```json
 {
-  "id": "sha256('hostname:username')[:16]",
+  "id": "random 16-char hex id stored in ~/.claude/.statusline-telemetry-id",
   "v": "2.1.0",
   "engine": "python",
   "tier": "full",
@@ -589,7 +589,7 @@ Or edit the config directly:
 {
   "tier": "full",
   "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
-  "schedule_cache_hours": 6
+  "schedule_cache_hours": 3
 }
 ```
 
@@ -821,11 +821,11 @@ This plugin sends two kinds of pings. This section documents exactly what is sen
 
 #### Install ping
 
-Sent **once per machine**: either at install time (if you ran `install.sh`) or on the first engine run (retroactive, to backfire users who cloned the repo directly without running the installer).
+Sent **once per machine at install/update time** by the installer flow. Runtime engines now send only the daily heartbeat.
 
 ```json
 {
-  "id": "sha256(\"hostname:username\")[:16]",
+  "id": "random 16-char hex id stored in ~/.claude/.statusline-telemetry-id",
   "v": "2.1.0",
   "engine": "python",
   "tier": "full",
@@ -846,7 +846,7 @@ Same payload with `"event": "heartbeat"`, once per calendar day per machine. TTL
 - No real names, email addresses, or any directly identifying information.
 - No session IDs or per-prompt telemetry.
 - No IP addresses beyond what the Cloudflare edge sees as part of normal HTTP (and Cloudflare does not log IPs to KV).
-- The `id` field is a 16-character hex prefix of `SHA-256("hostname:username")`. It cannot be reversed to reveal either value.
+- The `id` field is a random 16-character hex value generated once locally and stored in `~/.claude/.statusline-telemetry-id`.
 
 ### Endpoint
 
@@ -1046,7 +1046,7 @@ Coverage areas:
 | Narrator scoring | 4-axis scoring, template selection, deduplication, throttle logic                   |
 | Narrator memory  | Rolling observations, session boundary, prior-session retention                     |
 | JSON wiring      | Installer merge/query helpers for settings.json, config.json, and doctor failed IDs |
-| Install ping     | First-seen deduplication, opt-out flag, retroactive backfill                        |
+| Telemetry        | Installer install-event flow, runtime heartbeat opt-out, persisted anonymous ID     |
 | Worker failures  | `/failures` auth, per-OS aggregation, fail-index rollups, update/install summaries  |
 
 ---
@@ -1127,7 +1127,7 @@ cat > ~/.claude/statusline-config.json << 'EOF'
 {
   "tier": "full",
   "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
-  "schedule_cache_hours": 6
+  "schedule_cache_hours": 3
 }
 EOF
 

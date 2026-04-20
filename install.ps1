@@ -17,8 +17,9 @@ $RepoDir = Join-Path $ClaudeDir 'cc-2x-statusline'
 $SettingsFile = Join-Path $ClaudeDir 'settings.json'
 $ConfigFile = Join-Path $ClaudeDir 'statusline-config.json'
 $ScheduleCache = Join-Path $ClaudeDir 'statusline-schedule.json'
+$TelemetryIdFile = Join-Path $ClaudeDir '.statusline-telemetry-id'
 $DefaultScheduleUrl = 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json'
-$DefaultScheduleCacheHours = 6
+$DefaultScheduleCacheHours = 3
 
 function Test-RepoRoot {
     param([string]$Path)
@@ -261,12 +262,22 @@ function Convert-ToBashPath {
 }
 
 function Get-TelemetryId {
-    $username = if ($env:USERNAME) { $env:USERNAME } else { '' }
-    $raw = "{0}:{1}" -f $env:COMPUTERNAME, $username
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
-    $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
-    $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
-    return $hex.Substring(0, 16)
+    try {
+        if (Test-Path $TelemetryIdFile) {
+            $existing = (Get-Content $TelemetryIdFile -Raw -Encoding UTF8).Trim().ToLowerInvariant()
+            if ($existing -match '^[0-9a-f]{16}$') {
+                return $existing
+            }
+        }
+
+        $bytes = New-Object byte[] 8
+        [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+        $hex = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+        Set-Content -Path $TelemetryIdFile -Value $hex -Encoding ASCII
+        return $hex
+    } catch {
+        return $null
+    }
 }
 
 function Send-Telemetry {

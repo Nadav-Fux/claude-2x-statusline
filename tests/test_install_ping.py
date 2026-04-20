@@ -1,10 +1,9 @@
-"""Tests for first-run install ping logic in engines/python-engine.py.
+"""Tests for heartbeat telemetry logic in engines/python-engine.py.
 
 These tests verify:
-  1. When INSTALL_MARKER is absent, maybe_heartbeat fires an install ping
-     followed by a heartbeat ping (two Popen calls).
-  2. When INSTALL_MARKER already exists, only the heartbeat ping fires.
-  3. When telemetry is disabled, no pings fire at all.
+    1. The first heartbeat creates a local anonymous telemetry id and sends one ping.
+    2. Existing telemetry ids are reused across heartbeats.
+    3. When telemetry is disabled, no ping is sent and no files are created.
 """
 import importlib.util
 import json
@@ -35,10 +34,10 @@ def _require_engine():
 
 @pytest.fixture
 def tmp_telemetry_paths(tmp_path, monkeypatch):
-    """Redirect HEARTBEAT_PATH and INSTALL_MARKER to a temp directory
+    """Redirect HEARTBEAT_PATH and TELEMETRY_ID_PATH to a temp directory
     and monkeypatch Path.home() to the same temp home.
 
-    Returns (fake_home, heartbeat_path, install_marker_path).
+    Returns (fake_home, heartbeat_path, telemetry_id_path).
     """
     _require_engine()
 
@@ -47,14 +46,14 @@ def tmp_telemetry_paths(tmp_path, monkeypatch):
     fake_claude.mkdir(parents=True, exist_ok=True)
 
     fake_heartbeat = fake_claude / ".statusline-heartbeat"
-    fake_marker = fake_claude / ".statusline-install-done"
+    fake_id = fake_claude / ".statusline-telemetry-id"
 
     # Patch the module-level path constants directly so the function reads them
     monkeypatch.setattr(engine, "HEARTBEAT_PATH", fake_heartbeat)
-    monkeypatch.setattr(engine, "INSTALL_MARKER", fake_marker)
+    monkeypatch.setattr(engine, "TELEMETRY_ID_PATH", fake_id)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
 
-    yield fake_home, fake_heartbeat, fake_marker
+    yield fake_home, fake_heartbeat, fake_id
 
 
 def _parse_payload(popen_call_args):
@@ -71,73 +70,59 @@ def _parse_payload(popen_call_args):
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-def test_install_marker_missing_fires_install_event(tmp_telemetry_paths):
-    """With no INSTALL_MARKER, expect two Popen calls: install then heartbeat."""
+def test_first_heartbeat_creates_telemetry_id_and_sends_once(tmp_telemetry_paths):
+    """First heartbeat should persist an anonymous id and send exactly one ping."""
     _require_engine()
-    _, fake_heartbeat, fake_marker = tmp_telemetry_paths
+    _, fake_heartbeat, fake_id = tmp_telemetry_paths
 
-    assert not fake_marker.exists(), "precondition: marker must be absent"
-
-    mock_popen = MagicMock()
-    with patch("subprocess.Popen", mock_popen):
-        engine.maybe_heartbeat({})
-
-    assert mock_popen.call_count == 2, (
-        f"Expected 2 Popen calls (install + heartbeat), got {mock_popen.call_count}"
-    )
-
-    first_payload = _parse_payload(mock_popen.call_args_list[0])
-    second_payload = _parse_payload(mock_popen.call_args_list[1])
-
-    assert first_payload["event"] == "install", (
-        f"First call should be install ping, got event={first_payload['event']!r}"
-    )
-    assert first_payload["engine"] == "python"
-    assert first_payload["v"] == "2.1"
-    assert "id" in first_payload
-
-    assert second_payload["event"] == "heartbeat", (
-        f"Second call should be heartbeat ping, got event={second_payload['event']!r}"
-    )
-    assert second_payload["engine"] == "python"
-
-    # Marker file must have been created
-    assert fake_marker.exists(), "INSTALL_MARKER should be written after install ping"
-    # Heartbeat file must also have been created
-    assert fake_heartbeat.exists(), "HEARTBEAT_PATH should be written after heartbeat"
-
-
-def test_install_marker_present_skips_install_event(tmp_telemetry_paths):
-    """With INSTALL_MARKER already present, only the heartbeat ping fires."""
-    _require_engine()
-    _, fake_heartbeat, fake_marker = tmp_telemetry_paths
-
-    # Pre-create the marker (simulates a machine that already ran install once)
-    fake_marker.write_text("2026-01-01")
+    assert not fake_id.exists(), "precondition: telemetry id must be absent"
 
     mock_popen = MagicMock()
     with patch("subprocess.Popen", mock_popen):
         engine.maybe_heartbeat({})
 
     assert mock_popen.call_count == 1, (
-        f"Expected exactly 1 Popen call (heartbeat only), got {mock_popen.call_count}"
+        f"Expected 1 heartbeat ping, got {mock_popen.call_count}"
+    )
+
+    payload = _parse_payload(mock_popen.call_args_list[0])
+
+    assert payload["event"] == "heartbeat"
+    assert payload["engine"] == "python"
+    assert payload["v"] == "2.1"
+    assert "id" in payload
+    assert len(payload["id"]) == 16
+
+    assert fake_id.exists(), "TELEMETRY_ID_PATH should be written after the first heartbeat"
+    assert fake_heartbeat.exists(), "HEARTBEAT_PATH should be written after heartbeat"
+
+
+def test_existing_telemetry_id_is_reused(tmp_telemetry_paths):
+    """Existing anonymous ids should be reused instead of regenerated."""
+    _require_engine()
+    _, _, fake_id = tmp_telemetry_paths
+
+    fake_id.write_text("0123456789abcdef")
+
+    mock_popen = MagicMock()
+    with patch("subprocess.Popen", mock_popen):
+        engine.maybe_heartbeat({})
+
+    assert mock_popen.call_count == 1, (
+        f"Expected exactly 1 heartbeat ping, got {mock_popen.call_count}"
     )
 
     only_payload = _parse_payload(mock_popen.call_args_list[0])
-    assert only_payload["event"] == "heartbeat", (
-        f"The single call should be heartbeat, got event={only_payload['event']!r}"
-    )
-
-    # Marker must remain (not be touched or removed)
-    assert fake_marker.exists()
+    assert only_payload["event"] == "heartbeat"
+    assert only_payload["id"] == "0123456789abcdef"
 
 
 def test_telemetry_disabled_skips_both(tmp_telemetry_paths):
-    """With telemetry=False, no Popen calls and no marker/heartbeat files created."""
+    """With telemetry=False, no Popen calls and no telemetry files created."""
     _require_engine()
-    _, fake_heartbeat, fake_marker = tmp_telemetry_paths
+    _, fake_heartbeat, fake_id = tmp_telemetry_paths
 
-    assert not fake_marker.exists(), "precondition: marker absent"
+    assert not fake_id.exists(), "precondition: telemetry id absent"
     assert not fake_heartbeat.exists(), "precondition: heartbeat absent"
 
     mock_popen = MagicMock()
@@ -147,5 +132,5 @@ def test_telemetry_disabled_skips_both(tmp_telemetry_paths):
     assert mock_popen.call_count == 0, (
         f"Expected 0 Popen calls when telemetry disabled, got {mock_popen.call_count}"
     )
-    assert not fake_marker.exists(), "INSTALL_MARKER must NOT be created when telemetry disabled"
+    assert not fake_id.exists(), "TELEMETRY_ID_PATH must NOT be created when telemetry disabled"
     assert not fake_heartbeat.exists(), "HEARTBEAT_PATH must NOT be created when telemetry disabled"
