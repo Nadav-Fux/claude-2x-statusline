@@ -960,15 +960,58 @@ fi
 
 # ── Telemetry (opt-in via --report only) ─────────────────────────────────
 if [ "$SEND_TELEMETRY" = "1" ]; then
-    # Anonymous: SHA256 of hostname+whoami truncated to 16 chars. No filenames,
-    # no command contents, no tokens — only aggregate counts + check IDs + OS.
+  get_telemetry_id() {
+    local id_file="$HOME/.claude/.statusline-telemetry-id"
+    local id=""
+
+    mkdir -p "$HOME/.claude" >/dev/null 2>&1 || true
+    if [ -f "$id_file" ]; then
+      id=$(tr -d '\r\n' < "$id_file" | tr '[:upper:]' '[:lower:]')
+      if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
+        printf '%s' "$id"
+        return 0
+      fi
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+      id=$(python3 - <<'PY'
+import secrets
+
+print(secrets.token_hex(8))
+PY
+)
+    elif command -v python >/dev/null 2>&1; then
+      id=$(python - <<'PY'
+import secrets
+
+print(secrets.token_hex(8))
+PY
+)
+    elif command -v openssl >/dev/null 2>&1; then
+      id=$(openssl rand -hex 8 2>/dev/null | tr -d '\r\n')
+    elif [ -r /dev/urandom ]; then
+      id=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \r\n')
+    fi
+
+    if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
+      umask 177
+      printf '%s' "$id" > "$id_file"
+      chmod 600 "$id_file" 2>/dev/null || true
+      printf '%s' "$id"
+      return 0
+    fi
+
+    return 1
+  }
+
+  # Anonymous local id, plus aggregate counts + check IDs + OS only.
     ids_fail=""
     for r in "${RESULTS[@]}"; do
         status=${r%%|*}; rest=${r#*|}
         id=${rest%%|*}
         [ "$status" = "fail" ] && ids_fail="$ids_fail $id"
     done
-    uid=$(printf '%s' "$(hostname 2>/dev/null):$(whoami 2>/dev/null)" | sha256sum 2>/dev/null | cut -c1-16)
+  uid=$(get_telemetry_id 2>/dev/null || true)
     os=$(uname -s 2>/dev/null | tr A-Z a-z)
     payload=$(printf '{"id":"%s","v":"doctor-1","os":"%s","ok":%d,"warn":%d,"fail":%d,"failed_ids":"%s","event":"doctor"}' \
         "$uid" "$os" $count_ok $count_warn $count_fail "$(echo "$ids_fail" | sed 's/^ //')")

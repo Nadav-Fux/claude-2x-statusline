@@ -7,8 +7,9 @@ INSTALL_DIR="$HOME/.claude/cc-2x-statusline"
 SETTINGS="$HOME/.claude/settings.json"
 CONFIG="$HOME/.claude/statusline-config.json"
 SCHEDULE_URL_DEFAULT="https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json"
-SCHEDULE_CACHE_HOURS_DEFAULT="6"
+SCHEDULE_CACHE_HOURS_DEFAULT="3"
 TELEMETRY_URL="https://statusline-telemetry.nadavf.workers.dev/ping"
+TELEMETRY_ID_FILE="$HOME/.claude/.statusline-telemetry-id"
 
 # shellcheck source=lib/resolve-runtime.sh
 . "$SCRIPT_DIR/lib/resolve-runtime.sh"
@@ -424,31 +425,42 @@ json_escape() {
 }
 
 telemetry_id() {
-    local raw
-    raw="$(hostname 2>/dev/null):$(whoami 2>/dev/null)"
-    if command -v sha256sum >/dev/null 2>&1; then
-        printf '%s' "$raw" | sha256sum | cut -c1-16
-        return 0
-    fi
-    if command -v shasum >/dev/null 2>&1; then
-        printf '%s' "$raw" | shasum -a 256 | cut -c1-16
-        return 0
-    fi
-    if [ -n "$PY" ]; then
-        "$PY" - <<'PY'
-import hashlib
-import os
-import socket
+    local id
 
-raw = f"{socket.gethostname()}:{os.environ.get('USER') or os.environ.get('USERNAME') or ''}"
-print(hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16])
+    mkdir -p "$HOME/.claude" >/dev/null 2>&1 || true
+    if [ -f "$TELEMETRY_ID_FILE" ]; then
+        id=$(tr -d '\r\n' < "$TELEMETRY_ID_FILE" | tr '[:upper:]' '[:lower:]')
+        if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
+            printf '%s' "$id"
+            return 0
+        fi
+    fi
+
+    if [ -n "$PY" ]; then
+        id=$("$PY" - <<'PY'
+import secrets
+
+print(secrets.token_hex(8))
 PY
+)
+    elif [ -n "$NODE" ]; then
+        id=$("$NODE" -e "const crypto=require('crypto'); process.stdout.write(crypto.randomBytes(8).toString('hex'));" 2>/dev/null || true)
+    elif command -v openssl >/dev/null 2>&1; then
+        id=$(openssl rand -hex 8 2>/dev/null | tr -d '\r\n')
+    elif [ -r /dev/urandom ]; then
+        id=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \r\n')
+    else
+        id=""
+    fi
+
+    if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
+        umask 177
+        printf '%s' "$id" > "$TELEMETRY_ID_FILE"
+        chmod 600 "$TELEMETRY_ID_FILE" 2>/dev/null || true
+        printf '%s' "$id"
         return 0
     fi
-    if [ -n "$NODE" ]; then
-        "$NODE" -e "const crypto=require('crypto'); const os=require('os'); const user=process.env.USER || process.env.USERNAME || ''; const raw=os.hostname()+':' + user; process.stdout.write(crypto.createHash('sha256').update(raw).digest('hex').slice(0,16));"
-        return 0
-    fi
+
     return 1
 }
 

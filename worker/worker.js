@@ -70,16 +70,10 @@ async function handlePing(request, env, cors) {
       };
       const eventKey = `event:${event}:${today}:${id}:${Date.now()}`;
       await env.TELEMETRY.put(eventKey, JSON.stringify(eventRecord), { expirationTtl: 7776000 });
-
-      if (failedIds.length > 0) {
-        await updateFailureIndex(env.TELEMETRY, today, failedIds);
-      }
     }
 
-    // Total ping counter (simple increment via read-modify-write)
-    const countKey = `count:${today}`;
-    const current = parseInt(await env.TELEMETRY.get(countKey) || '0');
-    await env.TELEMETRY.put(countKey, String(current + 1), { expirationTtl: 7776000 });
+    const pingKey = `ping:${today}:${Date.now()}:${id}:${Math.random().toString(16).slice(2, 10)}`;
+    await env.TELEMETRY.put(pingKey, '1', { expirationTtl: 7776000 });
 
     return new Response('ok', { status: 202, headers: cors });
   } catch {
@@ -88,12 +82,14 @@ async function handlePing(request, env, cors) {
 }
 
 async function handleStats(request, env, cors) {
-  // Simple auth via query param or header
-  const url = new URL(request.url);
-  const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
-  const expectedToken = await env.TELEMETRY.get('_auth_token');
-  if (expectedToken && token !== expectedToken) {
+  const auth = await authorize(request, env);
+  if (!auth.ok) {
     return new Response('Unauthorized', { status: 401, headers: cors });
+  }
+
+  const rateLimit = await enforceRateLimit(request, env, 'stats', 30, 60);
+  if (!rateLimit.ok) {
+    return new Response('Too Many Requests', { status: 429, headers: { ...cors, 'Retry-After': String(rateLimit.retryAfterSeconds) } });
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -102,6 +98,7 @@ async function handleStats(request, env, cors) {
   // Count DAU today
   const dauToday = await listAllKeys(env.TELEMETRY, `dau:${today}:`);
   const dauYesterday = await listAllKeys(env.TELEMETRY, `dau:${yesterday}:`);
+  const pingToday = await listAllKeys(env.TELEMETRY, `ping:${today}:`);
 
   // Count total installs
   const installs = await listAllKeys(env.TELEMETRY, 'install:');
@@ -130,7 +127,7 @@ async function handleStats(request, env, cors) {
     wau_7day: sevenDayIds.size,
     total_installs: installs.length,
     engines_today: engines,
-    pings_today: parseInt(await env.TELEMETRY.get(`count:${today}`) || '0'),
+    pings_today: pingToday.length,
     as_of: new Date().toISOString(),
   };
 
@@ -156,17 +153,17 @@ async function handleFailures(request, env, cors) {
 
   for (let i = 0; i < days; i++) {
     const date = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-    totalInstalls += await accumulateEventStats(env.TELEMETRY, `event:install_result:${date}:`, byOs, stats => {
+    totalInstalls += await accumulateEventStats(env.TELEMETRY, `event:install_result:${date}:`, byOs, aggregateFailIndex, stats => {
       if (stats.fail > 0) {
         totalFailures += 1;
       }
     });
-    totalUpdates += await accumulateEventStats(env.TELEMETRY, `event:update:${date}:`, byOs, stats => {
+    totalUpdates += await accumulateEventStats(env.TELEMETRY, `event:update:${date}:`, byOs, aggregateFailIndex, stats => {
       if (stats.fail > 0) {
         totalFailures += 1;
       }
     });
-    doctorReports += await accumulateEventStats(env.TELEMETRY, `event:doctor:${date}:`, byOs, () => {});
+    doctorReports += await accumulateEventStats(env.TELEMETRY, `event:doctor:${date}:`, byOs, aggregateFailIndex, () => {});
 
     const failIndex = await env.TELEMETRY.get(`fail_index:${date}`);
     if (failIndex) {
@@ -211,17 +208,30 @@ async function authorize(request, env) {
   return { ok: true };
 }
 
-async function updateFailureIndex(kv, date, failedIds) {
-  const key = `fail_index:${date}`;
-  const raw = await kv.get(key);
-  const current = safeJsonParse(raw, {});
-  for (const failedId of failedIds) {
-    current[failedId] = (current[failedId] || 0) + 1;
+async function enforceRateLimit(request, env, scope, limit, windowSeconds) {
+  const identity = requestIdentity(request);
+  const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
+  const key = `ratelimit:${scope}:${bucket}:${identity}`;
+  const current = parseInt(await env.TELEMETRY.get(key) || '0', 10);
+  if (current >= limit) {
+    return { ok: false, retryAfterSeconds: windowSeconds };
   }
-  await kv.put(key, JSON.stringify(current), { expirationTtl: 7776000 });
+  await env.TELEMETRY.put(key, String(current + 1), { expirationTtl: windowSeconds + 5 });
+  return { ok: true, retryAfterSeconds: 0 };
 }
 
-async function accumulateEventStats(kv, prefix, byOs, onRecord) {
+function requestIdentity(request) {
+  const forwarded = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'anonymous';
+  return forwarded.split(',')[0].trim() || 'anonymous';
+}
+
+function incrementFailureCounts(target, failedIds) {
+  for (const failedId of normalizeFailedIds(failedIds)) {
+    target[failedId] = (target[failedId] || 0) + 1;
+  }
+}
+
+async function accumulateEventStats(kv, prefix, byOs, aggregateFailIndex, onRecord) {
   const keys = await listAllKeys(kv, prefix);
   for (const key of keys) {
     const raw = await kv.get(key.name);
@@ -237,6 +247,7 @@ async function accumulateEventStats(kv, prefix, byOs, onRecord) {
     if (toInt(record.fail) > 0) {
       byOs[os].failures += 1;
     }
+    incrementFailureCounts(aggregateFailIndex, record.failed_ids);
     onRecord({ fail: toInt(record.fail) });
   }
   return keys.length;

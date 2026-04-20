@@ -12,7 +12,7 @@ Version bumped to `2.2.0` to reflect the accumulated changes since `2.1.0`:
 - Narrator hook (rules engine always-on + optional Haiku layer + 18 bilingual insight templates)
 - `/explain` + `/narrator-lang` slash commands
 - Cross-timezone Saturday peak spillover fix
-- Retroactive install-ping
+- Installer-only install/update telemetry + persisted anonymous ID
 - Full Windows support (WindowsApps stubs, cygpath, UTF-8, embeddable Python `_pth` patch)
 
 ### New slash command: `/narrator-lang`
@@ -49,7 +49,7 @@ The command does not write to any files; the user retains full control over thei
 - ה-narrator hook (מנוע חוקים תמיד פועל + שכבת Haiku אופציונלית + 18 תבניות insight דו-לשוניות)
 - פקודות slash `/explain` ו-`/narrator-lang`
 - תיקון spillover לשבת UTC עבור משתמשי UTC+3
-- install-ping רטרואקטיבי
+- טלמטריית install/update מתוך ה-installer בלבד + מזהה אנונימי מקומי נשמר
 - תמיכה מלאה ב-Windows (stub-ים של WindowsApps, cygpath, UTF-8, תיקון `_pth` ל-Python embeddable)
 
 ### פקודה חדשה: `/narrator-lang`

@@ -6,8 +6,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$script:WireJsonSerializerReady = $false
+$script:WireJsonSerializerChecked = $false
+
 function ConvertTo-NormalizedValue {
-    param([Parameter(ValueFromPipeline = $true)]$InputObject)
+    param([object]$InputObject)
 
     if ($null -eq $InputObject) {
         return $null
@@ -16,7 +19,7 @@ function ConvertTo-NormalizedValue {
     if ($InputObject -is [System.Collections.IDictionary]) {
         $result = @{}
         foreach ($key in $InputObject.Keys) {
-            $result[$key] = ConvertTo-NormalizedValue $InputObject[$key]
+            $result[$key] = ConvertTo-NormalizedValue -InputObject $InputObject[$key]
         }
         return $result
     }
@@ -24,7 +27,7 @@ function ConvertTo-NormalizedValue {
     if ($InputObject -is [pscustomobject]) {
         $result = @{}
         foreach ($property in $InputObject.PSObject.Properties) {
-            $result[$property.Name] = ConvertTo-NormalizedValue $property.Value
+            $result[$property.Name] = ConvertTo-NormalizedValue -InputObject $property.Value
         }
         return $result
     }
@@ -32,9 +35,9 @@ function ConvertTo-NormalizedValue {
     if ($InputObject -is [System.Collections.IEnumerable] -and -not ($InputObject -is [string])) {
         $items = @()
         foreach ($item in $InputObject) {
-            $items += ,(ConvertTo-NormalizedValue $item)
+            $items += ,(ConvertTo-NormalizedValue -InputObject $item)
         }
-        return $items
+        return ,$items
     }
 
     return $InputObject
@@ -74,10 +77,33 @@ function Merge-JsonValue {
                 $seen[$marker] = $true
             }
         }
-        return $merged
+        return ,$merged
     }
 
     return $Patch
+}
+
+function ConvertTo-WireJsonString {
+    param($Value)
+
+    if (-not $script:WireJsonSerializerChecked) {
+        try {
+            Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop | Out-Null
+            $script:WireJsonSerializerReady = $true
+        } catch {
+            $script:WireJsonSerializerReady = $false
+        }
+        $script:WireJsonSerializerChecked = $true
+    }
+
+    if ($script:WireJsonSerializerReady) {
+        $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $serializer.MaxJsonLength = [int]::MaxValue
+        $serializer.RecursionLimit = 100
+        return $serializer.Serialize($Value)
+    }
+
+    return ConvertTo-Json $Value -Depth 20
 }
 
 function Read-JsonDocument {
@@ -111,7 +137,7 @@ function Write-JsonDocument {
 
     $tempPath = Join-Path $directory ([System.IO.Path]::GetRandomFileName())
     try {
-        $json = ConvertTo-Json $Value -Depth 20
+        $json = ConvertTo-WireJsonString $Value
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($tempPath, $json + [Environment]::NewLine, $utf8NoBom)
         Move-Item $tempPath $TargetPath -Force
@@ -154,7 +180,7 @@ function Get-SettingsEntry {
     }
 
     if ($value -is [System.Collections.IDictionary] -or (($value -is [System.Collections.IEnumerable]) -and -not ($value -is [string]))) {
-        Write-Output (ConvertTo-Json $value -Depth 20 -Compress)
+        Write-Output (ConvertTo-WireJsonString $value)
     } else {
         Write-Output $value
     }

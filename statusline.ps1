@@ -2,7 +2,7 @@
 # v2.1 — Peak hours with auto-timezone and remote schedule
 # https://github.com/Nadav-Fux/claude-2x-statusline
 
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 
 # ANSI
 $E = [char]27
@@ -22,7 +22,7 @@ $TIERS = @{
 
 # Config
 $configPath = Join-Path $env:USERPROFILE '.claude\statusline-config.json'
-$config = @{ tier='full'; separator=' | '; mode='full'; schedule_url='https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json'; schedule_cache_hours=6 }
+$config = @{ tier='full'; separator=' | '; mode='full'; schedule_url='https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json'; schedule_cache_hours=3 }
 if (Test-Path $configPath) {
     try {
         $userCfg = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -145,7 +145,7 @@ try {
 # Timezone — auto-detect local
 $now = Get-Date
 $utcNow = $now.ToUniversalTime()
-$localOffset = [Math]::Floor(($now - $utcNow).TotalHours)
+$localOffset = ($now - $utcNow).TotalHours
 $hour = $now.Hour; $minute = $now.Minute
 # PS DayOfWeek: Sunday=0; convert to ISO: Mon=1..Sun=7
 $weekday = [int]$now.DayOfWeek; if ($weekday -eq 0) { $weekday = 7 }
@@ -173,15 +173,48 @@ $peakStart = if ($peak.start) { [int]$peak.start } else { 5 }
 $peakEnd = if ($peak.end) { [int]$peak.end } else { 11 }
 $peakDays = if ($peak.days) { @($peak.days) } else { @(1,2,3,4,5) }
 
-$peakStartLocal = (($peakStart - $ptOffset + $localOffset) % 24 + 24) % 24
-$peakEndLocal = (($peakEnd - $ptOffset + $localOffset) % 24 + 24) % 24
+function Shift-Weekday {
+    param([int]$Day, [int]$Delta)
+
+    return (((($Day - 1 + $Delta) % 7) + 7) % 7) + 1
+}
+
+$rawPeakStartLocal = $peakStart - $ptOffset + $localOffset
+$peakDayOffset = [Math]::Floor($rawPeakStartLocal / 24)
+$peakStartLocal = (($rawPeakStartLocal % 24) + 24) % 24
+$peakEndLocal = ((($peakEnd - $ptOffset + $localOffset) % 24) + 24) % 24
+$effectivePeakDays = @($peakDays | ForEach-Object { Shift-Weekday -Day ([int]$_) -Delta ([int]$peakDayOffset) })
 
 # Helpers
-function FmtDur($mins) { $h=[Math]::Floor($mins/60); $m=$mins%60; if($h -gt 0){"${h}h $("{0:D2}" -f $m)m"}else{"${m}m"} }
-function FmtSecs($s) { $h=[Math]::Floor($s/3600); $m=[Math]::Floor(($s%3600)/60); $sec=$s%60; if($h -gt 0){"${h}h$("{0:D2}" -f $m)m"}elseif($m -gt 0){"${m}m$("{0:D2}" -f $sec)s"}else{"${sec}s"} }
+function FmtDur($mins) {
+    $total = [Math]::Floor([double]$mins)
+    $h = [Math]::Floor($total / 60)
+    $m = [int]($total % 60)
+    if($h -gt 0){"${h}h $("{0:D2}" -f $m)m"}else{"${m}m"}
+}
+function FmtSecs($s) {
+    $total = [Math]::Floor([double]$s)
+    $h = [Math]::Floor($total / 3600)
+    $m = [Math]::Floor(($total % 3600) / 60)
+    $sec = [int]($total % 60)
+    if($h -gt 0){"${h}h$("{0:D2}" -f $m)m"}elseif($m -gt 0){"${m}m$("{0:D2}" -f $sec)s"}else{"${sec}s"}
+}
 function ColorPct($p) { if($p -ge 80){$script:RED}elseif($p -ge 50){$script:YELLOW}else{$script:GREEN} }
 function GitCmd { param([string[]]$a) try { $r = & git @a 2>$null; if($r){$r.Trim()}else{''} } catch { '' } }
-function FmtHour($h) { $h = ($h % 24 + 24) % 24; $ampm = if($h -lt 12){'am'}else{'pm'}; $d = $h % 12; if($d -eq 0){$d=12}; "${d}${ampm}" }
+function FmtHour($h) {
+    $normalized = (($h % 24) + 24) % 24
+    $hourPart = [Math]::Floor($normalized)
+    $minutePart = [Math]::Round(($normalized - $hourPart) * 60)
+    if ($minutePart -eq 60) {
+        $hourPart = ($hourPart + 1) % 24
+        $minutePart = 0
+    }
+    $ampm = if($hourPart -lt 12){'am'}else{'pm'}
+    $display = $hourPart % 12
+    if($display -eq 0){$display=12}
+    if ($minutePart -gt 0) { return "${display}:$('{0:D2}' -f $minutePart)${ampm}" }
+    return "${display}${ampm}"
+}
 
 # Context
 $ctx = @{ isPeak=$false; gitBranch=''; usageData=$null }
@@ -234,12 +267,15 @@ function Seg_peak_hours {
     $peakEnabled = if ($peak.enabled -ne $null) { $peak.enabled } else { $true }
     if (-not $peakEnabled) { return "${BGG} Off-Peak${RST}" }
 
-    $isPeakDay = $weekday -in $peakDays
+    $currentHour = $hour + $minute / 60.0
+    $isPeakDay = $weekday -in $effectivePeakDays
+    $prevWeekday = if ($weekday -eq 1) { 7 } else { $weekday - 1 }
+    $prevWasPeak = $prevWeekday -in $effectivePeakDays
 
     $isPeak = $false; $minsLeft = 0; $minsUntil = 0
     $peakSMins = $peakStartLocal * 60; $peakEMins = $peakEndLocal * 60
 
-    if ($isPeakDay) {
+    if ($isPeakDay -or $prevWasPeak) {
         if ($peakEMins -gt $peakSMins) {
             # Normal case
             if ($nowMins -ge $peakSMins -and $nowMins -lt $peakEMins) {
@@ -247,21 +283,21 @@ function Seg_peak_hours {
             } elseif ($nowMins -lt $peakSMins) {
                 $minsUntil = $peakSMins - $nowMins
             } else {
-                $minsUntil = MinsUntilNextPeak
+                $minsUntil = MinsUntilNextPeak -CurrentHour $currentHour -CurrentWeekday $weekday -StartLocalHour $peakStartLocal -Days $effectivePeakDays
             }
         } else {
             # Crosses midnight
-            if ($nowMins -ge $peakSMins -or $nowMins -lt $peakEMins) {
+            if (($isPeakDay -and $nowMins -ge $peakSMins) -or ($prevWasPeak -and $nowMins -lt $peakEMins)) {
                 $isPeak = $true
                 $minsLeft = if ($nowMins -ge $peakSMins) { (1440 - $nowMins) + $peakEMins } else { $peakEMins - $nowMins }
-            } elseif ($nowMins -lt $peakSMins) {
+            } elseif ($isPeakDay -and $nowMins -lt $peakSMins) {
                 $minsUntil = $peakSMins - $nowMins
             } else {
-                $minsUntil = MinsUntilNextPeak
+                $minsUntil = MinsUntilNextPeak -CurrentHour $currentHour -CurrentWeekday $weekday -StartLocalHour $peakStartLocal -Days $effectivePeakDays
             }
         }
     } else {
-        $minsUntil = MinsUntilNextPeak
+        $minsUntil = MinsUntilNextPeak -CurrentHour $currentHour -CurrentWeekday $weekday -StartLocalHour $peakStartLocal -Days $effectivePeakDays
     }
 
     $ctx.isPeak = $isPeak
@@ -283,11 +319,17 @@ function Seg_peak_hours {
 }
 
 function MinsUntilNextPeak {
-    $h = $hour + $minute / 60.0
+    param(
+        [double]$CurrentHour,
+        [int]$CurrentWeekday,
+        [double]$StartLocalHour,
+        [int[]]$Days
+    )
+
     for ($offset = 1; $offset -le 7; $offset++) {
-        $nextDay = (($weekday - 1 + $offset) % 7) + 1
-        if ($nextDay -in $peakDays) {
-            return [Math]::Floor((24 - $h) * 60) + ($offset - 1) * 1440 + [Math]::Floor($peakStartLocal * 60)
+        $nextDay = (($CurrentWeekday - 1 + $offset) % 7) + 1
+        if ($nextDay -in $Days) {
+            return [Math]::Floor((24 - $CurrentHour) * 60) + ($offset - 1) * 1440 + [Math]::Floor($StartLocalHour * 60)
         }
     }
     return 0
@@ -356,7 +398,7 @@ function Seg_env {
 }
 
 function Seg_rate_limits {
-    $cacheDir = Join-Path $env:TEMP 'claude'
+    $cacheDir = Join-Path $env:USERPROFILE '.claude'
     if (-not (Test-Path $cacheDir)) { New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null }
     $cacheFile = Join-Path $cacheDir 'statusline-usage-cache.json'
     $usageData = $null
@@ -436,7 +478,7 @@ if ($mode -eq 'full' -and $tier -eq 'full') {
     $showTimeline = if ($schedule.features -and $schedule.features.show_timeline -ne $null) { $schedule.features.show_timeline } else { $true }
     if ($showTimeline) {
         $cursorPos = $hour * 2 + $(if($minute -ge 30){1}else{0})
-        $isPeakDay = $weekday -in $peakDays
+        $isPeakDay = $weekday -in $effectivePeakDays
         $bar = ''
         for ($i = 0; $i -lt 48; $i++) {
             $h = $i / 2.0

@@ -54,7 +54,7 @@ const CONFIG_PATH = path.join(CLAUDE_DIR, 'statusline-config.json');
 const SCHEDULE_CACHE_PATH = path.join(CLAUDE_DIR, 'statusline-schedule.json');
 const CREDENTIALS_PATH = path.join(CLAUDE_DIR, '.credentials.json');
 const SETTINGS_PATH = path.join(CLAUDE_DIR, 'settings.json');
-const USAGE_CACHE_PATH = path.join(os.tmpdir(), 'claude', 'statusline-usage-cache.json');
+const USAGE_CACHE_PATH = path.join(CLAUDE_DIR, 'statusline-usage-cache.json');
 const CONTEXT_PATH = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
 
 const DEFAULT_SCHEDULE_URL = 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json';
@@ -80,6 +80,7 @@ let refreshTimer: NodeJS.Timeout | undefined;
 let cachedSchedule: Schedule | null = null;
 const TELEMETRY_URL = 'https://statusline-telemetry.nadavf.workers.dev/ping';
 const HEARTBEAT_PATH = path.join(CLAUDE_DIR, '.statusline-heartbeat');
+const TELEMETRY_ID_PATH = path.join(CLAUDE_DIR, '.statusline-telemetry-id');
 let lastHeartbeatDate = '';
 let cachedUsage: UsageData | null = null;
 let usageFetchedAt = 0;
@@ -134,8 +135,8 @@ function maybeHeartbeat() {
       const mtime = fs.statSync(HEARTBEAT_PATH).mtime.toISOString().slice(0, 10);
       if (mtime === today) { lastHeartbeatDate = today; return; }
     } catch { /* no file */ }
-    const crypto = require('crypto');
-    const uid = crypto.createHash('sha256').update(`${os.hostname()}:${os.userInfo().username}`).digest('hex').slice(0, 16);
+    const uid = getTelemetryId();
+    if (!uid) { return; }
     const payload = JSON.stringify({
       id: uid, v: '0.1.1', engine: 'vscode', tier: config.tier || 'standard',
       os: process.platform, event: 'heartbeat',
@@ -181,7 +182,7 @@ function loadConfig(): StatuslineConfig {
 // ── Schedule ──
 
 async function loadSchedule(config: StatuslineConfig): Promise<Schedule> {
-  const cacheHours = config.schedule_cache_hours ?? 6;
+  const cacheHours = config.schedule_cache_hours ?? 3;
   const scheduleUrl = config.schedule_url ?? DEFAULT_SCHEDULE_URL;
 
   // Check cache
@@ -233,11 +234,12 @@ function updatePeakItem(schedule: Schedule, showPeak: boolean) {
   const weekday = now.getDay() === 0 ? 7 : now.getDay(); // ISO weekday
 
   const peakDays = peak.days;
-  const { startLocal, endLocal } = peakHoursToLocal(schedule, localOffset);
+  const { startLocal, endLocal, peakDayOffset } = peakHoursToLocal(schedule, localOffset);
+  const effectivePeakDays = peakDays.map(day => shiftWeekday(day, peakDayOffset));
 
-  const isPeakDay = peakDays.includes(weekday);
+  const isPeakDay = effectivePeakDays.includes(weekday);
   const prevWeekday = weekday === 1 ? 7 : weekday - 1;
-  const prevWasPeak = peakDays.includes(prevWeekday);
+  const prevWasPeak = effectivePeakDays.includes(prevWeekday);
   let isPeak = false;
   let minsLeft = 0;
   let minsUntil = 0;
@@ -247,7 +249,7 @@ function updatePeakItem(schedule: Schedule, showPeak: boolean) {
       if (isPeakDay) { isPeak = hour >= startLocal && hour < endLocal; }
       if (isPeak) { minsLeft = Math.floor((endLocal - hour) * 60); }
       else if (isPeakDay && hour < startLocal) { minsUntil = Math.floor((startLocal - hour) * 60); }
-      else { minsUntil = minsUntilNextPeak(now, peakDays, startLocal); }
+      else { minsUntil = minsUntilNextPeak(now, effectivePeakDays, startLocal); }
     } else {
       if (isPeakDay && hour >= startLocal) { isPeak = true; }
       else if (prevWasPeak && hour < endLocal) { isPeak = true; }
@@ -258,11 +260,11 @@ function updatePeakItem(schedule: Schedule, showPeak: boolean) {
       } else {
         minsUntil = (isPeakDay && hour < startLocal)
           ? Math.floor((startLocal - hour) * 60)
-          : minsUntilNextPeak(now, peakDays, startLocal);
+          : minsUntilNextPeak(now, effectivePeakDays, startLocal);
       }
     }
   } else {
-    minsUntil = minsUntilNextPeak(now, peakDays, startLocal);
+    minsUntil = minsUntilNextPeak(now, effectivePeakDays, startLocal);
   }
 
   const labelPeak = peak.label_peak || 'Peak';
@@ -429,8 +431,8 @@ function loadUsageFromDisk(): UsageData | null {
 function saveUsageToDisk(data: UsageData) {
   try {
     const dir = path.dirname(USAGE_CACHE_PATH);
-    if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-    fs.writeFileSync(USAGE_CACHE_PATH, JSON.stringify(data, null, 2));
+    if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); }
+    fs.writeFileSync(USAGE_CACHE_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
   } catch { /* write failed */ }
 }
 
@@ -639,15 +641,21 @@ function getSourceOffset(tz: string): number {
   return tzOffsets[tz] ?? getPacificOffset();
 }
 
-function peakHoursToLocal(schedule: Schedule, localOffset: number): { startLocal: number; endLocal: number } {
+function peakHoursToLocal(schedule: Schedule, localOffset: number): { startLocal: number; endLocal: number; peakDayOffset: number } {
   const peak = schedule.peak;
   const startH = peak.start;
   const endH = peak.end;
   const srcOffset = getSourceOffset(peak.tz);
 
-  const startLocal = ((startH - srcOffset + localOffset) % 24 + 24) % 24;
+  const rawStartLocal = startH - srcOffset + localOffset;
+  const peakDayOffset = Math.floor(rawStartLocal / 24);
+  const startLocal = ((rawStartLocal % 24) + 24) % 24;
   const endLocal = ((endH - srcOffset + localOffset) % 24 + 24) % 24;
-  return { startLocal, endLocal };
+  return { startLocal, endLocal, peakDayOffset };
+}
+
+function shiftWeekday(day: number, delta: number): number {
+  return ((day - 1 + delta) % 7 + 7) % 7 + 1;
 }
 
 function minsUntilNextPeak(now: Date, peakDays: number[], startLocalHour: number): number {
@@ -700,4 +708,24 @@ function httpGetWithHeaders(url: string, headers: Record<string, string>): Promi
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
     req.end();
   });
+}
+
+function getTelemetryId(): string {
+  try {
+    if (!fs.existsSync(CLAUDE_DIR)) {
+      fs.mkdirSync(CLAUDE_DIR, { recursive: true, mode: 0o700 });
+    }
+    if (fs.existsSync(TELEMETRY_ID_PATH)) {
+      const existing = fs.readFileSync(TELEMETRY_ID_PATH, 'utf8').trim().toLowerCase();
+      if (/^[0-9a-f]{16}$/.test(existing)) {
+        return existing;
+      }
+    }
+    const crypto = require('crypto');
+    const id = crypto.randomBytes(8).toString('hex');
+    fs.writeFileSync(TELEMETRY_ID_PATH, id, { mode: 0o600 });
+    return id;
+  } catch {
+    return '';
+  }
 }
