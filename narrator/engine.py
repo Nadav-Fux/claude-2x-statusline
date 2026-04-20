@@ -61,6 +61,19 @@ def _languages() -> list:
     return ["en"]
 
 
+def _directive_prefix(langs: list[str]) -> str:
+    """Return a user-facing directive prefix in the primary output language."""
+    primary = langs[0] if langs else "en"
+    if primary == "he":
+        return "הכוונה"
+    return "Focus note"
+
+
+def _format_lines(parts: list[str]) -> list[str]:
+    """Render each surfaced note on its own line for better bidi stability."""
+    return [f"-> {part}" for part in parts if part]
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -139,11 +152,11 @@ def _run_inner(mode: str) -> Optional[str]:
         return None
 
     langs = _languages()
-    rules_text = " · ".join(i.text for i in insights)
+    rules_text = [i.text for i in insights]
 
     # Build Hebrew line if requested
     he_parts = [i.text_he for i in insights if i.text_he]
-    rules_text_he = " · ".join(he_parts) if he_parts else ""
+    rules_text_he = he_parts
 
     # ── 7. Haiku gate ─────────────────────────────────────────────────────────
     haiku_text: Optional[str] = None
@@ -157,24 +170,19 @@ def _run_inner(mode: str) -> Optional[str]:
 
     # ── 8. Build output ───────────────────────────────────────────────────────
     # Assemble narrator line(s) respecting language selection
-    lines: list = []
+    lines: list[str] = []
     if "en" in langs:
-        lines.append(rules_text)
+        lines.extend(_format_lines(rules_text))
     if "he" in langs and rules_text_he:
-        lines.append(rules_text_he)
+        lines.extend(_format_lines(rules_text_he))
     # If only "he" selected but no Hebrew text available, fall back to English
     if not lines:
-        lines.append(rules_text)
-
-    combined = "\n".join(lines)
+        lines.extend(_format_lines(rules_text))
 
     if haiku_text:
-        combined = f"{combined}\n{haiku_text}"
+        lines.extend(_format_lines([haiku_text]))
 
-    directive = (
-        "⟨ narrator ⟩ Surface this line(s) briefly at the start of your next "
-        "response, then continue as normal:\n\n" + combined
-    )
+    directive = f"{_directive_prefix(langs)}\n" + "\n".join(lines)
 
     # ── 9. Update memory ──────────────────────────────────────────────────────
     current["last_emit_at"] = now
