@@ -10,11 +10,13 @@ The Observation dataclass is the single source of truth fed to scoring and Haiku
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -66,14 +68,36 @@ class Observation:
 
 
 # ---------------------------------------------------------------------------
-# Peak-hours helper (mirrors engines/python-engine.py logic)
+# Peak-hours helper (delegates to the authoritative python engine logic)
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=1)
+def _load_python_engine_module():
+    engine_path = Path(__file__).resolve().parent.parent / "engines" / "python-engine.py"
+    spec = importlib.util.spec_from_file_location("statusline_python_engine", engine_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load engine module from {engine_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _is_peak_hours() -> bool:
-    """Return True if current UTC hour is 14-22 (Mon-Fri)."""
-    import datetime
-    now = datetime.datetime.now(datetime.timezone.utc)
-    return now.weekday() < 5 and 14 <= now.hour < 22
+    """Return the current peak-hours state using the runtime schedule logic."""
+    try:
+        engine = _load_python_engine_module()
+        config = engine.load_config()
+        schedule = engine.load_schedule(config)
+        local_time, _, local_offset = engine.get_local_time()
+        ctx = {
+            "schedule": schedule,
+            "local_time": local_time,
+            "local_offset": local_offset,
+        }
+        engine.seg_peak_hours(ctx)
+        return bool(ctx.get("is_peak", False))
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +142,11 @@ def _latest_sample(state: dict) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def _trend_fields(rolling_obs: list, now: float) -> dict:
-    """Compute delta vs ~5 min and ~20 min ago from rolling_observations."""
+    """Find recent comparison baselines from rolling_observations."""
     result = {
-        "cost_delta_5m": 0.0,
-        "cost_delta_20m": 0.0,
-        "ctx_delta_5m": 0.0,
+        "cost_5m_ago": None,
+        "cost_20m_ago": None,
+        "ctx_5m_ago": None,
     }
     if not rolling_obs:
         return result
@@ -139,13 +163,13 @@ def _trend_fields(rolling_obs: list, now: float) -> dict:
     obs_5m = _closest(target_5m)
     obs_20m = _closest(target_20m)
 
-    # Only use if within 3-minute tolerance
+    # Only use if within a narrow tolerance; otherwise treat as "no baseline".
     if obs_5m and abs(obs_5m["ts"] - target_5m) < 180:
-        result["cost_delta_5m"] = obs_5m.get("cost_usd", 0.0)
-        result["ctx_delta_5m"] = obs_5m.get("ctx_pct", 0.0)
+        result["cost_5m_ago"] = obs_5m.get("cost_usd")
+        result["ctx_5m_ago"] = obs_5m.get("ctx_pct")
 
     if obs_20m and abs(obs_20m["ts"] - target_20m) < 300:
-        result["cost_delta_20m"] = obs_20m.get("cost_usd", 0.0)
+        result["cost_20m_ago"] = obs_20m.get("cost_usd")
 
     return result
 
@@ -172,11 +196,6 @@ def build(memory: dict) -> Observation:
 
     # ── rolling_state samples ────────────────────────────────────────────────
     try:
-        import sys as _sys
-        # Prefer sys.path that includes repo root
-        _repo = str(Path(__file__).resolve().parent.parent)
-        if _repo not in _sys.path:
-            _sys.path.insert(0, _repo)
         from lib import rolling_state as rs
         obs.burn_10m = rs.rolling_rate(10)
         obs.cache_delta_5m = rs.cache_delta(5)
@@ -227,14 +246,18 @@ def build(memory: dict) -> Observation:
         obs.cache_pct = obs.cache_read_tokens / total_in * 100.0
 
     # ── peak hours ──────────────────────────────────────────────────────────
-    obs.is_peak = _is_peak_hours()
+    if not stdin_data or "is_peak" not in stdin_data:
+        obs.is_peak = _is_peak_hours()
 
     # ── trend fields ─────────────────────────────────────────────────────────
     rolling_obs = current.get("rolling_observations", [])
     trends = _trend_fields(rolling_obs, now)
-    obs.cost_delta_5m = obs.cost_usd - trends["cost_delta_5m"]
-    obs.cost_delta_20m = obs.cost_usd - trends["cost_delta_20m"]
-    obs.ctx_delta_5m = obs.ctx_pct - trends["ctx_delta_5m"]
+    if trends["cost_5m_ago"] is not None:
+        obs.cost_delta_5m = obs.cost_usd - trends["cost_5m_ago"]
+    if trends["cost_20m_ago"] is not None:
+        obs.cost_delta_20m = obs.cost_usd - trends["cost_20m_ago"]
+    if trends["ctx_5m_ago"] is not None:
+        obs.ctx_delta_5m = obs.ctx_pct - trends["ctx_5m_ago"]
 
     return obs
 

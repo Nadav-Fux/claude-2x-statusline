@@ -87,14 +87,27 @@ class TestSessionStart:
         assert len(result) > 0
 
     def test_run_session_start_contains_directive(self, seeded_obs):
-        """run() output includes the ⟨ narrator ⟩ directive prefix."""
+        """run() output includes a surfaced-note directive prefix."""
         seeded_obs({
             "is_peak": False,
             "rate_limit_5h_pct": 5.0,
         })
         result = run("session_start")
         if result is not None:
-            assert "narrator" in result.lower() or "⟨" in result
+            assert "focus note" in result.lower() or "הכוונה" in result
+
+    def test_run_session_start_uses_hebrew_header_when_hebrew_is_primary(self, seeded_obs, monkeypatch):
+        """Hebrew output uses a clear Hebrew header instead of the word narrator."""
+        monkeypatch.setenv("STATUSLINE_NARRATOR_LANGS", "he")
+        seeded_obs({
+            "is_peak": False,
+            "rate_limit_5h_pct": 5.0,
+        })
+        result = run("session_start")
+        if result is not None:
+            assert result.startswith("הכוונה\n")
+            assert "-> " in result
+            assert "נרטור" not in result
 
     def test_run_session_start_no_state_file(self, tmp_narrator_memory):
         """run("session_start") works even when memory file doesn't exist."""
@@ -389,10 +402,10 @@ class TestOutputFormat:
         })
         result = run("session_start")
         if result is not None:
-            assert "narrator" in result or "⟨" in result
+            assert result.startswith("Focus note\n") or result.startswith("הכוונה\n")
 
-    def test_insights_joined_with_bullet(self, monkeypatch, seeded_obs):
-        """Multiple insights are joined with ' · '."""
+    def test_insights_render_as_multiline_arrows(self, monkeypatch, seeded_obs):
+        """Multiple insights render as separate arrow-prefixed lines."""
         seeded_obs({
             "ctx_mins_left": 20.0,    # ctx_critical
             "ctx_pct": 92.0,
@@ -403,10 +416,9 @@ class TestOutputFormat:
             "ctx_window_size": 200000,
         })
         result = run("session_start")
-        if result is not None and " · " in result:
-            # Multiple insights joined
-            parts = result.split(" · ")
-            assert len(parts) >= 2
+        if result is not None:
+            arrow_lines = [line for line in result.splitlines() if line.startswith("-> ")]
+            assert len(arrow_lines) >= 2
 
     def test_memory_updated_after_run(self, tmp_narrator_memory, seeded_obs):
         """After a successful run, prompt_count is incremented in memory."""

@@ -279,13 +279,13 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "long_session"
         results.append(Insight(
             text=(
-                f"Long session ({dur_h}h {dur_m}m) — context rot starts compounding. "
-                f"Consider /clear for a fresh start if you've moved past the original task."
+                f"Long session ({dur_h}h {dur_m}m) — older context is starting to crowd out "
+                f"what matters now. Consider /clear for a clean restart if you've moved past the original task."
             ),
             text_he=(
                 f"סשן ארוך ({dur_h} שעות {dur_m} דקות) — "
-                f"הקשב של המודל מתפזר על יותר מדי דברים ישנים. "
-                f"שקול /clear אם עברת לנושא חדש ממה שהתחלת."
+                f"מצטבר יותר מדי הקשר ישן. "
+                f"כדאי /clear לפתיחה נקייה אם כבר עברת מהמשימה המקורית."
             ),
             urgency=4,
             novelty=_novelty(key, memory),
