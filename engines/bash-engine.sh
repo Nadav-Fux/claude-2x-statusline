@@ -62,10 +62,9 @@ HEARTBEAT_FILE="$HOME/.claude/.statusline-heartbeat"
 _telemetry_opted_out=0
 if [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" = "1" ]; then
     _telemetry_opted_out=1
-elif [ -f "$HOME/.claude/statusline-config.json" ]; then
-    case "$(grep -o '"telemetry"[[:space:]]*:[[:space:]]*false' "$HOME/.claude/statusline-config.json" 2>/dev/null)" in
-        *false*) _telemetry_opted_out=1 ;;
-    esac
+elif [ -f "$HOME/.claude/statusline-config.json" ] && \
+    grep -q '"telemetry"[[:space:]]*:[[:space:]]*false' "$HOME/.claude/statusline-config.json" 2>/dev/null; then
+    _telemetry_opted_out=1
 fi
 _today=$(date -u +%Y-%m-%d)
 _do_ping=0
@@ -188,11 +187,10 @@ peak_days_csv="1,2,3,4,5"
 
 if [ -f "$SCHEDULE_CACHE" ]; then
     if command -v python3 >/dev/null 2>&1; then
-        _sched_out="$(SCHEDULE_CACHE_PATH="$SCHEDULE_CACHE" python3 -c "
-import json, os
+        _sched_out="$(python3 -c "
+import json,sys
 try:
-    with open(os.environ['SCHEDULE_CACHE_PATH'], encoding='utf-8') as handle:
-        d=json.load(handle)
+    d=json.load(open('$SCHEDULE_CACHE'))
     p=d.get('peak',{})
     print(p.get('start',5))
     print(p.get('end',11))

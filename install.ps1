@@ -262,31 +262,6 @@ function Convert-ToBashPath {
     return $Path.Replace('\', '/')
 }
 
-function Protect-CurrentUserFile {
-    param([string]$Path)
-
-    if (-not (Test-Path $Path)) {
-        return
-    }
-
-    try {
-        $identity = New-Object System.Security.Principal.NTAccount([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
-        $acl = New-Object System.Security.AccessControl.FileSecurity
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $identity,
-            [System.Security.AccessControl.FileSystemRights]::FullControl,
-            [System.Security.AccessControl.InheritanceFlags]::None,
-            [System.Security.AccessControl.PropagationFlags]::None,
-            [System.Security.AccessControl.AccessControlType]::Allow
-        )
-        $acl.SetOwner($identity)
-        $acl.SetAccessRuleProtection($true, $false)
-        $acl.AddAccessRule($rule)
-        Set-Acl -Path $Path -AclObject $acl
-    } catch {
-    }
-}
-
 function Get-TelemetryId {
     try {
         if (Test-Path $TelemetryIdFile) {
@@ -300,7 +275,6 @@ function Get-TelemetryId {
         [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
         $hex = -join ($bytes | ForEach-Object { $_.ToString('x2') })
         Set-Content -Path $TelemetryIdFile -Value $hex -Encoding ASCII
-        Protect-CurrentUserFile -Path $TelemetryIdFile
         return $hex
     } catch {
         return $null

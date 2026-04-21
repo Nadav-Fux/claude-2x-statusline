@@ -54,7 +54,7 @@ def tmp_state_dir(tmp_path, monkeypatch):
 
     Strategy: monkeypatch Path.home() so that every ``Path.home() / ...``
     call inside lib.rolling_state resolves under tmp_path instead.
-    Also re-derives the module-level _STATE_PATH, _TMP_PATH, and _LOCK_PATH
+    Also re-derives the module-level _STATE_PATH and _TMP_PATH constants
     after the patch so calls within the same test see the right paths.
     """
     fake_home = tmp_path / "home"
@@ -68,7 +68,6 @@ def tmp_state_dir(tmp_path, monkeypatch):
         rs = sys.modules["lib.rolling_state"]
         rs._STATE_PATH = fake_home / ".claude" / "statusline-state.json"
         rs._TMP_PATH = fake_home / ".claude" / "statusline-state.json.tmp"
-        rs._LOCK_PATH = fake_home / ".claude" / "statusline-state.json.lock"
 
     yield fake_home, fake_claude / "statusline-state.json"
 
