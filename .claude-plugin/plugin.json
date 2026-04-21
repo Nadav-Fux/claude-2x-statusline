@@ -10,6 +10,5 @@
   "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": ["statusline", "peak-hours", "rate-limits", "timezone", "claude-code", "narrator", "hooks"],
   "commands": "./commands/",
-  "skills": "./skills/",
-  "hooks": "./hooks/"
+  "skills": "./skills/"
 }
