@@ -6,6 +6,12 @@ All posts are **bilingual (English + Hebrew)** — English first, Hebrew below i
 
 ---
 
+## 2026-04-21
+
+- [2026-04-21 — Node parity + framed narrator notes + telemetry hard opt-out](2026-04-21-node-parity-and-narrator.md) — Finish Node narrator/runtime parity, switch Windows Git Bash fallback to `narrator/cli.js`, frame surfaced narrator notes as `//// ... ////`, sharpen generic hints, and make `STATUSLINE_DISABLE_TELEMETRY=1` apply to `doctor.sh --report` too.
+
+---
+
 ## 2026-04-20
 
 - [2026-04-20 — Plugin manifest + /narrator-lang slash command](2026-04-20-plugin-manifest-and-language-command.md) — Bump to 2.2.0, add `"hooks": "./hooks/"` to plugin.json so marketplace installs auto-wire narrator; new /narrator-lang command for runtime language switch.

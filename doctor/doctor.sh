@@ -958,8 +958,8 @@ if [ "$MODE" = "fix" ]; then
     printf '\n%d fix(es) applied. Restart Claude Code for changes to take effect.\n' $applied
 fi
 
-# ── Telemetry (opt-in via --report only) ─────────────────────────────────
-if [ "$SEND_TELEMETRY" = "1" ]; then
+# ── Telemetry (opt-in via --report only; env var can hard-disable) ───────
+if [ "$SEND_TELEMETRY" = "1" ] && [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" != "1" ]; then
   get_telemetry_id() {
     local id_file="$HOME/.claude/.statusline-telemetry-id"
     local id=""

@@ -36,6 +36,7 @@ python -m pytest tests/ --cov=lib --cov=engines --cov-report=term-missing -v
 | `test_peak_hours.py`    | `seg_peak_hours` in `engines/python-engine.py`                |
 | `test_rolling_state.py` | `lib/rolling_state.py` (Workstream B)                         |
 | `test_install_ping.py`  | first-run install ping + daily heartbeat logic                |
+| `test_doctor.py`        | doctor `--report` telemetry opt-out guard                     |
 | `node-runtime.test.mjs` | Node parity, runtime telemetry opt-out, Windows hook fallback |
 
 Worker telemetry is covered separately by `worker/worker.test.mjs` using Node's built-in `node:test` runner. It verifies `/failures` auth, aggregation across install/update/doctor events, per-OS counts, and fail-index rollups.
