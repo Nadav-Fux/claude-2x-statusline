@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const nodeEnginePath = path.join(repoRoot, 'engines', 'node-engine.js');
 const narratorHookPath = path.join(repoRoot, 'hooks', 'narrator-session-start.sh');
+const narratorCliPath = path.join(repoRoot, 'narrator', 'cli.js');
 
 function makeHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-node-'));
@@ -126,6 +127,33 @@ test('node engine skips heartbeat when STATUSLINE_DISABLE_TELEMETRY is set', () 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.existsSync(path.join(home, '.claude', '.statusline-heartbeat')), false);
     assert.equal(fs.existsSync(path.join(home, '.claude', '.statusline-telemetry-id')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node narrator output is framed as statusline text', () => {
+  const home = makeHome();
+
+  try {
+    const result = spawnSync(process.execPath, [narratorCliPath, 'session_start'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        LANG: 'en_US.UTF-8',
+        STATUSLINE_NARRATOR_ENABLED: '1',
+        STATUSLINE_NARRATOR_HAIKU: '0',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^\/\/\/\/ Statusline note \/\/\/\//);
+    const bodyLines = result.stdout.trim().split(/\r?\n/).slice(1);
+    assert.ok(bodyLines.length >= 1, result.stdout);
+    assert.ok(bodyLines.every(line => line.startsWith('//// -> ') && line.endsWith(' ////')), result.stdout);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

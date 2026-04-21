@@ -94,7 +94,9 @@ class TestSessionStart:
         })
         result = run("session_start")
         if result is not None:
-            assert "focus note" in result.lower() or "הכוונה" in result
+            assert "statusline note" in result.lower() or "הערת סטטוס" in result
+            assert result.splitlines()[0].startswith("//// ")
+            assert result.splitlines()[0].endswith(" ////")
 
     def test_run_session_start_uses_hebrew_header_when_hebrew_is_primary(self, seeded_obs, monkeypatch):
         """Hebrew output uses a clear Hebrew header instead of the word narrator."""
@@ -105,8 +107,8 @@ class TestSessionStart:
         })
         result = run("session_start")
         if result is not None:
-            assert result.startswith("הכוונה\n")
-            assert "-> " in result
+            assert result.startswith("//// הערת סטטוס ////\n")
+            assert "//// -> " in result
             assert "נרטור" not in result
 
     def test_run_session_start_no_state_file(self, tmp_narrator_memory):
@@ -402,7 +404,7 @@ class TestOutputFormat:
         })
         result = run("session_start")
         if result is not None:
-            assert result.startswith("Focus note\n") or result.startswith("הכוונה\n")
+            assert result.startswith("//// Statusline note ////\n") or result.startswith("//// הערת סטטוס ////\n")
 
     def test_insights_render_as_multiline_arrows(self, monkeypatch, seeded_obs):
         """Multiple insights render as separate arrow-prefixed lines."""
@@ -417,7 +419,7 @@ class TestOutputFormat:
         })
         result = run("session_start")
         if result is not None:
-            arrow_lines = [line for line in result.splitlines() if line.startswith("-> ")]
+            arrow_lines = [line for line in result.splitlines() if line.startswith("//// -> ") and line.endswith(" ////")]
             assert len(arrow_lines) >= 2
 
     def test_memory_updated_after_run(self, tmp_narrator_memory, seeded_obs):
