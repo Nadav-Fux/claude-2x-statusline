@@ -56,6 +56,11 @@ def tmp_telemetry_paths(tmp_path, monkeypatch):
     yield fake_home, fake_heartbeat, fake_id
 
 
+@pytest.fixture(autouse=True)
+def clear_telemetry_env(monkeypatch):
+    monkeypatch.delenv("STATUSLINE_DISABLE_TELEMETRY", raising=False)
+
+
 def _parse_payload(popen_call_args):
     """Extract and parse the JSON payload from a subprocess.Popen call.
 
@@ -134,3 +139,24 @@ def test_telemetry_disabled_skips_both(tmp_telemetry_paths):
     )
     assert not fake_id.exists(), "TELEMETRY_ID_PATH must NOT be created when telemetry disabled"
     assert not fake_heartbeat.exists(), "HEARTBEAT_PATH must NOT be created when telemetry disabled"
+
+
+def test_telemetry_env_var_skips_both(tmp_telemetry_paths, monkeypatch):
+    """With STATUSLINE_DISABLE_TELEMETRY=1, no ping is sent and no files are created."""
+    _require_engine()
+    _, fake_heartbeat, fake_id = tmp_telemetry_paths
+
+    assert not fake_id.exists(), "precondition: telemetry id absent"
+    assert not fake_heartbeat.exists(), "precondition: heartbeat absent"
+
+    monkeypatch.setenv("STATUSLINE_DISABLE_TELEMETRY", "1")
+
+    mock_popen = MagicMock()
+    with patch("subprocess.Popen", mock_popen):
+        engine.maybe_heartbeat({})
+
+    assert mock_popen.call_count == 0, (
+        f"Expected 0 Popen calls when telemetry env opt-out is set, got {mock_popen.call_count}"
+    )
+    assert not fake_id.exists(), "TELEMETRY_ID_PATH must NOT be created when env opt-out is set"
+    assert not fake_heartbeat.exists(), "HEARTBEAT_PATH must NOT be created when env opt-out is set"

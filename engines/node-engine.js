@@ -284,6 +284,26 @@ const SEGMENTS = {
     if (tier === 'minimal') return `${DIM}CTX${RST} ${colorPct(pct)}${pct}%${RST}`;
     return `${colorPct(pct)}${fmtTokens(cur)}/${fmtTokens(size)}${RST} ${colorPct(pct)}${pct}%${RST}`;
   },
+  vim_mode(ctx) {
+    const vim = ctx.stdin.vim || {};
+    const mode = vim.mode || '';
+    if (!mode) return '';
+    const label = String(mode).toUpperCase();
+    const color = mode === 'normal' ? BLUE : GREEN;
+    return `${color}${label}${RST}`;
+  },
+  agent(ctx) {
+    const parts = [];
+    const agent = ctx.stdin.agent || {};
+    const agentName = agent.name || '';
+    if (agentName) parts.push(`${CYAN}${agentName}${RST}`);
+
+    const worktree = ctx.stdin.worktree || {};
+    const worktreeName = worktree.name || '';
+    if (worktreeName) parts.push(`${DIM}wt:${worktreeName}${RST}`);
+
+    return parts.join(' ');
+  },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
   git_dirty(ctx) {
     const p = git('status','--porcelain');
@@ -442,8 +462,12 @@ function getTelemetryId() {
   } catch { return ''; }
 }
 
+function telemetryDisabled(config) {
+  return config.telemetry === false || process.env.STATUSLINE_DISABLE_TELEMETRY === '1';
+}
+
 function maybeHeartbeat(config) {
-  if (config.telemetry === false) return;
+  if (telemetryDisabled(config)) return;
   try {
     const today = new Date().toISOString().slice(0, 10);
     if (fs.existsSync(HEARTBEAT_PATH)) { if (fs.statSync(HEARTBEAT_PATH).mtime.toISOString().slice(0, 10) === today) return; }

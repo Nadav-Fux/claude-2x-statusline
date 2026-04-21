@@ -117,7 +117,7 @@ irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/instal
 
 ה-installer מדפיס בדיוק איזה runtime הוא בוחר (Python / Node.js / Bash) &mdash; שקוף לגמרי. על Windows הוא דוחה stubs של Microsoft Store ומחפש Python נייד ב-`~/tools/` ו-`AppData`.
 
-**Narrator דורש Python 3.9+.** בלעדיו ה-Narrator לא יפעל, אבל שאר ה-statusline עובד עם Node.js או Bash בלבד.
+**Narrator פועל עם Python 3.9+ או Node.js.** עם Bash בלבד אין Narrator, ועל Windows התקנת PowerShell-only מדלגת על ה-hooks עד ש-Git Bash או WSL זמינים.
 
 אם התקנת דרך plugin בלבד ועדיין אין statusline, הרץ `/statusline-init` כדי להשלים את ה-wiring המלא של `settings.json` וה-hooks.
 אחרי install או update, הרץ `/statusline-onboarding` כדי לקבל quickstart קצר עם הפקודות החשובות באמת.
@@ -240,7 +240,7 @@ export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # מינימום בין הו�
 
 הרץ `/narrate` כדי להפעיל ידנית (עוקף throttle).
 
-**מגבלה:** Narrator דורש Python 3.9+. עם Node-only אין Narrator.
+**מגבלה:** Bash-only = בלי Narrator. על Windows, אם ההתקנה נפלה ל-PowerShell-only, ה-hooks של Narrator ידולגו עד ש-Git Bash או WSL זמינים.
 
 ---
 
@@ -391,7 +391,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 - Claude Code (CLI / terminal)
 - **אחד מ:** Python 3.9+ (מומלץ, Narrator + כל הפיצ'רים) | Python 3 | Node.js | Bash
-- **Narrator**: Python 3.9+ בלבד. Node.js = בלי Narrator. Bash = statusline מינימלי בלבד.
+- **Narrator**: Python 3.9+ או Node.js. Bash = statusline מינימלי בלבד. PowerShell-only על Windows = בלי Narrator עד ש-Git Bash או WSL זמינים.
 
 </div>
 
@@ -549,7 +549,7 @@ After install or update, run `/statusline-onboarding` for a short quickstart. If
 | :--------------- | :----------------------------------- | :-------------- |
 | Python 3.9+      | Full features including Narrator     | Recommended     |
 | Python 3 (older) | All statusline features, no Narrator | 3.6+            |
-| Node.js          | All statusline features, no Narrator | Any LTS         |
+| Node.js          | All statusline features + Narrator   | Any LTS         |
 | Bash             | Minimal statusline only              | 4+              |
 
 The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rejects Microsoft Store app-execution alias stubs and probes portable install locations before falling back to system PATH.
@@ -768,7 +768,7 @@ Since last check you refactored three components while your cache warmed from 62
 Rate limits at 23%, peak hours ended — wide-open runway ahead.
 ```
 
-**Limitation:** the Haiku layer requires Python 3.9+. If you are running Node.js-only, the rules engine still fires but no Haiku call is made.
+**Limitation:** the Haiku layer requires `ANTHROPIC_API_KEY`. Python 3.9+ and Node.js can both call it. Bash-only installs do not run the narrator.
 
 ### When it fires
 
@@ -982,7 +982,7 @@ Detection order: Python &rarr; Node.js &rarr; Bash. On Windows, the installer pr
 | Feature                |   Python   | Node.js |  Bash   | PowerShell |
 | :--------------------- | :--------: | :-----: | :-----: | :--------: |
 | Full statusline        |    Yes     |   Yes   |   Yes   |    Yes     |
-| Narrator hook          | Yes (3.9+) |   No    |   No    |     No     |
+| Narrator hook          | Yes (3.9+) |   Yes   |   No    |     No     |
 | Rolling-window metrics |    Yes     |   Yes   | Partial |  Partial   |
 | `/explain` command     |    Yes     |   Yes   |   No    |     No     |
 

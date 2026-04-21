@@ -1275,9 +1275,12 @@ def _get_telemetry_id():
     except Exception:
         return ""
 
+def _telemetry_disabled(config):
+    return config.get("telemetry") is False or os.getenv("STATUSLINE_DISABLE_TELEMETRY") == "1"
+
 def maybe_heartbeat(config):
     """Send a daily heartbeat. Fire-and-forget, never blocks."""
-    if config.get("telemetry") is False:
+    if _telemetry_disabled(config):
         return
     try:
         uid = _get_telemetry_id()
