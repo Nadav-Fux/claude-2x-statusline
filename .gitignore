@@ -1,23 +1,56 @@
-# Python
+# ── Python ──
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 *.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.pytype/
 
-# Node / build
+# ── Node / build ──
 node_modules/
 vscode/out/
 *.vsix
+package-lock.json
 
-# Caches & tooling
+# ── Caches & tooling ──
 .DS_Store
+Thumbs.db
 .superpowers/
 .wrangler/
 *.log
 .env
 .env.*
 
-# IDE
+# ── IDE ──
 .idea/
 *.swp
 *.swo
+*~
+.project
+.classpath
+.settings/
+
+# ── Statusline runtime artifacts (written to ~/.claude/) ──
+# These are created during normal statusline operation and should
+# never be committed. They live in the user's home directory, but
+# listing them here prevents accidental staging if running from source.
+statusline-state.json
+statusline-state.json.tmp
+statusline-state.json.lock
+statusline-usage-cache.json
+statusline-schedule.json
+statusline-config.json
+statusline-context.json
+.statusline-heartbeat
+.statusline-telemetry-id
+narrator-memory.json
+
+# ── Review / audit docs (external, not for repo) ──
+CODE_REVIEW_*.md
+
+# ── Docs generated artifacts ──
+docs/reports/
