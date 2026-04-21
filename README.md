@@ -328,10 +328,12 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 **מה נשלח, מתי, ולמה:**
 
-| אירוע       | מתי                               | TTL       |
-| ----------- | --------------------------------- | --------- |
-| `install`   | פעם אחת למכונה (בהתקנה או בעדכון) | ללא תפוגה |
-| `heartbeat` | פעם ביום                          | 90 יום    |
+| אירוע            | מתי                               | TTL       |
+| ---------------- | --------------------------------- | --------- |
+| `install`        | פעם אחת למכונה, בזמן התקנה ראשונה | ללא תפוגה |
+| `install_result` | בסוף התקנה                        | 90 יום    |
+| `update`         | בסוף ריצת עדכון דרך המתקין        | 90 יום    |
+| `heartbeat`      | פעם ביום בזמן שימוש שוטף          | 90 יום    |
 
 **Payload:**
 
@@ -815,13 +817,13 @@ Run `/narrate` to invoke the narrator manually, bypassing the throttle.
 
 ## Telemetry &mdash; Transparency
 
-This plugin sends two kinds of pings. This section documents exactly what is sent, when, and how to stop it.
+This plugin sends installer telemetry events plus a daily heartbeat. This section documents exactly what is sent, when, and how to stop it.
 
 ### What is sent
 
 #### Install ping
 
-Sent **once per machine at install/update time** by the installer flow. Runtime engines now send only the daily heartbeat.
+Sent **once per machine at first install time** by the installer flow. Updates emit a separate `update` event, and runtime engines send only the daily heartbeat.
 
 ```json
 {
@@ -835,6 +837,10 @@ Sent **once per machine at install/update time** by the installer flow. Runtime 
 ```
 
 Stored as `install:<id>` in Cloudflare KV. **First-seen-only**: if the key already exists, the new ping is silently discarded. No TTL (permanent record of "this machine installed").
+
+#### Installer result / update events
+
+The installer also emits `install_result` after a fresh install and `update` after an update run. These events carry doctor results and runtime availability flags, and are stored with a 90-day TTL like other telemetry events.
 
 #### Daily heartbeat
 
