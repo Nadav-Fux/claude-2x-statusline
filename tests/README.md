@@ -8,6 +8,9 @@ Pytest suite for `claude-2x-statusline`.
 # All tests
 python -m pytest tests/ -v
 
+# Node runtime parity / hook fallback tests
+npm run test:runtime
+
 # Worker telemetry tests
 npm run test:worker
 
@@ -33,6 +36,7 @@ python -m pytest tests/ --cov=lib --cov=engines --cov-report=term-missing -v
 | `test_peak_hours.py`    | `seg_peak_hours` in `engines/python-engine.py`                |
 | `test_rolling_state.py` | `lib/rolling_state.py` (Workstream B)                         |
 | `test_install_ping.py`  | first-run install ping + daily heartbeat logic                |
+| `node-runtime.test.mjs` | Node parity, runtime telemetry opt-out, Windows hook fallback |
 
 Worker telemetry is covered separately by `worker/worker.test.mjs` using Node's built-in `node:test` runner. It verifies `/failures` auth, aggregation across install/update/doctor events, per-OS counts, and fail-index rollups.
 

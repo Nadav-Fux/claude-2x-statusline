@@ -3,6 +3,7 @@
   "version": "2.2.0",
   "description": "Modular statusline for Claude Code — peak hours tracker, model info, context %, rate limits, burn rate, cache efficiency",
   "scripts": {
+    "test:runtime": "node --test tests/node-runtime.test.mjs",
     "test:worker": "node --test worker/worker.test.mjs"
   },
   "bin": {
