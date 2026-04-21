@@ -32,6 +32,7 @@ DOCTOR_FAILED_IDS=""
 DOCTOR_AVAILABLE=0
 SCHEDULE_URL="$SCHEDULE_URL_DEFAULT"
 SCHEDULE_CACHE_HOURS="$SCHEDULE_CACHE_HOURS_DEFAULT"
+TELEMETRY_ENABLED=1
 
 echo ""
 echo "  ╭──────────────────────────────────────────╮"
@@ -85,17 +86,21 @@ select_tier() {
 load_existing_config() {
     [ -f "$CONFIG" ] || return 1
 
-    local config_tier config_mode config_schedule config_cache
+    local config_tier config_mode config_schedule config_cache config_telemetry
     config_tier=$(json_get "$CONFIG" tier 2>/dev/null || true)
     config_mode=$(json_get "$CONFIG" mode 2>/dev/null || true)
     config_schedule=$(json_get "$CONFIG" schedule_url 2>/dev/null || true)
     config_cache=$(json_get "$CONFIG" schedule_cache_hours 2>/dev/null || true)
+    config_telemetry=$(json_get "$CONFIG" telemetry 2>/dev/null || true)
 
     if [ -n "$config_schedule" ]; then
         SCHEDULE_URL="$config_schedule"
     fi
     if [ -n "$config_cache" ]; then
         SCHEDULE_CACHE_HOURS="$config_cache"
+    fi
+    if [ "$config_telemetry" = "false" ]; then
+        TELEMETRY_ENABLED=0
     fi
 
     if [ -n "$config_tier" ]; then
@@ -226,9 +231,14 @@ write_install_files() {
 }
 
 write_config() {
-    local config_merge config_result
-    config_merge=$(printf '{"tier":"%s","mode":"%s","schedule_url":"%s","schedule_cache_hours":%s}' \
-        "$TIER" "$MODE" "$SCHEDULE_URL" "$SCHEDULE_CACHE_HOURS")
+    local config_merge config_result escaped_schedule telemetry_fragment
+    escaped_schedule=$(json_escape "$SCHEDULE_URL")
+    telemetry_fragment=""
+    if [ "$TELEMETRY_ENABLED" = "0" ]; then
+        telemetry_fragment=',"telemetry":false'
+    fi
+    config_merge=$(printf '{"tier":"%s","mode":"%s","schedule_url":"%s","schedule_cache_hours":%s%s}' \
+        "$TIER" "$MODE" "$escaped_schedule" "$SCHEDULE_CACHE_HOURS" "$telemetry_fragment")
 
     config_result=0
     wire_json "$CONFIG" "$config_merge" || config_result=$?
@@ -466,7 +476,7 @@ PY
 
 post_telemetry() {
     local payload="$1"
-    if [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" = "1" ]; then
+    if [ "$TELEMETRY_ENABLED" = "0" ] || [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" = "1" ]; then
         return 0
     fi
     if command -v curl >/dev/null 2>&1; then
@@ -529,6 +539,7 @@ run_doctor() {
 
 send_install_telemetry() {
     local uid os_name payload failed_ids escaped_failed_ids event_name has_python has_node
+    [ "$TELEMETRY_ENABLED" = "1" ] || return 0
     uid=$(telemetry_id 2>/dev/null || true)
     [ -n "$uid" ] || return 0
 

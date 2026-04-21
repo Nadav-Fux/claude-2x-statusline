@@ -20,6 +20,7 @@ $ScheduleCache = Join-Path $ClaudeDir 'statusline-schedule.json'
 $TelemetryIdFile = Join-Path $ClaudeDir '.statusline-telemetry-id'
 $DefaultScheduleUrl = 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json'
 $DefaultScheduleCacheHours = 3
+$script:TelemetryEnabled = $true
 
 function Test-RepoRoot {
     param([string]$Path)
@@ -261,6 +262,31 @@ function Convert-ToBashPath {
     return $Path.Replace('\', '/')
 }
 
+function Protect-CurrentUserFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    try {
+        $identity = New-Object System.Security.Principal.NTAccount([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $identity,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.InheritanceFlags]::None,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        $acl.SetOwner($identity)
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule($rule)
+        Set-Acl -Path $Path -AclObject $acl
+    } catch {
+    }
+}
+
 function Get-TelemetryId {
     try {
         if (Test-Path $TelemetryIdFile) {
@@ -274,6 +300,7 @@ function Get-TelemetryId {
         [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
         $hex = -join ($bytes | ForEach-Object { $_.ToString('x2') })
         Set-Content -Path $TelemetryIdFile -Value $hex -Encoding ASCII
+        Protect-CurrentUserFile -Path $TelemetryIdFile
         return $hex
     } catch {
         return $null
@@ -283,7 +310,7 @@ function Get-TelemetryId {
 function Send-Telemetry {
     param([hashtable]$Payload)
 
-    if ($env:STATUSLINE_DISABLE_TELEMETRY -eq '1') {
+    if ($script:TelemetryEnabled -eq $false -or $env:STATUSLINE_DISABLE_TELEMETRY -eq '1') {
         return
     }
 
@@ -473,6 +500,9 @@ Sync-SourceTree -SourceDir $sourceDir -TargetDir $RepoDir
 $existingConfig = Read-ExistingConfig
 $scheduleUrl = if ($existingConfig -and $existingConfig.schedule_url) { [string]$existingConfig.schedule_url } else { $DefaultScheduleUrl }
 $scheduleCacheHours = if ($existingConfig -and $existingConfig.schedule_cache_hours) { [int]$existingConfig.schedule_cache_hours } else { $DefaultScheduleCacheHours }
+if ($existingConfig -and $existingConfig.PSObject.Properties.Name -contains 'telemetry' -and $existingConfig.telemetry -eq $false) {
+    $script:TelemetryEnabled = $false
+}
 
 $bashPath = Get-GitBashPath
 $pythonPath = Get-PythonPath
@@ -497,12 +527,16 @@ if ($pythonPath -and $python39) {
 New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $ClaudeDir 'commands') -Force | Out-Null
 
-Set-SettingsEntry -TargetPath $ConfigFile -Merge @{
+${configMerge} = @{
     tier = $selectedTier.tier
     mode = $selectedTier.mode
     schedule_url = $scheduleUrl
     schedule_cache_hours = $scheduleCacheHours
 }
+if (-not $script:TelemetryEnabled) {
+    $configMerge.telemetry = $false
+}
+Set-SettingsEntry -TargetPath $ConfigFile -Merge $configMerge
 Write-Host "  Config saved to $ConfigFile" -ForegroundColor Green
 
 $statuslineSh = Join-Path $RepoDir 'statusline.sh'
@@ -611,33 +645,35 @@ if ($doctor.fail -gt 0 -or $doctor.warn -gt 0) {
     Write-Host '  Diagnostics: all checks passed' -ForegroundColor Green
 }
 
-$uid = Get-TelemetryId
-if (-not $Update) {
+if ($script:TelemetryEnabled) {
+    $uid = Get-TelemetryId
+    if (-not $Update) {
+        Send-Telemetry -Payload @{
+            id = $uid
+            v = '2.2'
+            engine = 'installer'
+            tier = $selectedTier.tier
+            os = 'windows'
+            event = 'install'
+        }
+    }
+
+    $eventName = if ($Update) { 'update' } else { 'install_result' }
     Send-Telemetry -Payload @{
         id = $uid
         v = '2.2'
         engine = 'installer'
         tier = $selectedTier.tier
         os = 'windows'
-        event = 'install'
+        event = $eventName
+        ok = $doctor.ok
+        warn = $doctor.warn
+        fail = $doctor.fail
+        failed_ids = $doctor.failed_ids
+        ps1_only = (-not [bool]$bashPath)
+        has_python = [bool]$pythonPath
+        has_node = [bool]$nodePath
     }
-}
-
-$eventName = if ($Update) { 'update' } else { 'install_result' }
-Send-Telemetry -Payload @{
-    id = $uid
-    v = '2.2'
-    engine = 'installer'
-    tier = $selectedTier.tier
-    os = 'windows'
-    event = $eventName
-    ok = $doctor.ok
-    warn = $doctor.warn
-    fail = $doctor.fail
-    failed_ids = $doctor.failed_ids
-    ps1_only = (-not [bool]$bashPath)
-    has_python = [bool]$pythonPath
-    has_node = [bool]$nodePath
 }
 
 Write-Host ''

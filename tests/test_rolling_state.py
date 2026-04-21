@@ -36,6 +36,7 @@ def _redirect_state(tmp_state_dir, monkeypatch):
     if _RS_OK:
         rs._STATE_PATH = state_path
         rs._TMP_PATH = state_path.parent / "statusline-state.json.tmp"
+        rs._LOCK_PATH = state_path.parent / "statusline-state.json.lock"
     yield state_path
 
 
@@ -167,14 +168,8 @@ def test_cache_delta(tmp_state_dir):
 
 # ── Test 7: Concurrent writes (optional) ──────────────────────────────────────
 
-@pytest.mark.flaky(reruns=2)
 def test_concurrent_writes(tmp_state_dir):
-    """5 threads calling append_sample → final file is valid JSON.
-
-    Marked flaky: atomic rename on Windows may raise PermissionError under
-    heavy contention.  If consistently failing, skip with PYTEST_ADDOPTS or
-    mark skip in CI.
-    """
+    """5 threads calling append_sample → final file remains valid and keeps all samples."""
     _require_rs()
     errors = []
 
@@ -191,12 +186,7 @@ def test_concurrent_writes(tmp_state_dir):
         t.join()
 
     _, state_path = tmp_state_dir
-    try:
-        data = _load_state(state_path)
-        assert "samples" in data
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        pytest.skip(f"concurrent write left file in bad state (Windows race): {exc}")
-
-    # Soft assert on errors: on Windows os.replace can raise; warn, don't fail
-    if errors:
-        pytest.skip(f"concurrent PermissionError on Windows (expected): {errors[0]}")
+    data = _load_state(state_path)
+    assert errors == []
+    assert "samples" in data
+    assert len(data["samples"]) == 5

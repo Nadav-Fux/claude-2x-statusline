@@ -1,5 +1,6 @@
 {
   "tier": "full",
+  "mode": "full",
   "segments": {
     "peak_hours": true,
     "model": true,
