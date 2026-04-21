@@ -19,17 +19,17 @@ if [ -f "$RESOLVER" ]; then
     # shellcheck disable=SC1090
     . "$RESOLVER"
     PY=$(resolve_runtime python 2>/dev/null || true)
+    NODE=$(resolve_runtime node 2>/dev/null || true)
 else
     PY=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)
+    NODE=$(command -v node 2>/dev/null || true)
     case "$PY" in */WindowsApps/*|*\\WindowsApps\\*) PY="" ;; esac
 fi
 
-[ -z "$PY" ] && exit 0
-
-exec "$PY" -c "
+# Try Python narrator first (full feature parity + Haiku support)
+if [ -n "$PY" ]; then
+    exec "$PY" -c "
 import sys, io
-# Force UTF-8 stdout so the ⟨narrator⟩ directive + cost symbols don't blow up
-# under Windows cp1252.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.path.insert(0, r'$NARR_ROOT')
 try:
@@ -41,3 +41,15 @@ try:
 except Exception:
     pass
 "
+fi
+
+# Fallback: Node.js narrator (full rules engine + optional Haiku)
+if [ -n "$NODE" ]; then
+    exec "$NODE" -e "
+const path = require('path');
+const narrator = require(path.join('$NARR_ROOT', 'narrator', 'narrator-node.js'));
+(async () => { const t = await narrator.run('session_start'); if (t) process.stdout.write(t + '\n'); })();
+"
+fi
+
+exit 0
