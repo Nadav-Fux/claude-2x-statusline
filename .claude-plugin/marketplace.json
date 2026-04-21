@@ -19,7 +19,7 @@
       },
       "homepage": "https://github.com/Nadav-Fux/claude-2x-statusline",
       "tags": ["statusline", "peak-hours", "rate-limits", "narrator", "hooks"],
-      "source": "."
+      "source": "./"
     }
   ]
 }
