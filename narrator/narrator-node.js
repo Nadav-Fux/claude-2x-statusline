@@ -155,7 +155,7 @@ function buildInsights(obs, memory) {
     results.push({ text: `Spending $${effectiveBurn.toFixed(1)}/hr ${label} — steady pace for complex work. Budget OK.`, text_he: `מוציא $${effectiveBurn.toFixed(1)}/hr ${label} — קצב יציב לעבודה מורכבת. Budget בסדר.`, urgency: 4, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   } else if (effectiveBurn != null && effectiveBurn < 5 && obs.session_duration_min > 5) {
     const k = 'burn_low';
-    results.push({ text: `Spending $${effectiveBurn.toFixed(1)}/hr — cheap session, cache doing its job.`, text_he: `מוציא $${effectiveBurn.toFixed(1)}/hr — סשן זול, ה-cache עושה את שלו.`, urgency: 4, novelty: novelty(k, memory), actionability: 2, uniqueness: 5, template_key: k });
+    results.push({ text: `Spending $${effectiveBurn.toFixed(1)}/hr — cheap session, cache doing its job. Good time to batch cleanup, tests, and mechanical follow-through.`, text_he: `מוציא $${effectiveBurn.toFixed(1)}/hr — סשן זול, ה-cache עושה את שלו. זה זמן טוב לסגור cleanup, בדיקות ומשימות מכניות של follow-through.`, urgency: 4, novelty: novelty(k, memory), actionability: 2, uniqueness: 5, template_key: k });
   }
 
   if (obs.cache_pct < 50 && obs.session_duration_min > 2 && obs.total_input_tokens > 0) {
@@ -184,10 +184,10 @@ function buildInsights(obs, memory) {
     results.push({ text: `Rate limit at ${maxRl.toFixed(0)}% — close to cap. Plan break before compact.`, text_he: `ה-rate limit הגיע ל-${maxRl.toFixed(0)}% — קרוב לתקרה. תכנן הפסקה לפני /compact.`, urgency: 10, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
   } else if (obs.is_peak && maxRl < 80) {
     const k = 'peak_rate_ok';
-    results.push({ text: `Peak hours — rate limits drain faster. Budget: ${maxRl.toFixed(0)}% used.`, text_he: `שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: ${maxRl.toFixed(0)}% בשימוש.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
+    results.push({ text: `Peak hours — rate limits drain faster. Budget: ${maxRl.toFixed(0)}% used. Keep this pass focused; save broad exploration for off-peak.`, text_he: `שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: ${maxRl.toFixed(0)}% בשימוש. עדיף לשמור את הסבב הזה ממוקד, ואת החקירה הרחבה לדחות ל-off-peak.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   } else if (!obs.is_peak && maxRl < 50) {
     const k = 'off_peak_wide_open';
-    results.push({ text: `Off-peak with wide-open limits — good moment for heavy refactors.`, text_he: 'מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים.', urgency: 4, novelty: novelty(k, memory), actionability: 7, uniqueness: 10, template_key: k });
+    results.push({ text: `Off-peak with wide-open limits — good moment for heavy refactors, broad repo scans, or subagents that generate lots of output.`, text_he: 'מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים, סריקות רחבות בריפו, או subagents שמייצרים הרבה פלט.', urgency: 4, novelty: novelty(k, memory), actionability: 7, uniqueness: 10, template_key: k });
   }
 
   if (obs.session_duration_min > 120) {
@@ -268,6 +268,14 @@ function languages() {
   return ['en'];
 }
 
+function directiveLabel(langs) {
+  return langs[0] === 'he' ? 'הערת סטטוס' : 'Statusline note';
+}
+
+function frameLine(text) {
+  return `//// ${text} ////`;
+}
+
 async function run(mode) {
   try {
     if ((process.env.STATUSLINE_NARRATOR_ENABLED || '1') === '0') return null;
@@ -311,12 +319,12 @@ async function run(mode) {
 
     // Build output
     const lines = [];
-    if (langs.includes('en')) lines.push(...rulesText.map(t => `-> ${t}`));
-    if (langs.includes('he') && heParts.length) lines.push(...heParts.map(t => `-> ${t}`));
-    if (!lines.length) lines.push(...rulesText.map(t => `-> ${t}`));
-    if (haikuText) lines.push(`-> ${haikuText}`);
+    if (langs.includes('en')) lines.push(...rulesText.map(t => frameLine(`-> ${t}`)));
+    if (langs.includes('he') && heParts.length) lines.push(...heParts.map(t => frameLine(`-> ${t}`)));
+    if (!lines.length) lines.push(...rulesText.map(t => frameLine(`-> ${t}`)));
+    if (haikuText) lines.push(frameLine(`-> ${haikuText}`));
 
-    const directive = `${langs[0] === 'he' ? 'הכוונה' : 'Focus note'}\n${lines.join('\n')}`;
+    const directive = `${frameLine(directiveLabel(langs))}\n${lines.join('\n')}`;
 
     // Update memory
     data.current.last_emit_at = now;

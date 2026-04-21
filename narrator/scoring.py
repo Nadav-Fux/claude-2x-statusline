@@ -161,8 +161,10 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
     elif effective_burn is not None and effective_burn < 5.0 and obs.session_duration_min > 5:
         key = "burn_low"
         results.append(Insight(
-            text=f"Spending ${effective_burn:.1f}/hr — cheap session, cache doing its job.",
-            text_he=f"מוציא ${effective_burn:.1f}/hr — סשן זול, ה-cache עושה את שלו.",
+            text=f"Spending ${effective_burn:.1f}/hr — cheap session, cache doing its job. "
+                 f"Good time to batch cleanup, tests, and mechanical follow-through.",
+            text_he=f"מוציא ${effective_burn:.1f}/hr — סשן זול, ה-cache עושה את שלו. "
+                    f"זה זמן טוב לסגור cleanup, בדיקות ומשימות מכניות של follow-through.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=2,
@@ -248,8 +250,10 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
     elif obs.is_peak and max_rl < 80:
         key = "peak_rate_ok"
         results.append(Insight(
-            text=f"Peak hours — rate limits drain faster. Budget: {max_rl:.0f}% used.",
-            text_he=f"שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: {max_rl:.0f}% בשימוש.",
+            text=f"Peak hours — rate limits drain faster. Budget: {max_rl:.0f}% used. "
+                 f"Keep this pass focused; save broad exploration for off-peak.",
+            text_he=f"שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: {max_rl:.0f}% בשימוש. "
+                    f"עדיף לשמור את הסבב הזה ממוקד, ואת החקירה הרחבה לדחות ל-off-peak.",
             urgency=7,
             novelty=_novelty(key, memory),
             actionability=5,
@@ -261,8 +265,9 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
     elif not obs.is_peak and max_rl < 50:
         key = "off_peak_wide_open"
         results.append(Insight(
-            text=f"Off-peak with wide-open limits — good moment for heavy refactors.",
-            text_he="מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים.",
+            text=f"Off-peak with wide-open limits — good moment for heavy refactors, broad repo scans, "
+                 f"or subagents that generate lots of output.",
+            text_he="מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים, סריקות רחבות בריפו, או subagents שמייצרים הרבה פלט.",
             urgency=4,
             novelty=_novelty(key, memory),
             actionability=7,

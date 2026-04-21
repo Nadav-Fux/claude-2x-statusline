@@ -65,13 +65,18 @@ def _directive_prefix(langs: list[str]) -> str:
     """Return a user-facing directive prefix in the primary output language."""
     primary = langs[0] if langs else "en"
     if primary == "he":
-        return "הכוונה"
-    return "Focus note"
+        return "הערת סטטוס"
+    return "Statusline note"
+
+
+def _frame_line(text: str) -> str:
+    """Wrap surfaced narrator output so it is visually distinct from normal text."""
+    return f"//// {text} ////"
 
 
 def _format_lines(parts: list[str]) -> list[str]:
     """Render each surfaced note on its own line for better bidi stability."""
-    return [f"-> {part}" for part in parts if part]
+    return [_frame_line(f"-> {part}") for part in parts if part]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -182,7 +187,7 @@ def _run_inner(mode: str) -> Optional[str]:
     if haiku_text:
         lines.extend(_format_lines([haiku_text]))
 
-    directive = f"{_directive_prefix(langs)}\n" + "\n".join(lines)
+    directive = f"{_frame_line(_directive_prefix(langs))}\n" + "\n".join(lines)
 
     # ── 9. Update memory ──────────────────────────────────────────────────────
     current["last_emit_at"] = now
