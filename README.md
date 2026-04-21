@@ -328,10 +328,10 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 **מה נשלח, מתי, ולמה:**
 
-| אירוע       | מתי                                      | TTL       |
-| ----------- | ---------------------------------------- | --------- |
-| `install`   | פעם אחת למכונה (בהתקנה או בהרצה הראשונה) | ללא תפוגה |
-| `heartbeat` | פעם ביום                                 | 90 יום    |
+| אירוע       | מתי                               | TTL       |
+| ----------- | --------------------------------- | --------- |
+| `install`   | פעם אחת למכונה (בהתקנה או בעדכון) | ללא תפוגה |
+| `heartbeat` | פעם ביום                          | 90 יום    |
 
 **Payload:**
 
@@ -340,7 +340,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 ```json
 {
   "id": "random 16-char hex id stored in ~/.claude/.statusline-telemetry-id",
-  "v": "2.1.0",
+  "v": "2.2",
   "engine": "python",
   "tier": "full",
   "os": "linux",
@@ -352,7 +352,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 **Endpoint:** `https://statusline-telemetry.nadavf.workers.dev/ping`
 
-**מה לא נשלח:** תוכן קבצים, נתוני שיחות, זהות אמיתית, session IDs, כתובות IP (מעבר למה ש-Cloudflare edge רואה). המזהה היחיד הוא hash חד-כיווני של hostname + username (16 תווים).
+**מה לא נשלח:** תוכן קבצים, נתוני שיחות, זהות אמיתית, session IDs, כתובות IP (מעבר למה ש-Cloudflare edge רואה). המזהה היחיד הוא מזהה אקראי מקומי בן 16 תווי hex שנשמר ב-`~/.claude/.statusline-telemetry-id`.
 
 **סטטיסטיקות חיות (שקיפות):** `https://statusline-telemetry.nadavf.workers.dev/stats`
 
@@ -826,7 +826,7 @@ Sent **once per machine at install/update time** by the installer flow. Runtime 
 ```json
 {
   "id": "random 16-char hex id stored in ~/.claude/.statusline-telemetry-id",
-  "v": "2.1.0",
+  "v": "2.2",
   "engine": "python",
   "tier": "full",
   "os": "linux",

@@ -7,12 +7,35 @@ Each sample: {"t": epoch_sec, "cost": float, "tokens_in": int,
 
 import json
 import os
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None
 
 _STATE_PATH = Path.home() / ".claude" / "statusline-state.json"
 _TMP_PATH = Path.home() / ".claude" / "statusline-state.json.tmp"
+_LOCK_PATH = Path.home() / ".claude" / "statusline-state.json.lock"
 _MAX_AGE_SECS = 3600  # 60-minute ring
+_LOCK_TIMEOUT_SECS = 0.25
+_LOCK_POLL_SECS = 0.01
+_THREAD_LOCK = threading.Lock()
+
+
+def _ensure_state_dir() -> None:
+    try:
+        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        pass
 
 
 def _load() -> dict:
@@ -31,11 +54,63 @@ def _save(state: dict) -> None:
     """Atomically write state to disk."""
     text = json.dumps(state, separators=(",", ":"))
     try:
+        _ensure_state_dir()
         _TMP_PATH.write_text(text, encoding="utf-8")
         os.replace(str(_TMP_PATH), str(_STATE_PATH))
     except OSError:
         # If we can't write, silently skip — statusline must not crash
         pass
+
+
+def _acquire_file_lock(lock_handle) -> bool:
+    deadline = time.time() + _LOCK_TIMEOUT_SECS
+    while True:
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            elif msvcrt is not None:
+                lock_handle.seek(0)
+                msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except (BlockingIOError, OSError):
+            if time.time() >= deadline:
+                return False
+            time.sleep(_LOCK_POLL_SECS)
+
+
+def _release_file_lock(lock_handle) -> None:
+    try:
+        if fcntl is not None:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        elif msvcrt is not None:
+            lock_handle.seek(0)
+            msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
+@contextmanager
+def _state_write_lock():
+    """Serialize read-modify-write cycles across threads and processes."""
+    _ensure_state_dir()
+    with _THREAD_LOCK:
+        try:
+            with _LOCK_PATH.open("a+b") as lock_handle:
+                if _LOCK_PATH.stat().st_size == 0:
+                    lock_handle.write(b"0")
+                    lock_handle.flush()
+                lock_handle.seek(0)
+
+                if not _acquire_file_lock(lock_handle):
+                    yield False
+                    return
+
+                try:
+                    yield True
+                finally:
+                    _release_file_lock(lock_handle)
+        except OSError:
+            yield False
 
 
 def _window_samples(samples: list, window_min: int) -> list:
@@ -52,23 +127,27 @@ def append_sample(
     cache_creation: int,
 ) -> None:
     """Append a new sample and evict entries older than 60 minutes."""
-    state = _load()
-    samples = state.get("samples", [])
+    with _state_write_lock() as locked:
+        if not locked:
+            return
 
-    # Evict samples older than 60 minutes
-    cutoff = time.time() - _MAX_AGE_SECS
-    samples = [s for s in samples if s["t"] >= cutoff]
+        state = _load()
+        samples = state.get("samples", [])
 
-    samples.append({
-        "t": time.time(),
-        "cost": float(cost),
-        "tokens_in": int(tokens_in),
-        "tokens_out": int(tokens_out),
-        "cache_read": int(cache_read),
-        "cache_creation": int(cache_creation),
-    })
+        # Evict samples older than 60 minutes
+        cutoff = time.time() - _MAX_AGE_SECS
+        samples = [s for s in samples if s["t"] >= cutoff]
 
-    _save({"samples": samples})
+        samples.append({
+            "t": time.time(),
+            "cost": float(cost),
+            "tokens_in": int(tokens_in),
+            "tokens_out": int(tokens_out),
+            "cache_read": int(cache_read),
+            "cache_creation": int(cache_creation),
+        })
+
+        _save({"samples": samples})
 
 
 # Minimum window span (seconds) before we trust a rolling rate.

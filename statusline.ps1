@@ -1,5 +1,5 @@
 # claude-2x-statusline - modular statusline for Claude Code (PowerShell)
-# v2.1 — Peak hours with auto-timezone and remote schedule
+# v2.2.0 — Peak hours with auto-timezone and remote schedule
 # https://github.com/Nadav-Fux/claude-2x-statusline
 
 $ErrorActionPreference = 'Stop'
@@ -27,6 +27,30 @@ if (Test-Path $configPath) {
     try {
         $userCfg = Get-Content $configPath -Raw | ConvertFrom-Json
         foreach ($p in $userCfg.PSObject.Properties) { $config[$p.Name] = $p.Value }
+    } catch {}
+}
+
+function Protect-CurrentUserFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    try {
+        $identity = New-Object System.Security.Principal.NTAccount([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $identity,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.InheritanceFlags]::None,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        $acl.SetOwner($identity)
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule($rule)
+        Set-Acl -Path $Path -AclObject $acl
     } catch {}
 }
 
@@ -421,7 +445,9 @@ function Seg_rate_limits {
             try {
                 $headers = @{ Authorization="Bearer $token"; Accept='application/json'; 'Content-Type'='application/json'; 'anthropic-beta'='oauth-2025-04-20'; 'User-Agent'='claude-code/2.1.34' }
                 $resp = Invoke-RestMethod -Uri 'https://api.anthropic.com/api/oauth/usage' -Headers $headers -TimeoutSec 5
-                $usageData = $resp; $resp | ConvertTo-Json -Depth 5 | Set-Content $cacheFile
+                $usageData = $resp
+                $resp | ConvertTo-Json -Depth 5 | Set-Content $cacheFile
+                Protect-CurrentUserFile -Path $cacheFile
             } catch {}
         }
         if (-not $usageData -and (Test-Path $cacheFile)) {
