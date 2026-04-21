@@ -158,9 +158,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\cc
 ```bash
 bash ~/.claude/cc-2x-statusline/doctor/doctor.sh
 bash ~/.claude/cc-2x-statusline/doctor/doctor.sh --fix
+bash ~/.claude/cc-2x-statusline/doctor/doctor.sh --report
 ```
 
 </div>
+
+`--report` שולח סיכום health אנונימי חד-פעמי של ספירת `ok/warn/fail` ומזהי הבדיקות שנכשלו בלבד.
 
 ---
 
@@ -186,6 +189,17 @@ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k savi
 ### Narrator Hook &mdash; הודעה מעל הפרומפט
 
 ה-Narrator מוסיף הודעה קצרה **מעל הפרומפט הבא שלך**. הוא קורא את הדשבורד ואומר מה זה אומר ומה כדאי לעשות.
+
+כל פליטה ממוסגרת במכוון כדי שיהיה ברור שזו הודעת statusline ולא טקסט רגיל של Claude:
+
+<div dir="ltr" align="left">
+
+```text
+//// Statusline note ////
+//// -> Burning $18/hr — at this rate your 5-hour budget ends in ~40 min. Consider Sonnet for simple steps. ////
+```
+
+</div>
 
 **שתי שכבות, אדיטיביות (מוצגות ביחד כשעוברים את הסף):**
 
@@ -221,7 +235,9 @@ spending $5.4/hr moderate (10m) · ctx full ~47m · cache reuse 96% ↑2.3k savi
 
 ### שפת ה-narrator
 
-זיהוי אוטומטי: אם המערכת שלך עברית (`LANG=he_IL.UTF-8` וכו') — ה-narrator מדבר עברית. אחרת אנגלית.
+זיהוי אוטומטי: אם `LC_ALL` / `LC_MESSAGES` / `LANG` מתחילים ב-`he` (`he_IL.UTF-8` וכו') — ה-narrator מדבר עברית. אחרת אנגלית.
+
+שינוי מהיר בזמן ריצה: `/narrator-lang en` / `/narrator-lang he` / `/narrator-lang en,he`.
 
 עקיפה ידנית: `STATUSLINE_NARRATOR_LANGS=en` / `=he` / `=en,he`.
 
@@ -239,6 +255,8 @@ export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # מינימום בין הו�
 </div>
 
 הרץ `/narrate` כדי להפעיל ידנית (עוקף throttle).
+
+אין צורך בריסטארט אחרי שינוי השפה; ה-hook קורא את משתני הסביבה בכל invocation.
 
 **מגבלה:** Bash-only = בלי Narrator. על Windows, אם ההתקנה נפלה ל-PowerShell-only, ה-hooks של Narrator ידולגו עד ש-Git Bash או WSL זמינים.
 
@@ -334,6 +352,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 | `install_result` | בסוף התקנה                        | 90 יום    |
 | `update`         | בסוף ריצת עדכון דרך המתקין        | 90 יום    |
 | `heartbeat`      | פעם ביום בזמן שימוש שוטף          | 90 יום    |
+| `doctor`         | רק אם מריצים `doctor.sh --report` | 90 יום    |
 
 **Payload:**
 
@@ -356,6 +375,8 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 **מה לא נשלח:** תוכן קבצים, נתוני שיחות, זהות אמיתית, session IDs, כתובות IP (מעבר למה ש-Cloudflare edge רואה). המזהה היחיד הוא מזהה אקראי מקומי בן 16 תווי hex שנשמר ב-`~/.claude/.statusline-telemetry-id`.
 
+אירוע `doctor` שולח רק סיכום אנונימי: ספירת `ok/warn/fail`, מערכת הפעלה, ו-IDs של הבדיקות שנכשלו. אין בו תוכן שיחה, תוכן קבצים, או promptים.
+
 **סטטיסטיקות חיות (שקיפות):** `https://statusline-telemetry.nadavf.workers.dev/stats`
 
 **ביטול:**
@@ -372,7 +393,19 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 </div>
 
-אחרי שמגדירים `"telemetry": false` &mdash; לא נשלח שום ping, לעולם.
+`"telemetry": false` מכבה את ה-`install_result` / `update` / `heartbeat` האוטומטיים.
+
+לכיבוי קשיח של **כל** ערוצי ה-telemetry, כולל `doctor.sh --report`:
+
+<div dir="ltr" align="left">
+
+```bash
+export STATUSLINE_DISABLE_TELEMETRY=1
+```
+
+</div>
+
+זה שימושי ל-CI, לסביבות בדיקה, או אם רוצים לוודא שהמכונה לא מוציאה שום ping בכלל.
 
 ---
 
@@ -740,6 +773,13 @@ The two invocation paths are equivalent:
 
 The statusline shows what's happening right now. The narrator hook tells you what it _means_ and what to do &mdash; as a brief message injected above your next prompt, like a co-pilot reading the dashboard and summarizing.
 
+Every emitted line is intentionally framed so Claude surfaces it as statusline text rather than ordinary chat prose:
+
+```text
+//// Statusline note ////
+//// -> Burning $18/hr — at this rate your 5-hour budget ends in ~40 min. Consider Sonnet for simple steps. ////
+```
+
 **Two tiers, additive** (both shown together when the Haiku gate passes):
 
 ### Tier 1: Rules Engine (always on)
@@ -791,8 +831,10 @@ This lets the narrator say things like "last time you were working on the auth m
 
 ### Narrator language
 
-Auto-detect: if `$LANG` / `$LC_ALL` starts with `he` (Hebrew locale),
+Auto-detect: if `$LC_ALL` / `$LC_MESSAGES` / `$LANG` starts with `he` (Hebrew locale),
 narrator emits Hebrew. Otherwise English.
+
+Runtime switch: `/narrator-lang en`, `/narrator-lang he`, `/narrator-lang en,he`.
 
 Override:
 
@@ -813,11 +855,13 @@ export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # minimum minutes between any
 
 Run `/narrate` to invoke the narrator manually, bypassing the throttle.
 
+No restart is required after changing the language; the hook reads the environment on each invocation.
+
 ---
 
 ## Telemetry &mdash; Transparency
 
-This plugin sends installer telemetry events plus a daily heartbeat. This section documents exactly what is sent, when, and how to stop it.
+This plugin sends installer telemetry events, an optional one-shot doctor report, and a daily heartbeat. This section documents exactly what is sent, when, and how to stop it.
 
 ### What is sent
 
@@ -841,6 +885,10 @@ Stored as `install:<id>` in Cloudflare KV. **First-seen-only**: if the key alrea
 #### Installer result / update events
 
 The installer also emits `install_result` after a fresh install and `update` after an update run. These events carry doctor results and runtime availability flags, and are stored with a 90-day TTL like other telemetry events.
+
+#### Doctor report
+
+Running `doctor.sh --report` sends a one-shot anonymous `doctor` event. It contains only aggregate health counts (`ok` / `warn` / `fail`), the host OS, and the IDs of failed checks.
 
 #### Daily heartbeat
 
@@ -868,7 +916,7 @@ https://statusline-telemetry.nadavf.workers.dev/stats
 
 ### How to opt out
 
-Set `"telemetry": false` in your config file. No ping will ever be sent again from that machine.
+Set `"telemetry": false` in your config file to disable automatic `install_result`, `update`, and `heartbeat` pings from that machine.
 
 ```json
 // ~/.claude/statusline-config.json
@@ -877,6 +925,14 @@ Set `"telemetry": false` in your config file. No ping will ever be sent again fr
   "telemetry": false
 }
 ```
+
+For a hard override that also blocks `doctor.sh --report`, set:
+
+```bash
+export STATUSLINE_DISABLE_TELEMETRY=1
+```
+
+This is useful for CI, test harnesses, and machines that must never emit telemetry under any circumstance.
 
 After setting this, the engine checks the flag before every ping attempt. Nothing is queued or deferred.
 
