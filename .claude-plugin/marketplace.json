@@ -1,0 +1,25 @@
+{
+  "name": "claude-2x-statusline",
+  "owner": {
+    "name": "Nadav Fux",
+    "url": "https://github.com/Nadav-Fux"
+  },
+  "metadata": {
+    "description": "Modular statusline for Claude Code with peak hours, rate limits, burn rate, cache reuse, and a narrator system.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-2x-statusline",
+      "description": "Modular statusline for Claude Code — peak hours, rate limits, rolling-window burn rate, cache reuse, plus a hook-injected narrator. Bilingual (English/Hebrew).",
+      "version": "2.2.0",
+      "author": {
+        "name": "Nadav Fux",
+        "url": "https://github.com/Nadav-Fux"
+      },
+      "homepage": "https://github.com/Nadav-Fux/claude-2x-statusline",
+      "tags": ["statusline", "peak-hours", "rate-limits", "narrator", "hooks"],
+      "source": "."
+    }
+  ]
+}
