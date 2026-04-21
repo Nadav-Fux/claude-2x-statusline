@@ -5,11 +5,12 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NARR_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+NARR_ROOT_NATIVE="$NARR_ROOT"
 
 # On Windows / Git Bash, Python can't resolve /c/Users/... style paths.
 # Convert to native form via cygpath when available.
 if command -v cygpath >/dev/null 2>&1; then
-    NARR_ROOT=$(cygpath -w "$NARR_ROOT")
+    NARR_ROOT_NATIVE=$(cygpath -w "$NARR_ROOT")
 fi
 
 RESOLVER="$NARR_ROOT/lib/resolve-runtime.sh"
@@ -26,10 +27,12 @@ fi
 
 # Try Python narrator first (full feature parity + Haiku support)
 if [ -n "$PY" ]; then
-    exec "$PY" -c "
-import sys, io
+    STATUSLINE_NARR_ROOT="$NARR_ROOT_NATIVE" exec "$PY" -c "
+import os, sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.path.insert(0, r'$NARR_ROOT')
+narr_root = os.environ.get('STATUSLINE_NARR_ROOT', '')
+if narr_root:
+    sys.path.insert(0, narr_root)
 try:
     from narrator.engine import run
     text = run('prompt_submit')
@@ -42,12 +45,9 @@ except Exception:
 fi
 
 # Fallback: Node.js narrator (full rules engine + optional Haiku)
+# Uses narrator/cli.js wrapper to avoid path-escaping issues with node -e on Windows.
 if [ -n "$NODE" ]; then
-    exec "$NODE" -e "
-const path = require('path');
-const narrator = require(path.join('$NARR_ROOT', 'narrator', 'narrator-node.js'));
-(async () => { const t = await narrator.run('prompt_submit'); if (t) process.stdout.write(t + '\n'); })();
-"
+    exec "$NODE" "$NARR_ROOT/narrator/cli.js" prompt_submit
 fi
 
 exit 0
