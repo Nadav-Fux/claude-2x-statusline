@@ -390,12 +390,11 @@ do_explain() {
 
 # ── Flags ────────────────────────────────────────────────────────────────
 MODE="report"   # report | json | fix
-SEND_TELEMETRY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --json)   MODE="json" ;;
         --fix)    MODE="fix" ;;
-        --report) SEND_TELEMETRY=1 ;;
+        --report) : ;; # No-op: telemetry is now always-on unless opted out via config
         --explain)
             # Colors must be set before do_explain; initialize them now.
             if [ ! -t 1 ]; then
@@ -421,6 +420,131 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 CONFIG="$CLAUDE_DIR/statusline-config.json"
+
+# ── 3-tier privacy / telemetry level ────────────────────────────────────
+# Reads ~/.claude/statusline-config.json (same file used by engines).
+# Decision tree:
+#   telemetry == false           → TELEMETRY_LEVEL=off
+#   diagnostics == "minimal"     → TELEMETRY_LEVEL=minimal
+#   diagnostics == "full" or missing → TELEMETRY_LEVEL=full
+_read_telemetry_level() {
+    local cfg="$CONFIG"
+    if [ ! -f "$cfg" ]; then
+        echo "full"; return
+    fi
+    # Try python for reliable JSON parsing.
+    # Probe candidates in order; skip WindowsApps stubs (exit 49 / "Microsoft Store").
+    local py=""
+    local _candidate _out _rc
+    for _candidate in python3 python; do
+        local _path
+        _path=$(command -v "$_candidate" 2>/dev/null) || continue
+        # Quick smoke-test: real Python prints a version; Store stubs exit non-zero.
+        _out=$("$_path" -c "print('ok')" 2>/dev/null)
+        _rc=$?
+        if [ "$_rc" -eq 0 ] && [ "$_out" = "ok" ]; then
+            py="$_path"; break
+        fi
+    done
+    if [ -n "$py" ]; then
+        local _result
+        _result=$("$py" - "$cfg" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        d = json.load(fh)
+    tele = d.get("telemetry", True)
+    if tele is False or str(tele).lower() == "false":
+        print("off")
+    elif d.get("diagnostics") == "minimal":
+        print("minimal")
+    else:
+        print("full")
+except Exception:
+    print("full")
+PY
+)
+        if [ -n "$_result" ]; then
+            echo "$_result"; return
+        fi
+    fi
+    # grep fallback (no working python available)
+    if grep -q '"telemetry"[[:space:]]*:[[:space:]]*false' "$cfg" 2>/dev/null; then
+        echo "off"
+    elif grep -q '"diagnostics"[[:space:]]*:[[:space:]]*"minimal"' "$cfg" 2>/dev/null; then
+        echo "minimal"
+    else
+        echo "full"
+    fi
+}
+TELEMETRY_LEVEL=$(_read_telemetry_level)
+
+# ── Stable per-machine diagnostic code ──────────────────────────────────
+# sha256(hostname:user)[:8]  — anonymous, stable across runs.
+_make_diag_code() {
+    local raw
+    raw="$(hostname 2>/dev/null):$(whoami 2>/dev/null)"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$raw" | sha256sum | cut -c1-8
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$raw" | shasum -a 256 | cut -c1-8
+    else
+        # python fallback — skip WindowsApps stubs
+        local py="" _candidate _path _out _rc
+        for _candidate in python3 python; do
+            _path=$(command -v "$_candidate" 2>/dev/null) || continue
+            _out=$("$_path" -c "print('ok')" 2>/dev/null); _rc=$?
+            if [ "$_rc" -eq 0 ] && [ "$_out" = "ok" ]; then
+                py="$_path"; break
+            fi
+        done
+        if [ -n "$py" ]; then
+            printf '%s' "$raw" | "$py" -c \
+                "import sys,hashlib; print(hashlib.sha256(sys.stdin.read().encode()).hexdigest()[:8])"
+        else
+            printf '00000000'
+        fi
+    fi
+}
+DIAG_CODE=$(_make_diag_code)
+
+# ── Sanitization ─────────────────────────────────────────────────────────
+# sanitize_report <string> → stdout
+# Replaces home paths and real hostname/username with placeholders so no
+# personally identifying paths are sent in the full diagnostic report.
+sanitize_report() {
+    local input="$1"
+    local _home _user _host
+
+    _home="$HOME"
+    _user="$(whoami 2>/dev/null)"
+    _host="$(hostname 2>/dev/null)"
+
+    # 1. Literal $HOME value  → ~/
+    if [ -n "$_home" ]; then
+        input="${input//$_home/\~}"
+    fi
+
+    # 2. Windows-style /c/Users/NAME/ (Git Bash MINGW path) → ~/
+    if [ -n "$_user" ]; then
+        input=$(printf '%s' "$input" | sed "s|/[a-zA-Z]/[Uu]sers/$_user/|~/|g")
+    fi
+
+    # 3. Remaining ~/ sequences — already canonical; nothing to do.
+
+    # 4. Actual username occurrences (case-insensitive)
+    if [ -n "$_user" ]; then
+        input=$(printf '%s' "$input" | sed "s|$_user|<user>|gI" 2>/dev/null \
+                || printf '%s' "$input" | sed "s|$_user|<user>|g")
+    fi
+
+    # 5. Actual hostname occurrences
+    if [ -n "$_host" ]; then
+        input=$(printf '%s' "$input" | sed "s|$_host|<host>|g")
+    fi
+
+    printf '%s' "$input"
+}
 
 # Shared runtime resolver (handles WindowsApps stubs + portable locations).
 # shellcheck source=../lib/resolve-runtime.sh
@@ -790,43 +914,54 @@ check_narrator_hook() {
     local py
     py=$(have_python) || py=""
     if [ -n "$py" ] && [ -f "$SETTINGS" ]; then
-        wired=$("$py" - "$SETTINGS" "$hook_ss" "$hook_ps" << 'PY' 2>/dev/null
-import json, os, sys
-
+        # Read settings.json via shell redirect (stdin) instead of passing the path
+        # as argv. This avoids MSYS-vs-Windows path translation when the bundled
+        # python is a Windows-native interpreter on Git Bash (where /c/... is not
+        # a valid path to a Windows process).
+        wired=$("$py" -c '
+import json, sys
 try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        s = json.load(f)
-
+    s = json.load(sys.stdin)
     hooks = s.get("hooks", {})
-    want = [sys.argv[2], sys.argv[3]]
-    hook_blob = json.dumps(hooks, ensure_ascii=False)
-    found = []
-
+    want = {sys.argv[1], sys.argv[2]}
+    found = set()
+    # Claude Code stores hooks as { event: [ { matcher, hooks: [ { type, command } ] } ] }.
+    # Older / flatter shapes are handled too for backwards compatibility.
     for entries in hooks.values():
-        if isinstance(entries, list):
-            for e in entries:
-                if isinstance(e, dict):
-                    found.append(e.get("command", ""))
-                elif isinstance(e, str):
-                    found.append(e)
-        elif isinstance(entries, dict):
-            found.append(entries.get("command", ""))
-        elif isinstance(entries, str):
-            found.append(entries)
-
-    def matches(target):
-        basename = os.path.basename(target)
-        return (
-            target in hook_blob
-            or basename in hook_blob
-            or any(cmd == target or target in cmd or basename in cmd for cmd in found)
-        )
-
-    print("1" if all(matches(target) for target in want) else "0")
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            if isinstance(e, str):
+                found.add(e)
+            elif isinstance(e, dict):
+                if "command" in e and isinstance(e["command"], str):
+                    found.add(e["command"])
+                inner = e.get("hooks", [])
+                if isinstance(inner, list):
+                    for h in inner:
+                        if isinstance(h, dict) and isinstance(h.get("command"), str):
+                            found.add(h["command"])
+                        elif isinstance(h, str):
+                            found.add(h)
+    import re
+    def normalize(s):
+        # Strip optional `bash ` invocation prefix.
+        if s.startswith("bash "):
+            s = s.split(" ", 1)[1]
+        # Normalize Git Bash MSYS path (/c/Users/...) to Windows-style (C:/Users/...).
+        # MSYS auto-translates argv on Windows, but JSON values are stored verbatim,
+        # so the two sides need to be brought into the same canonical form.
+        m = re.match(r"^/([a-zA-Z])/(.*)$", s)
+        if m:
+            s = m.group(1).upper() + ":/" + m.group(2)
+        # Case-insensitive on Windows drive letters.
+        return s.replace("\\", "/").lower()
+    found_norm = {normalize(c) for c in found}
+    want_norm = {normalize(c) for c in want}
+    print("1" if want_norm.issubset(found_norm) else "0")
 except Exception:
     print("0")
-PY
-        )
+' "$hook_ss" "$hook_ps" < "$SETTINGS" 2>/dev/null)
     fi
     if [ "${wired:-0}" != "1" ]; then
         add_result warn narrator_hook \
@@ -958,66 +1093,146 @@ if [ "$MODE" = "fix" ]; then
     printf '\n%d fix(es) applied. Restart Claude Code for changes to take effect.\n' $applied
 fi
 
-# ── Telemetry (opt-in via --report only; env var can hard-disable) ───────
-if [ "$SEND_TELEMETRY" = "1" ] && [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" != "1" ]; then
-  get_telemetry_id() {
-    local id_file="$HOME/.claude/.statusline-telemetry-id"
-    local id=""
-
-    mkdir -p "$HOME/.claude" >/dev/null 2>&1 || true
-    if [ -f "$id_file" ]; then
-      id=$(tr -d '\r\n' < "$id_file" | tr '[:upper:]' '[:lower:]')
-      if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
-        printf '%s' "$id"
-        return 0
-      fi
+# ── Telemetry footer line ────────────────────────────────────────────────
+# Always print unless MODE=json (the diagnostic code line goes to stdout).
+if [ "$MODE" != "json" ]; then
+    if [ "$TELEMETRY_LEVEL" = "off" ]; then
+        printf 'Telemetry: off — no diagnostics sent.\n\n'
+    else
+        printf 'Diagnostic code: %s (telemetry: %s — see README to change privacy)\n\n' \
+            "$DIAG_CODE" "$TELEMETRY_LEVEL"
     fi
+fi
 
-    if command -v python3 >/dev/null 2>&1; then
-      id=$(python3 - <<'PY'
-import secrets
-
-print(secrets.token_hex(8))
-PY
-)
-    elif command -v python >/dev/null 2>&1; then
-      id=$(python - <<'PY'
-import secrets
-
-print(secrets.token_hex(8))
-PY
-)
-    elif command -v openssl >/dev/null 2>&1; then
-      id=$(openssl rand -hex 8 2>/dev/null | tr -d '\r\n')
-    elif [ -r /dev/urandom ]; then
-      id=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \r\n')
-    fi
-
-    if printf '%s' "$id" | grep -Eq '^[0-9a-f]{16}$'; then
-      umask 177
-      printf '%s' "$id" > "$id_file"
-      chmod 600 "$id_file" 2>/dev/null || true
-      printf '%s' "$id"
-      return 0
-    fi
-
-    return 1
-  }
-
-  # Anonymous local id, plus aggregate counts + check IDs + OS only.
-    ids_fail=""
-    for r in "${RESULTS[@]}"; do
-        status=${r%%|*}; rest=${r#*|}
-        id=${rest%%|*}
-        [ "$status" = "fail" ] && ids_fail="$ids_fail $id"
-    done
-  uid=$(get_telemetry_id 2>/dev/null || true)
-    os=$(uname -s 2>/dev/null | tr A-Z a-z)
-    payload=$(printf '{"id":"%s","v":"doctor-1","os":"%s","ok":%d,"warn":%d,"fail":%d,"failed_ids":"%s","event":"doctor"}' \
-        "$uid" "$os" $count_ok $count_warn $count_fail "$(echo "$ids_fail" | sed 's/^ //')")
+# ── Network helper ───────────────────────────────────────────────────────
+# _http_post <url> <json_payload>
+# Tries curl, then wget, then python. Runs in background; caller does not wait.
+_http_post() {
+    local url="$1"
+    local data="$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -s -o /dev/null --max-time 3 -X POST -H 'Content-Type: application/json' \
-            -d "$payload" "https://statusline-telemetry.nadavf.workers.dev/ping" &
+        curl -s -o /dev/null --max-time 5 -X POST \
+            -H 'Content-Type: application/json' \
+            -d "$data" "$url" &
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O /dev/null --timeout=5 \
+            --post-data="$data" \
+            --header='Content-Type: application/json' \
+            "$url" &
+    else
+        # python fallback — skip WindowsApps stubs
+        local py="" _candidate _path _out _rc
+        for _candidate in python3 python; do
+            _path=$(command -v "$_candidate" 2>/dev/null) || continue
+            _out=$("$_path" -c "print('ok')" 2>/dev/null); _rc=$?
+            if [ "$_rc" -eq 0 ] && [ "$_out" = "ok" ]; then
+                py="$_path"; break
+            fi
+        done
+        if [ -n "$py" ]; then
+            "$py" - "$url" "$data" <<'PY' &
+import sys, urllib.request, json as _json
+try:
+    req = urllib.request.Request(
+        sys.argv[1],
+        data=sys.argv[2].encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    urllib.request.urlopen(req, timeout=5)
+except Exception:
+    pass
+PY
+        fi
+    fi
+}
+
+# ── Summary ping (minimal + full) ────────────────────────────────────────
+# Sends aggregate counts + failed check IDs. Same as the old --report ping,
+# now triggered automatically whenever TELEMETRY_LEVEL != off.
+_send_summary_ping() {
+    local ids_fail=""
+    for r in "${RESULTS[@]}"; do
+        local _s=${r%%|*}; local _rest=${r#*|}
+        local _id=${_rest%%|*}
+        [ "$_s" = "fail" ] && ids_fail="$ids_fail $_id"
+    done
+    ids_fail=$(printf '%s' "$ids_fail" | sed 's/^ //')
+    local os
+    os=$(uname -s 2>/dev/null | tr A-Z a-z)
+    local payload
+    payload=$(printf '{"id":"%s","v":"doctor-1","os":"%s","ok":%d,"warn":%d,"fail":%d,"failed_ids":"%s","event":"doctor"}' \
+        "$DIAG_CODE" "$os" "$count_ok" "$count_warn" "$count_fail" "$ids_fail")
+    _http_post "https://statusline-telemetry.nadavf.workers.dev/ping" "$payload"
+}
+
+# ── Full diagnostic upload (full level, failures only) ───────────────────
+_send_full_report() {
+    # Build checks array for JSON
+    local checks_json="["
+    local first=1
+    for r in "${RESULTS[@]}"; do
+        local _status=${r%%|*}; local _rest=${r#*|}
+        local _id=${_rest%%|*}; _rest=${_rest#*|}
+        local _title=${_rest%%|*}; _rest=${_rest#*|}
+        local _detail=${_rest%%|*}
+        _detail=$(sanitize_report "$_detail")
+        # Escape for JSON
+        _id=$(printf '%s' "$_id" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        _title=$(printf '%s' "$_title" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        _detail=$(printf '%s' "$_detail" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        [ "$first" = "1" ] || checks_json="$checks_json,"
+        if [ "$_status" = "fail" ]; then
+            checks_json="${checks_json}{\"id\":\"$_id\",\"status\":\"$_status\",\"message\":\"$_title — $_detail\"}"
+        else
+            checks_json="${checks_json}{\"id\":\"$_id\",\"status\":\"$_status\"}"
+        fi
+        first=0
+    done
+    checks_json="$checks_json]"
+
+    # Build full text report (sanitized)
+    local report_text
+    report_text=$(sanitize_report "$(
+        for r in "${RESULTS[@]}"; do
+            local _s=${r%%|*}; local _rest=${r#*|}
+            local _id=${_rest%%|*}; _rest=${_rest#*|}
+            local _title=${_rest%%|*}; _rest=${_rest#*|}
+            local _detail=${_rest%%|*}
+            printf '%s %s: %s\n' "$_s" "$_id" "$_title"
+            [ -n "$_detail" ] && printf '  %s\n' "$_detail"
+        done
+        printf '\nenv: os=%s diag=%s\n' "$(uname -s 2>/dev/null)" "$DIAG_CODE"
+    )")
+
+    # Escape report_text for JSON embedding
+    report_text=$(printf '%s' "$report_text" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' | tr -d '\n')
+    report_text="${report_text%\\n}"  # trim trailing \n
+
+    local os plugin_version
+    os=$(uname -s 2>/dev/null | tr A-Z a-z)
+    plugin_version="2.2.0"
+
+    # Determine active runtime label
+    local runtime="bash"
+    if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+        runtime="python"
+    elif command -v node >/dev/null 2>&1; then
+        runtime="node"
+    fi
+
+    local payload
+    payload=$(printf '{"code":"%s","v":"doctor-2","os":"%s","report":"%s","checks":%s,"meta":{"plugin_version":"%s","runtime":"%s","tier":"full"}}' \
+        "$DIAG_CODE" "$os" "$report_text" "$checks_json" "$plugin_version" "$runtime")
+
+    _http_post "https://statusline-telemetry.nadavf.workers.dev/doctor/submit" "$payload"
+}
+
+# ── Dispatch telemetry based on level ────────────────────────────────────
+if [ "$TELEMETRY_LEVEL" != "off" ]; then
+    _send_summary_ping
+    if [ "$TELEMETRY_LEVEL" = "full" ] && [ "$count_fail" -gt 0 ]; then
+        _send_full_report
     fi
 fi
 
