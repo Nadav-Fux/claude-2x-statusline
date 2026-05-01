@@ -116,6 +116,28 @@ DEFAULT_SCHEDULE = {
 }
 
 
+def normalize_schedule(value):
+    if not isinstance(value, dict):
+        return None
+
+    schedule = dict(DEFAULT_SCHEDULE)
+    schedule.update(value)
+
+    peak = schedule.get("peak")
+    if isinstance(peak, dict):
+        merged_peak = dict(DEFAULT_SCHEDULE["peak"])
+        merged_peak.update(peak)
+        schedule["peak"] = merged_peak
+    else:
+        schedule["peak"] = dict(DEFAULT_SCHEDULE["peak"])
+
+    for key in ("features", "banner", "release", "labels"):
+        if not isinstance(schedule.get(key), dict):
+            schedule[key] = dict(DEFAULT_SCHEDULE.get(key, {}))
+
+    return schedule
+
+
 def parse_version(value):
     core = str(value or "").split("-", 1)[0].split("+", 1)[0]
     parts = []
@@ -230,7 +252,9 @@ def load_schedule(config):
     if cache_path.exists():
         try:
             age_hours = (time.time() - cache_path.stat().st_mtime) / 3600
-            cached = json.loads(cache_path.read_text())
+            cached = normalize_schedule(json.loads(cache_path.read_text()))
+            if cached is None:
+                raise ValueError("invalid schedule cache")
             # Remote schedule can override cache TTL
             remote_ttl = cached.get("cache_hours")
             effective_ttl = remote_ttl if remote_ttl else cache_hours
@@ -249,7 +273,9 @@ def load_schedule(config):
                 headers={"User-Agent": "claude-statusline/2.1", "Accept": "application/json"},
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
+                data = normalize_schedule(json.loads(resp.read()))
+                if data is None:
+                    raise ValueError("invalid schedule payload")
                 cache_path.write_text(json.dumps(data, indent=2))
                 debug("schedule: fetched remote")
                 return data
@@ -259,7 +285,9 @@ def load_schedule(config):
     # Fallback to stale cache
     if cache_path.exists():
         try:
-            return json.loads(cache_path.read_text())
+            cached = normalize_schedule(json.loads(cache_path.read_text()))
+            if cached is not None:
+                return cached
         except Exception:
             pass
 

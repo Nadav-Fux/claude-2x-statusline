@@ -19,6 +19,10 @@ export default {
       return handleStats(request, env, cors);
     }
 
+    if (url.pathname === '/failures' && request.method === 'GET') {
+      return handleFailures(request, env, cors);
+    }
+
     if (url.pathname === '/doctor/submit' && request.method === 'POST') {
       return handleDoctorSubmit(request, env, cors);
     }
@@ -43,8 +47,9 @@ async function handlePing(request, env, cors) {
   try {
     const body = await request.json();
     const { id, v, engine, tier, os, event } = body;
+    const failedIds = normalizeFailedIds(body.failed_ids);
 
-    if (!id || !/^[0-9a-f]{12,32}$/.test(id)) {
+    if (!id || !/^[0-9a-f]{8,32}$/.test(id)) {
       return new Response('Bad id', { status: 400, headers: cors });
     }
 
@@ -60,6 +65,27 @@ async function handlePing(request, env, cors) {
       if (!existing) {
         await env.TELEMETRY.put(`install:${id}`, `${today}:${value}`);
       }
+    }
+
+    if (event === 'doctor' || event === 'install_result' || event === 'update') {
+      const eventRecord = {
+        id,
+        event,
+        v,
+        engine,
+        tier,
+        os,
+        ok: toInt(body.ok),
+        warn: toInt(body.warn),
+        fail: toInt(body.fail),
+        failed_ids: failedIds,
+        ps1_only: Boolean(body.ps1_only),
+        has_python: toNullableBool(body.has_python),
+        has_node: toNullableBool(body.has_node),
+        timestamp: new Date().toISOString(),
+      };
+      const eventKey = `event:${event}:${today}:${id}:${Date.now()}`;
+      await env.TELEMETRY.put(eventKey, JSON.stringify(eventRecord), { expirationTtl: 7776000 });
     }
 
     // Total ping counter (simple increment via read-modify-write)
@@ -145,6 +171,143 @@ async function checkAuth(request, env) {
     return false;
   }
   return true;
+}
+
+async function checkOptionalAuth(request, env) {
+  const url = new URL(request.url);
+  const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
+  const expectedToken = await env.TELEMETRY.get('_auth_token');
+  return !expectedToken || token === expectedToken;
+}
+
+async function handleFailures(request, env, cors) {
+  if (!await checkOptionalAuth(request, env)) {
+    return new Response('Unauthorized', { status: 401, headers: cors });
+  }
+
+  const url = new URL(request.url);
+  const days = clampInt(url.searchParams.get('days'), 7, 1, 30);
+  const aggregateFailIndex = {};
+  const byOs = {};
+  let totalInstalls = 0;
+  let totalUpdates = 0;
+  let totalFailures = 0;
+  let doctorReports = 0;
+
+  for (let i = 0; i < days; i++) {
+    const date = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    totalInstalls += await accumulateEventStats(env.TELEMETRY, `event:install_result:${date}:`, byOs, aggregateFailIndex, stats => {
+      if (stats.fail > 0) {
+        totalFailures += 1;
+      }
+    });
+    totalUpdates += await accumulateEventStats(env.TELEMETRY, `event:update:${date}:`, byOs, aggregateFailIndex, stats => {
+      if (stats.fail > 0) {
+        totalFailures += 1;
+      }
+    });
+    doctorReports += await accumulateEventStats(env.TELEMETRY, `event:doctor:${date}:`, byOs, aggregateFailIndex, () => {});
+
+    const failIndex = await env.TELEMETRY.get(`fail_index:${date}`);
+    if (failIndex) {
+      const parsed = safeJsonParse(failIndex, {});
+      for (const [id, count] of Object.entries(parsed)) {
+        aggregateFailIndex[id] = (aggregateFailIndex[id] || 0) + toInt(count);
+      }
+    }
+  }
+
+  const totalAttempts = totalInstalls + totalUpdates;
+  const topFailedChecks = Object.entries(aggregateFailIndex)
+    .map(([id, count]) => ({ id, count }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 10);
+
+  const failures = {
+    total_installs: totalInstalls,
+    total_updates: totalUpdates,
+    total_attempts: totalAttempts,
+    total_failures: totalFailures,
+    failure_rate: totalAttempts > 0 ? Number((totalFailures / totalAttempts).toFixed(4)) : 0,
+    doctor_reports: doctorReports,
+    top_failed_checks: topFailedChecks,
+    by_os: byOs,
+    days,
+    as_of: new Date().toISOString(),
+  };
+
+  return new Response(JSON.stringify(failures, null, 2), {
+    headers: { ...cors, 'Content-Type': 'application/json' },
+  });
+}
+
+async function accumulateEventStats(kv, prefix, byOs, aggregateFailIndex, onRecord) {
+  const keys = await listAllKeys(kv, prefix);
+  for (const key of keys) {
+    const raw = await kv.get(key.name);
+    const record = safeJsonParse(raw, null);
+    if (!record) {
+      continue;
+    }
+    const os = record.os || 'unknown';
+    if (!byOs[os]) {
+      byOs[os] = { attempts: 0, failures: 0 };
+    }
+    byOs[os].attempts += 1;
+    if (toInt(record.fail) > 0) {
+      byOs[os].failures += 1;
+    }
+    incrementFailureCounts(aggregateFailIndex, record.failed_ids);
+    onRecord({ fail: toInt(record.fail) });
+  }
+  return keys.length;
+}
+
+function incrementFailureCounts(target, failedIds) {
+  for (const failedId of normalizeFailedIds(failedIds)) {
+    target[failedId] = (target[failedId] || 0) + 1;
+  }
+}
+
+function normalizeFailedIds(value) {
+  if (!value) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return [...new Set(value.map(entry => String(entry).trim()).filter(Boolean))];
+  }
+  return [...new Set(String(value).split(/[\s,]+/).map(entry => entry.trim()).filter(Boolean))];
+}
+
+function safeJsonParse(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function toInt(value) {
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function toNullableBool(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  return Boolean(value);
+}
+
+function clampInt(value, fallback, min, max) {
+  const parsed = parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, min), max);
 }
 
 async function handleDoctorSubmit(request, env, cors) {

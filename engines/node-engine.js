@@ -46,6 +46,22 @@ const DEFAULT_SCHEDULE = {
   features: { show_peak_segment: true, show_rate_limits: true, show_timeline: true },
 };
 
+function normalizeSchedule(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const schedule = { ...DEFAULT_SCHEDULE, ...value };
+  if (schedule.peak && typeof schedule.peak === 'object' && !Array.isArray(schedule.peak)) {
+    schedule.peak = { ...DEFAULT_SCHEDULE.peak, ...schedule.peak };
+  } else {
+    schedule.peak = { ...DEFAULT_SCHEDULE.peak };
+  }
+  for (const key of ['features', 'banner', 'release', 'labels']) {
+    if (!schedule[key] || typeof schedule[key] !== 'object' || Array.isArray(schedule[key])) {
+      schedule[key] = { ...(DEFAULT_SCHEDULE[key] || {}) };
+    }
+  }
+  return schedule;
+}
+
 function loadLocalVersion() {
   try {
     return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || '';
@@ -111,18 +127,25 @@ function loadSchedule(config) {
   try {
     const stat = fs.statSync(cachePath);
     const ageHours = (Date.now() - stat.mtimeMs) / 3600000;
-    if (ageHours < cacheHours) return JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    if (ageHours < cacheHours) {
+      const cached = normalizeSchedule(JSON.parse(fs.readFileSync(cachePath, 'utf8')));
+      if (cached) return cached;
+    }
   } catch {}
   try {
     const url = config.schedule_url || DEFAULT_CONFIG.schedule_url;
     const result = execFileSync('curl', ['-s', '--max-time', '3', url], { timeout: 5000, encoding: 'utf8' });
     if (result && result.trim().startsWith('{')) {
-      const data = JSON.parse(result);
+      const data = normalizeSchedule(JSON.parse(result));
+      if (!data) throw new Error('invalid schedule payload');
       fs.writeFileSync(cachePath, JSON.stringify(data, null, 2));
       return data;
     }
   } catch {}
-  try { return JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch {}
+  try {
+    const cached = normalizeSchedule(JSON.parse(fs.readFileSync(cachePath, 'utf8')));
+    if (cached) return cached;
+  } catch {}
   return DEFAULT_SCHEDULE;
 }
 

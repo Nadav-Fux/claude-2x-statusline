@@ -77,6 +77,21 @@ def _local_dt(utc_epoch_seconds: float, offset_hours: float) -> datetime:
     return local.replace(tzinfo=None)  # seg_peak_hours reads .hour/.minute raw
 
 
+def test_load_schedule_invalid_cached_shape_falls_back(tmp_path, monkeypatch):
+    _require_engine()
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "statusline-schedule.json").write_text("null", encoding="utf-8")
+
+    monkeypatch.setattr(engine.Path, "home", staticmethod(lambda: tmp_path))
+
+    schedule = engine.load_schedule({"schedule_url": "", "schedule_cache_hours": 3})
+
+    assert isinstance(schedule, dict)
+    assert schedule["peak"]["start"] == engine.DEFAULT_SCHEDULE["peak"]["start"]
+    assert isinstance(schedule["features"], dict)
+
+
 # ── Case 1: Standard peak UTC 13-19, user UTC+3 ──────────────────────────────
 
 class TestStandardPeakUTCPlus3:
