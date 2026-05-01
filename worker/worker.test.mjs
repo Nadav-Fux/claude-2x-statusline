@@ -146,7 +146,7 @@ test('GET /failures aggregates install, update, doctor and fail-index rollups', 
   });
   await postPing(env, {
     ...basePayload,
-    id: 'dddddddddddd',
+    id: 'dddddddd',
     event: 'doctor',
     os: 'linux',
     ok: 3,

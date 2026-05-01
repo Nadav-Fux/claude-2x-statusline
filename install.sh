@@ -250,10 +250,16 @@ write_config() {
     fi
 }
 
+shell_quote() {
+    printf "'"
+    printf '%s' "$1" | sed "s/'/'\\\\''/g"
+    printf "'"
+}
+
 wire_settings() {
-    local statusline_cmd settings_merge settings_result settings_existed hook_merge hook_result hook_ss hook_ps
-    statusline_cmd="bash $INSTALL_DIR/statusline.sh"
-    settings_merge=$(printf '{"statusLine":{"type":"command","command":"%s"}}' "$statusline_cmd")
+    local statusline_cmd settings_merge settings_result settings_existed hook_merge hook_result hook_ss hook_ps hook_ss_cmd hook_ps_cmd
+    statusline_cmd="bash $(shell_quote "$INSTALL_DIR/statusline.sh")"
+    settings_merge=$(printf '{"statusLine":{"type":"command","command":"%s"}}' "$(json_escape "$statusline_cmd")")
     settings_result=0
     settings_existed=0
     [ -f "$SETTINGS" ] && settings_existed=1
@@ -271,6 +277,8 @@ wire_settings() {
 
     hook_ss="$INSTALL_DIR/hooks/narrator-session-start.sh"
     hook_ps="$INSTALL_DIR/hooks/narrator-prompt-submit.sh"
+    hook_ss_cmd=$(shell_quote "$hook_ss")
+    hook_ps_cmd=$(shell_quote "$hook_ps")
 
     # Migration: clean up narrator entries from older installers that wrote
     # the flat {type, command} form directly into event arrays (invalid —
@@ -332,7 +340,7 @@ PY
     fi
 
     hook_merge=$(printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s"}]}]}}' \
-        "$hook_ss" "$hook_ps")
+        "$(json_escape "$hook_ss_cmd")" "$(json_escape "$hook_ps_cmd")")
 
     hook_result=0
     wire_json "$SETTINGS" "$hook_merge" || hook_result=$?

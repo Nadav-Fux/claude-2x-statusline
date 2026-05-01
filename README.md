@@ -4,15 +4,15 @@
 
 # claude-2x-statusline
 
-### v2.1 &mdash; Modular Statusline for Claude Code
+### v2.2 &mdash; Modular Statusline for Claude Code
 
 Peak hours &bull; Rate limits &bull; Burn rate &bull; Context &bull; Git &mdash; all live, all auto-updating.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)](#installation--30-seconds)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-green)](#engines-auto-detected)
 [![Works in](https://img.shields.io/badge/Works_in-CLI%20%7C%20Terminal-blue)](#)
-[![Version](https://img.shields.io/badge/version-2.1.0-orange)](#)
+[![Version](https://img.shields.io/badge/version-2.2.0-orange)](#)
 
 **[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
 
@@ -1189,6 +1189,6 @@ cp ~/.claude/cc-2x-statusline/commands/statusline-*.md ~/.claude/commands/
 
 <div align="center">
 
-**[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; [MIT License](LICENSE) &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
+**[Live Preview & Tier Picker](https://statusline.nvision.me)** &nbsp;&bull;&nbsp; [PolyForm Noncommercial 1.0.0](LICENSE) &nbsp;&bull;&nbsp; [Copyright](COPYRIGHT.md) &nbsp;&bull;&nbsp; by [Nadav Fux](https://github.com/Nadav-Fux)
 
 </div>
