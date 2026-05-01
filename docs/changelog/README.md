@@ -10,6 +10,10 @@ All posts are **bilingual (English + Hebrew)** — English first, Hebrew below i
 
 - [2026-04-21 — Node parity + framed narrator notes + telemetry hard opt-out](2026-04-21-node-parity-and-narrator.md) — Finish Node narrator/runtime parity, switch Windows Git Bash fallback to `narrator/cli.js`, frame surfaced narrator notes as `//// ... ////`, sharpen generic hints, and make `STATUSLINE_DISABLE_TELEMETRY=1` apply to `doctor.sh --report` too.
 
+## 2026-05-02
+
+- [2026-05-02 — Doctor narrator hook detection — fix Windows/Git Bash false positive](2026-05-02-doctor-narrator-hooks-windows.md) — `doctor.sh` now reads `settings.json` via stdin, walks the nested Claude Code hook structure, and normalizes MSYS `/c/...` paths so installed narrator hooks are no longer reported as missing on Windows / Git Bash.
+
 ---
 
 ## 2026-04-20

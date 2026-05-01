@@ -4,6 +4,7 @@
 
 - שיחזור ותיקון route `/failures` ב־worker, כולל אגרגציה של כשלי install/update/doctor.
 - הרחבת קבלת קוד אבחון בן 8 תווים (hex) ב־worker וב־doctor, כך ש־doctor diagnostic code תמיד מתקבל.
+- תיקון `doctor.sh` לזיהוי narrator hooks ב־Windows/Git Bash: קריאת `settings.json` דרך stdin, תמיכה במבנה hooks המקונן של Claude Code, ונרמול נתיבי `/c/...` כדי למנוע false positive של "Narrator hooks not wired".
 - הוספת נרמול schedule ב־engines (Python/Node): JSON לא תקין או null לא מפיל את הסטטוסליין.
 - תיקון quoting של נתיבי פקודות ב־install.sh (shell_quote) — מונע תקלות בנתיבים עם רווחים.
 - יישור metadata ב־README לגרסה 2.2.0 ולרישיון PolyForm Noncommercial 1.0.0.
@@ -21,6 +22,5 @@
 
 ## הערות
 
-- לא בוצע commit אוטומטי עד עכשיו — כל השינויים היו ב־working directory בלבד.
-- שינויים קיימים/ישנים לא נגעתי בהם, רק תיקונים רלוונטיים לסקירה.
-- כל התיעוד הזה נוצר אוטומטית לפי הבקשה.
+- המסמך הזה מסכם את סדרת התיקונים שבוצעה ב־2026-05-01/02, כולל follow-up ל־`doctor.sh` עבור Windows/Git Bash.
+- התיעוד המפורט של תיקון ה־doctor נמצא גם תחת `docs/changelog/2026-05-02-doctor-narrator-hooks-windows.md`.
