@@ -136,6 +136,10 @@ test('node narrator output is framed as statusline text', () => {
   const home = makeHome();
 
   try {
+    fs.writeFileSync(
+      path.join(home, '.claude', 'statusline-usage-cache.json'),
+      JSON.stringify({ five_hour: { utilization: 85 }, seven_day: { utilization: 10 } }),
+    );
     const result = spawnSync(process.execPath, [narratorCliPath, 'session_start'], {
       cwd: repoRoot,
       encoding: 'utf8',

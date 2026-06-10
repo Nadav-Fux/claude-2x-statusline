@@ -20,6 +20,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+from lib.workflows import (
+    detect_live_workflows,
+    find_session_dir,
+    read_completed_workflows,
+)
+
 # ---------------------------------------------------------------------------
 # Dataclass
 # ---------------------------------------------------------------------------
@@ -65,6 +71,11 @@ class Observation:
 
     # Cost milestones crossed this session (for scoring freshness)
     cost_milestones_hit: list = field(default_factory=list)
+
+    # Workflow fields
+    subagent_tokens_live: int = 0
+    subagent_runs_session: int = 0
+    active_workflow_agents: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +272,18 @@ def build(memory: dict) -> Observation:
     total_in = obs.total_input_tokens
     if total_in > 0 and obs.cache_read_tokens > 0:
         obs.cache_pct = obs.cache_read_tokens / total_in * 100.0
+
+    try:
+        session_dir = find_session_dir(stdin_data or {})
+        if session_dir:
+            live_wfs = detect_live_workflows(session_dir)
+            obs.active_workflow_agents = sum(item["agents"] for item in live_wfs)
+            obs.subagent_tokens_live = sum(item["tokens"] for item in live_wfs)
+            if not live_wfs:
+                completed = read_completed_workflows(session_dir)
+                obs.subagent_runs_session = completed["run_count"]
+    except Exception:
+        pass
 
     # ── peak hours ──────────────────────────────────────────────────────────
     if not stdin_data or "is_peak" not in stdin_data:
