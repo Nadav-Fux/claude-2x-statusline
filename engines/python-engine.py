@@ -76,7 +76,7 @@ TIER_PRESETS = {
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
     "standard": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "full": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -1042,6 +1042,36 @@ def seg_rate_limits(ctx):
     return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}"
 
 
+def seg_usage_credits(ctx):
+    """Show extra_usage / SDK-credit overflow status from usage cache."""
+    usage_data = ctx.get("usage_data")
+    if not usage_data:
+        return ""
+
+    extra = usage_data.get("extra_usage", {})
+    if not extra:
+        return ""
+
+    enabled = bool(extra.get("enabled", False))
+    consumed = float(extra.get("consumed_usd", 0.0))
+    limit = extra.get("limit_usd")
+
+    if not enabled and consumed == 0:
+        return ""
+
+    if not enabled:
+        return f"{DIM}overflow: off{RST}"
+
+    if limit is not None and float(limit) > 0:
+        limit = float(limit)
+        pct = int(consumed * 100 / limit)
+        bar = build_usage_bar(pct, 8)
+        color = color_for_pct(pct)
+        return f"{DIM}overflow{RST} {bar} {color}${consumed:.2f}/${limit:.0f}{RST}"
+
+    return f"{DIM}overflow{RST} {YELLOW}${consumed:.2f}{RST}"
+
+
 def _get_oauth_token():
     """Try to find Claude OAuth token."""
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -1256,6 +1286,7 @@ SEGMENTS = {
     "lines": seg_lines,
     "ts_errors": seg_ts_errors,
     "rate_limits": seg_rate_limits,
+    "usage_credits": seg_usage_credits,
     "effort": seg_effort,
     "env": seg_env,
 }
