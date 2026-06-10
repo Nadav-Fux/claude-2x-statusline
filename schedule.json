@@ -25,6 +25,18 @@
     "expires": "",
     "color": "yellow"
   },
+  "banners": [
+    {
+      "text": "SDK credit cutover Jun 15 - claim it or claude -p stops",
+      "expires": "2026-06-15",
+      "color": "red"
+    },
+    {
+      "text": "Weekly +50% promo ends Jul 13",
+      "expires": "2026-07-13",
+      "color": "yellow"
+    }
+  ],
   "release": {
     "latest_version": "2.2.0",
     "minimum_version": "2.1.0",
