@@ -1,0 +1,24 @@
+{
+  "session_id": "sess_test_001",
+  "transcript_path": "/tmp/test-session.jsonl",
+  "model": { "display_name": "Claude Sonnet 4.6 (test)" },
+  "context_window": {
+    "context_window_size": 200000,
+    "current_usage": {
+      "input_tokens": 45000,
+      "cache_creation_input_tokens": 10000,
+      "cache_read_input_tokens": 60000,
+      "output_tokens": 2000
+    }
+  },
+  "cost": {
+    "total_cost_usd": 2.34,
+    "total_duration_ms": 1800000,
+    "total_lines_added": 150,
+    "total_lines_removed": 30
+  },
+  "cwd": "/tmp/test-project",
+  "vim": { "mode": "" },
+  "agent": { "name": "" },
+  "worktree": { "name": "" }
+}

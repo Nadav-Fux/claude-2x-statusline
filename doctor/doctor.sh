@@ -205,6 +205,22 @@ Colors:
 When it hides:
   Not shown on the minimal tier. Present on standard and full tiers."
 
+SEG_DETAIL[workflows]="What it shows:
+  When a workflow (multi-agent orchestration) is running: the number of active
+  agents and their combined current context footprint.
+  When idle: session-cumulative tokens across completed workflow runs and the
+  number of runs.
+
+Label semantics:
+  'agents ctx Σ' means context footprint: input + cache_creation + cache_read
+  tokens from each agent's most recent turn. It is NOT cumulative API billing
+  across all turns. cache_read_input_tokens are re-billed each turn, so summing
+  every usage block would inflate the number.
+
+When it hides:
+  Hidden if no session directory can be found, or if no workflows have run this
+  session."
+
 SEG_DETAIL[env]="What it shows:
   Whether Claude Code is running on the local machine or over SSH.
   'LOCAL' = local session. 'REMOTE' = SSH/remote server.
@@ -336,6 +352,7 @@ SEG_ONELINER[model]="Current model name (opus-4-7 / sonnet-4-6 / haiku-4-5)"
 SEG_ONELINER[context]="Tokens used / total context window and percentage"
 SEG_ONELINER[vim_mode]="Active Vim keybinding mode in Claude Code (NORMAL / INSERT)"
 SEG_ONELINER[agent]="Sub-agent name when running inside a multi-agent task"
+SEG_ONELINER[workflows]="Live workflow agent count + context Σ (or session cumulative)"
 SEG_ONELINER[worktree]="Git worktree name when inside a linked worktree (wt:name)"
 SEG_ONELINER[git_branch]="Currently checked-out git branch name"
 SEG_ONELINER[git_dirty]="Working-tree status: 'clean', 'N unsaved', or 'M unpushed'"
@@ -361,7 +378,7 @@ do_explain() {
         printf '%-22s %s\n' "SEGMENT" "PURPOSE"
         printf '%-22s %s\n' "──────────────────────" "──────────────────────────────────────────────────"
         local name
-        for name in peak_hours model context vim_mode agent worktree git_branch git_dirty \
+        for name in peak_hours model context vim_mode agent workflows worktree git_branch git_dirty \
                     cost effort rate_limits env burn_rate cache_hit context_depletion \
                     timeline metrics banner duration; do
             local line="${SEG_ONELINER[$name]:-}"
