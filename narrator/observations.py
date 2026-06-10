@@ -130,6 +130,18 @@ def _load_statusline_state() -> dict:
         return {"samples": []}
 
 
+def _load_usage_cache() -> dict:
+    """Load the rate-limits usage cache written by seg_rate_limits()."""
+    cache_path = Path.home() / ".claude" / "statusline-usage-cache.json"
+    try:
+        age = time.time() - cache_path.stat().st_mtime
+        if age > 300:
+            return {}
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def _latest_sample(state: dict) -> Optional[dict]:
     samples = state.get("samples", [])
     if not samples:
@@ -193,6 +205,11 @@ def build(memory: dict) -> Observation:
     stdin_data = _read_stdin_json()
     if stdin_data:
         _apply_stdin(obs, stdin_data)
+
+    usage_cache = _load_usage_cache()
+    if usage_cache:
+        obs.rate_limit_5h_pct = float(usage_cache.get("five_hour", {}).get("utilization", 0.0))
+        obs.rate_limit_7d_pct = float(usage_cache.get("seven_day", {}).get("utilization", 0.0))
 
     # ── rolling_state samples ────────────────────────────────────────────────
     try:
@@ -287,9 +304,10 @@ def _apply_stdin(obs: Observation, data: dict) -> None:
     schedule = data.get("schedule", {})
     obs.schedule_mode = schedule.get("mode", "normal")
 
-    rate_limits = data.get("rate_limits", {})
-    obs.rate_limit_5h_pct = float(rate_limits.get("pct_5h", 0.0))
-    obs.rate_limit_7d_pct = float(rate_limits.get("pct_7d", 0.0))
+    # Claude Code hook payloads do not expose pct_5h/pct_7d. The narrator
+    # populates these from statusline-usage-cache.json in build().
+    obs.rate_limit_5h_pct = 0.0
+    obs.rate_limit_7d_pct = 0.0
 
 
 def _apply_sample(obs: Observation, sample: dict) -> None:

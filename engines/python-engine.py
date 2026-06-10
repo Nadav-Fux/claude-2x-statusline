@@ -64,12 +64,12 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 #   line 4 — burn/cache metrics (build_metrics_line)
 # Do NOT alter the segment lists below; behaviour diverges only at render time.
 TIER_PRESETS = {
-    # Minimal: essentials only — peak, model, compact context, rate limit %, git
-    "minimal": ["peak_hours", "model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
+    # Minimal: essentials only — model, compact context, rate limit %, git
+    "minimal": ["model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
-    "standard": ["peak_hours", "model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "standard": ["model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["peak_hours", "model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "full": ["model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -977,14 +977,9 @@ def seg_rate_limits(ctx):
     fh_pct = int(fh.get("utilization", 0))
     tier = ctx.get("config", {}).get("tier", "standard")
 
-    # Add peak indicator to rate limit display
-    peak_tag = ""
-    if ctx.get("is_peak"):
-        peak_tag = f" {YELLOW}\u26a1{RST}"
-
     if tier == "minimal":
-        return f"{color_for_pct(fh_pct)}{fh_pct}%{RST} {DIM}5H{RST}{peak_tag}"
-    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}{peak_tag}"
+        return f"{color_for_pct(fh_pct)}{fh_pct}%{RST} {DIM}5H{RST}"
+    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}"
 
 
 def _get_oauth_token():
@@ -1081,9 +1076,6 @@ def build_rate_limits_line(ctx):
     sd_bar = build_usage_bar(sd_pct, bw)
     sd_color = color_for_pct(sd_pct)
 
-    # Peak indicator instead of 2x
-    peak_tag = f" {YELLOW}\u26a1 peak{RST}" if ctx.get("is_peak") else f" {GREEN}\u2713{RST}"
-
     fh_time = _format_reset(fh_reset, "time")
     sd_time = _format_reset(sd_reset, "datetime")
 
@@ -1096,7 +1088,7 @@ def build_rate_limits_line(ctx):
     current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
 
-    return f"{current}{peak_tag} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
+    return f"{current} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
 
 
 def _format_reset(iso_str, style="time"):
@@ -1127,9 +1119,6 @@ def build_metrics_line(ctx):
     cache = seg_cache_hit(ctx)
     if cache:
         parts.append(cache)
-
-    if ctx.get("is_peak"):
-        parts.append(f"{YELLOW}\u26a1 peak = limits drain faster{RST}")
 
     if not parts:
         return ""

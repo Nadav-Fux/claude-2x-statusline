@@ -15,9 +15,9 @@ $BGR="$E[38;5;255;48;5;124m"; $BGGRAY="$E[48;5;236m"; $BGBLUE="$E[38;5;255;48;5;
 
 # Tiers
 $TIERS = @{
-    minimal  = @('peak_hours','model','context','git_branch','git_dirty','rate_limits','effort','env')
-    standard = @('peak_hours','model','context','git_branch','git_dirty','cost','rate_limits','effort','env')
-    full     = @('peak_hours','model','context','git_branch','git_dirty','cost','effort','env')
+    minimal  = @('model','context','git_branch','git_dirty','rate_limits','effort','env')
+    standard = @('model','context','git_branch','git_dirty','cost','rate_limits','effort','env')
+    full     = @('model','context','git_branch','git_dirty','cost','effort','env')
 }
 
 # Config
@@ -432,22 +432,21 @@ function Seg_rate_limits {
     $ctx.usageData = $usageData
 
     $fhPct = if ($usageData.five_hour.utilization) { [int]$usageData.five_hour.utilization } else { 0 }
-    $peakTag = if ($ctx.isPeak) { " ${YELLOW}*${RST}" } else { '' }
     $fhColor = ColorPct $fhPct
 
     $labels = $schedule.labels
     $fhLabel = if ($labels.five_hour) { $labels.five_hour } else { '5h' }
 
-    if ($tier -eq 'minimal') { return "${fhColor}${fhPct}%${RST} ${DIM}${fhLabel}${RST}${peakTag}" }
+    if ($tier -eq 'minimal') { return "${fhColor}${fhPct}%${RST} ${DIM}${fhLabel}${RST}" }
 
     $bw = 10; $filled = [Math]::Floor($fhPct * $bw / 100); $empty = $bw - $filled
     $bar = "${fhColor}$([string]::new([char]0x25B0, $filled))${DIM}$([string]::new([char]0x25B1, $empty))${RST}"
-    return "${bar} ${fhColor}${fhPct}%${RST}${peakTag}"
+    return "${bar} ${fhColor}${fhPct}%${RST}"
 }
 
 # Segment registry
 $segFns = @{
-    banner='Seg_banner'; peak_hours='Seg_peak_hours'; promo_2x='Seg_peak_hours'
+    banner='Seg_banner'
     model='Seg_model'; context='Seg_context'; git_branch='Seg_git_branch'; git_dirty='Seg_git_dirty'
     cost='Seg_cost'; duration='Seg_duration'; rate_limits='Seg_rate_limits'; effort='Seg_effort'; env='Seg_env'
 }
@@ -499,7 +498,6 @@ if ($mode -eq 'full' -and $tier -eq 'full') {
     if ($ctx.usageData) {
         $fhPct = if($ctx.usageData.five_hour.utilization){[int]$ctx.usageData.five_hour.utilization}else{0}
         $sdPct = if($ctx.usageData.seven_day.utilization){[int]$ctx.usageData.seven_day.utilization}else{0}
-        $peakTag = if($ctx.isPeak){" ${YELLOW}* peak${RST}"}else{" ${GREEN}+${RST}"}
         $fhColor = ColorPct $fhPct; $sdColor = ColorPct $sdPct
 
         $labels = $schedule.labels
@@ -512,6 +510,6 @@ if ($mode -eq 'full' -and $tier -eq 'full') {
         $fhBar = "${fhColor}$([string]::new([char]0x25B0, $fhFilled))${DIM}$([string]::new([char]0x25B1, $fhEmpty))${RST}"
         $sdBar = "${sdColor}$([string]::new([char]0x25B0, $sdFilled))${DIM}$([string]::new([char]0x25B1, $sdEmpty))${RST}"
 
-        Write-Host "`n${DIM}|${RST} ${GREEN}>${RST} ${WHITE}${fhLabel}${RST} ${fhBar} ${fhColor}${fhPct}%${RST}${peakTag} ${DIM}.${RST} ${WHITE}${wkLabel}${RST} ${sdBar} ${sdColor}${sdPct}%${RST} ${DIM}|${RST}" -NoNewline
+        Write-Host "`n${DIM}|${RST} ${GREEN}>${RST} ${WHITE}${fhLabel}${RST} ${fhBar} ${fhColor}${fhPct}%${RST} ${DIM}.${RST} ${WHITE}${wkLabel}${RST} ${sdBar} ${sdColor}${sdPct}%${RST} ${DIM}|${RST}" -NoNewline
     }
 }
