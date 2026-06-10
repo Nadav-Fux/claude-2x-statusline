@@ -20,11 +20,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from lib.workflows import (
-    detect_live_workflows,
-    find_session_dir,
-    read_completed_workflows,
-)
+try:
+    from lib.workflows import (
+        detect_live_workflows,
+        find_session_dir,
+        read_completed_workflows,
+    )
+except ImportError:
+    detect_live_workflows = None
+    find_session_dir = None
+    read_completed_workflows = None
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -153,6 +158,20 @@ def _load_usage_cache() -> dict:
         return {}
 
 
+def _safe_utilization(block) -> float:
+    """Coerce a usage-cache window block's utilization to float.
+
+    The cache can be valid JSON with the wrong shape (e.g. five_hour: null,
+    utilization: "abc") — never let that throw; fall back to 0.0.
+    """
+    if not isinstance(block, dict):
+        return 0.0
+    try:
+        return float(block.get("utilization", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _latest_sample(state: dict) -> Optional[dict]:
     samples = state.get("samples", [])
     if not samples:
@@ -219,8 +238,8 @@ def build(memory: dict) -> Observation:
 
     usage_cache = _load_usage_cache()
     if usage_cache:
-        obs.rate_limit_5h_pct = float(usage_cache.get("five_hour", {}).get("utilization", 0.0))
-        obs.rate_limit_7d_pct = float(usage_cache.get("seven_day", {}).get("utilization", 0.0))
+        obs.rate_limit_5h_pct = _safe_utilization(usage_cache.get("five_hour"))
+        obs.rate_limit_7d_pct = _safe_utilization(usage_cache.get("seven_day"))
 
     # ── rolling_state samples ────────────────────────────────────────────────
     try:
@@ -273,17 +292,18 @@ def build(memory: dict) -> Observation:
     if total_in > 0 and obs.cache_read_tokens > 0:
         obs.cache_pct = obs.cache_read_tokens / total_in * 100.0
 
-    try:
-        session_dir = find_session_dir(stdin_data or {})
-        if session_dir:
-            live_wfs = detect_live_workflows(session_dir)
-            obs.active_workflow_agents = sum(item["agents"] for item in live_wfs)
-            obs.subagent_tokens_live = sum(item["tokens"] for item in live_wfs)
-            if not live_wfs:
-                completed = read_completed_workflows(session_dir)
-                obs.subagent_runs_session = completed["run_count"]
-    except Exception:
-        pass
+    if find_session_dir is not None:
+        try:
+            session_dir = find_session_dir(stdin_data or {})
+            if session_dir:
+                live_wfs = detect_live_workflows(session_dir)
+                obs.active_workflow_agents = sum(item["agents"] for item in live_wfs)
+                obs.subagent_tokens_live = sum(item["tokens"] for item in live_wfs)
+                if not live_wfs:
+                    completed = read_completed_workflows(session_dir)
+                    obs.subagent_runs_session = completed["run_count"]
+        except Exception:
+            pass
 
     # ── peak hours ──────────────────────────────────────────────────────────
     if not stdin_data or "is_peak" not in stdin_data:

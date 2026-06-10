@@ -132,19 +132,27 @@ const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_cre
 
 function readLastUsage(filePath) {
   try {
-    const data = fs.readFileSync(filePath);
-    const tail = data.subarray(Math.max(0, data.length - 65536)).toString('utf8');
-    const matches = [...tail.matchAll(USAGE_RE)];
-    if (!matches.length) return 0;
-    const last = matches[matches.length - 1];
-    return Number(last[1]) + Number(last[2]) + Number(last[3]);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      const chunkSize = Math.min(65536, stat.size);
+      const buffer = Buffer.alloc(chunkSize);
+      fs.readSync(fd, buffer, 0, chunkSize, Math.max(0, stat.size - chunkSize));
+      const tail = buffer.toString('utf8');
+      const matches = [...tail.matchAll(USAGE_RE)];
+      if (!matches.length) return 0;
+      const last = matches[matches.length - 1];
+      return Number(last[1]) + Number(last[2]) + Number(last[3]);
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch { return 0; }
 }
 
 function populateWorkflowObservation(obs, stdinData) {
   const tp = stdinData.transcript_path || '';
   if (!tp) return;
-  const sessionDir = path.extname(tp) === '.jsonl' ? path.dirname(tp) : tp;
+  const sessionDir = tp.endsWith('.jsonl') ? tp.slice(0, -6) : tp;
   const liveBase = path.join(sessionDir, 'subagents', 'workflows');
   const completedDir = path.join(sessionDir, 'workflows');
   let liveAgents = 0, liveTokens = 0;
@@ -164,7 +172,15 @@ function populateWorkflowObservation(obs, stdinData) {
   obs.subagent_tokens_live = liveTokens;
   if (liveAgents > 0) return;
   try {
-    obs.subagent_runs_session = fs.readdirSync(completedDir).filter(name => /^wf_.*\.json$/.test(name)).length;
+    let runs = 0;
+    for (const name of fs.readdirSync(completedDir)) {
+      if (!/^wf_.*\.json$/.test(name)) continue;
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(completedDir, name), 'utf8'));
+        if (manifest.status === 'completed') runs += 1;
+      } catch {}
+    }
+    obs.subagent_runs_session = runs;
   } catch {}
 }
 
