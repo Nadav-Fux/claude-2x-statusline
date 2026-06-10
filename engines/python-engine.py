@@ -1475,6 +1475,54 @@ def main():
         if metrics:
             print(f"\n{metrics}", end="")
 
+    try:
+        _write_vscode_context(ctx)
+    except Exception:
+        pass
+
+
+def _write_vscode_context(ctx):
+    """Write statusline data to %TEMP%/claude/statusline-context.json."""
+    import tempfile
+
+    context_dir = Path(tempfile.gettempdir()) / "claude"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    context_path = context_dir / "statusline-context.json"
+
+    usage_data = ctx.get("usage_data", {})
+    wf_live = ctx.get("_wf_live", [])
+    wf_completed = ctx.get("_wf_completed", {})
+    stdin_data = ctx.get("stdin", {})
+    cw = stdin_data.get("context_window", {})
+    current_usage = cw.get("current_usage", {})
+    current = (
+        int(current_usage.get("input_tokens", 0))
+        + int(current_usage.get("cache_creation_input_tokens", 0))
+        + int(current_usage.get("cache_read_input_tokens", 0))
+    )
+    size = int(cw.get("context_window_size", 0) or 0)
+    pct = int(current * 100 / size) if size > 0 else 0
+
+    payload = {
+        "ts": int(time.time()),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "five_hour_pct": int(usage_data.get("five_hour", {}).get("utilization", 0)),
+        "seven_day_pct": int(usage_data.get("seven_day", {}).get("utilization", 0)),
+        "cost_usd": stdin_data.get("cost", {}).get("total_cost_usd", 0),
+        "current_usage": current,
+        "context_window_size": size,
+        "pct": pct,
+        "model": stdin_data.get("model", {}).get("display_name", ""),
+        "is_peak": ctx.get("is_peak", False),
+        "active_workflow_agents": sum(item["agents"] for item in wf_live),
+        "subagent_tokens_live": sum(item["tokens"] for item in wf_live),
+        "subagent_runs_session": wf_completed.get("run_count", 0),
+    }
+
+    tmp_path = context_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(str(tmp_path), str(context_path))
+
 
 TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"
 HEARTBEAT_PATH = Path.home() / ".claude" / ".statusline-heartbeat"

@@ -45,6 +45,9 @@ interface ContextData {
   pct?: number;
   model?: string;
   updated_at?: string;
+  active_workflow_agents?: number;
+  subagent_tokens_live?: number;
+  subagent_runs_session?: number;
 }
 
 // ── Constants ──
@@ -508,7 +511,10 @@ function updateContextItem(tier: string) {
     const sizeStr = fmtTokens(size);
     const bar = batteryBar(pct);
 
-    ctxItem.text = `$(symbol-ruler) ${curStr}/${sizeStr} ${bar} ${pct}%`;
+    const activeAgents = data.active_workflow_agents || 0;
+    const workflowTokens = data.subagent_tokens_live || 0;
+    const workflowSuffix = activeAgents > 0 ? ` $(hubot) ${activeAgents}/${fmtTokens(workflowTokens)}` : '';
+    ctxItem.text = `$(symbol-ruler) ${curStr}/${sizeStr} ${bar} ${pct}%${workflowSuffix}`;
 
     if (pct >= 80) {
       ctxItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
@@ -524,6 +530,11 @@ function updateContextItem(tier: string) {
     const lines = ['Claude Code — Context Window', ''];
     lines.push(`Usage:  ${curStr} / ${sizeStr}  (${pct}%)`);
     lines.push(`Bar:    ${usageBar(pct)}`);
+    if (activeAgents > 0) {
+      lines.push(`Workflows: ${activeAgents} agents, ${fmtTokens(workflowTokens)} ctx`);
+    } else if ((data.subagent_runs_session || 0) > 0) {
+      lines.push(`Workflows: ${data.subagent_runs_session} completed runs this session`);
+    }
     if (data.model) { lines.push(`Model:  ${data.model}`); }
     if (pct >= 80) { lines.push('', '$(warning) Context almost full — consider starting a new session'); }
     ctxItem.tooltip = lines.join('\n');

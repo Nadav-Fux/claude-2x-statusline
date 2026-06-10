@@ -392,6 +392,31 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             template_key=key,
         ))
 
+    if obs.active_workflow_agents > 0 and obs.subagent_tokens_live > 100_000:
+        tok_str = (
+            f"{obs.subagent_tokens_live / 1_000_000:.1f}M"
+            if obs.subagent_tokens_live >= 1_000_000
+            else f"{obs.subagent_tokens_live // 1000}K"
+        )
+        key = "workflow_background_drain"
+        results.append(Insight(
+            text=(
+                f"Workflows running {obs.active_workflow_agents} agents ({tok_str} ctx) in the background — "
+                f"your main context looks clean but account quota is draining. "
+                f"Rate-limit bars reflect this, not the cost line."
+            ),
+            text_he=(
+                f"Workflows מריצים {obs.active_workflow_agents} סוכנים ({tok_str} ctx) ברקע — "
+                f"ה-context הראשי נראה נקי אבל המכסה נצרכת. "
+                f"בר rate-limit משקף את זה, לא שורת העלות."
+            ),
+            urgency=7,
+            novelty=_novelty(key, memory),
+            actionability=5,
+            uniqueness=10,
+            template_key=key,
+        ))
+
     return results
 
 
