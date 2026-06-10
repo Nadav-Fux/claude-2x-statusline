@@ -508,9 +508,21 @@ def seg_banner(ctx):
     if release_notice:
         badges.append(release_notice)
 
-    banner = schedule.get("banner", {})
-    text = banner.get("text", "")
-    if text:
+    banner_list = schedule.get("banners", [])
+    if not isinstance(banner_list, list):
+        banner_list = []
+    if not banner_list:
+        banner = schedule.get("banner", {})
+        if isinstance(banner, dict) and banner.get("text"):
+            banner_list = [banner]
+
+    color_map = {"yellow": BG_YELLOW, "red": BG_RED, "green": BG_GREEN, "blue": BG_BLUE, "gray": BG_GRAY}
+    for banner in banner_list:
+        if not isinstance(banner, dict):
+            continue
+        text = banner.get("text", "")
+        if not text:
+            continue
         expires = banner.get("expires", "")
         show_banner = True
         if expires:
@@ -522,7 +534,6 @@ def seg_banner(ctx):
                 pass
 
         if show_banner:
-            color_map = {"yellow": BG_YELLOW, "red": BG_RED, "green": BG_GREEN, "blue": BG_BLUE, "gray": BG_GRAY}
             bg = color_map.get(banner.get("color", "yellow"), BG_YELLOW)
             badges.append(f"{bg} {text} {RST}")
 

@@ -250,11 +250,14 @@ const SEGMENTS = {
     const badges = [];
     const rel = buildReleaseNotice(ctx.schedule);
     if (rel) badges.push(rel);
-    const b = ctx.schedule.banner || {};
-    if (b.text) {
-      const today = new Date().toISOString().slice(0, 10);
+    let banners = Array.isArray(ctx.schedule.banners) ? ctx.schedule.banners : [];
+    const single = ctx.schedule.banner || {};
+    if (!banners.length && single.text) banners = [single];
+    const today = (ctx.now || new Date()).toISOString().slice(0, 10);
+    const map = { yellow: BG_YELLOW, red: BG_RED, green: BG_GREEN, blue: BG_BLUE, gray: BG_GRAY };
+    for (const b of banners) {
+      if (!b || !b.text) continue;
       if (!b.expires || today <= b.expires) {
-        const map = { yellow: BG_YELLOW, red: BG_RED, green: BG_GREEN, blue: BG_BLUE, gray: BG_GRAY };
         badges.push(`${map[b.color] || BG_YELLOW} ${b.text} ${RST}`);
       }
     }
