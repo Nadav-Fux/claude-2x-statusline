@@ -541,10 +541,10 @@ The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rej
 | minimal  | 1     | model, context, git_branch, git_dirty, rate_limits, env                       |
 | standard | 1     | model, context, vim_mode, agent, workflows, git_branch, git_dirty, cost,      |
 |          |       | effort, env                                                                    |
-| full     | 4     | Same segments as standard on line 1, plus: timeline (line 2), rate_limits bars |
-|          |       | (line 3), burn_rate + cache_hit + metrics (line 4)                             |
+| full     | 4     | Same segments as standard on line 1 plus usage_credits, then: timeline (line  |
+|          |       | 2), rate_limits bars (line 3), burn_rate + cache_hit + metrics (line 4)        |
 
-On all-day normal-mode schedules, the timeline line is auto-hidden; rate limit bars and metrics still render.
+On normal-mode schedules (`schedule.mode == "normal"`), the timeline line is hidden entirely; rate limit bars and metrics still render.
 
 ### Switch Anytime
 
@@ -638,6 +638,10 @@ When you see `$4.20`: cumulative session cost. Compare against your per-session 
 | `NORMAL` / `INSERT` | Vim mode is active in Claude Code |
 | Agent name | Running inside a subagent |
 | `wt:name` | Running inside a git worktree |
+| `⚙ 4 agents ctx Σ 312K` (workflows) | Workflow agents are running (live count + context footprint); when idle, shows session-cumulative runs |
+| `overflow ▰▰▱▱▱▱▱▱ $3.10/$25` (usage_credits) | Extra-usage overflow is enabled or has consumed credit (full tier) |
+| `auth:oauth` / `API-KEY EXPORTED` (auth_mode) | Opt-in; the red API-key warning also force-shows whenever `ANTHROPIC_API_KEY` is exported |
+| `sdk ▰▰▰▰▰▰▱▱ $15.00/$20 ~per-machine approx` (sdk_meter) | Opt-in; month-to-date SDK credit burn vs plan ceiling (local per-machine ledger) |
 
 When you see `NORMAL` or `INSERT`: Vim keybindings are active in Claude Code. If this is unexpected, check your settings.json for `"vim": true`.
 When you see `wt:name`: you are working in a linked git worktree. Run `/explain worktree` for details.
@@ -680,7 +684,7 @@ When you see `cache reuse 96% ↑2.3k saving`: 96% of cache tokens this tick cam
 │ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
 ```
 
-A visual representation of the configured schedule with a marker showing where you are now. In current normal-mode schedules (`schedule.mode == "normal"`), the timeline line is hidden by default.
+A visual representation of the configured schedule with a marker showing where you are now. On normal-mode schedules (`schedule.mode == "normal"`), the timeline line is hidden entirely.
 
 ---
 
@@ -697,7 +701,7 @@ Run `/explain <segment>` (or `/statusline-doctor --explain <segment>`) to get a 
 /explain timeline
 ```
 
-Run `/explain` with no argument to print a table of all 18 documented segments.
+Run `/explain` with no argument to print a table of all documented segments.
 
 The two invocation paths are equivalent:
 
