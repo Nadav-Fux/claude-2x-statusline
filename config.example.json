@@ -11,7 +11,9 @@
     "cost": true,
     "rate_limits": true,
     "effort": true,
-    "env": true
+    "env": true,
+    "auth_mode": false,
+    "sdk_meter": false
   },
   "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
   "schedule_cache_hours": 3
