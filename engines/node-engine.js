@@ -611,11 +611,35 @@ function buildRateLimitsLine(ctx) {
   if (!ud) return '';
   const fh = ud.five_hour || {}, fhPct = Math.round(fh.utilization || 0);
   const sd = ud.seven_day || {}, sdPct = Math.round(sd.utilization || 0);
+  const sds = ud.seven_day_sonnet || {}, sdsPct = Math.round(sds.utilization || 0);
   const labels = (ctx.schedule || {}).labels || {};
   const fhLabel = labels.five_hour || '5h', wkLabel = labels.weekly || 'weekly';
   const cur = `${DIM}\u2502${RST} ${GREEN}\u25b8${RST} ${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
   const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct)} ${colorPct(sdPct)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
-  return `${cur} ${DIM}\u00b7${RST} ${wk} ${DIM}\u2502${RST}`;
+  const parts = [cur, wk];
+  if (sdsPct > 0) {
+    parts.push(`${DIM}sonnet${RST} ${buildUsageBar(sdsPct)} ${colorPct(sdsPct)}${String(sdsPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sds.resets_at, 'datetime')}${RST}`);
+  }
+  return `${parts.join(` ${DIM}\u00b7${RST} `)}${checkOffloopDrain(ctx, ud)} ${DIM}\u2502${RST}`;
+}
+
+function checkOffloopDrain(ctx, usageData) {
+  const fhPct = Number((usageData.five_hour || {}).utilization || 0);
+  const prev = ctx._prevFhPct;
+  const now = Date.now() / 1000;
+  const prevTime = ctx._prevFhTime || now;
+  ctx._prevFhPct = fhPct;
+  ctx._prevFhTime = now;
+  if (prev == null) return '';
+  const elapsedMin = (now - prevTime) / 60;
+  if (elapsedMin < 2) return '';
+  const delta = fhPct - prev;
+  if (delta <= 0) return '';
+  const sessionRate = rs.rollingRate(10);
+  if (sessionRate == null) return '';
+  const expectedPctPerHr = sessionRate / 0.80;
+  const actualPctPerHr = delta / elapsedMin * 60;
+  return actualPctPerHr > expectedPctPerHr * 2.5 && delta > 3 ? ` ${YELLOW}\u26a0 off-loop drain${RST}` : '';
 }
 
 function buildMetricsLine(ctx) {

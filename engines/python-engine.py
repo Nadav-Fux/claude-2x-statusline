@@ -1136,6 +1136,9 @@ def build_rate_limits_line(ctx):
     sd_bar = build_usage_bar(sd_pct, bw)
     sd_color = color_for_pct(sd_pct)
 
+    sds = usage_data.get("seven_day_sonnet", {})
+    sds_pct = int(sds.get("utilization", 0))
+
     fh_time = _format_reset(fh_reset, "time")
     sd_time = _format_reset(sd_reset, "datetime")
 
@@ -1147,8 +1150,47 @@ def build_rate_limits_line(ctx):
 
     current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
+    parts = [current, weekly]
+    if sds_pct > 0:
+        sds_bar = build_usage_bar(sds_pct, bw)
+        sds_color = color_for_pct(sds_pct)
+        sds_time = _format_reset(sds.get("resets_at", ""), "datetime")
+        parts.append(f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sds_time}{RST}")
 
-    return f"{current} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
+    offloop = _check_offloop_drain(ctx, usage_data)
+    separator = f" {DIM}\u00b7{RST} "
+    return f"{separator.join(parts)}{offloop} {DIM}\u2502{RST}"
+
+
+def _check_offloop_drain(ctx, usage_data):
+    """Warn if account quota is rising faster than this session's spend."""
+    fh_pct = float(usage_data.get("five_hour", {}).get("utilization", 0))
+    prev_fh_pct = ctx.get("_prev_fh_pct")
+    now = time.time()
+    prev_time = ctx.get("_prev_fh_time", now)
+    ctx["_prev_fh_pct"] = fh_pct
+    ctx["_prev_fh_time"] = now
+
+    if prev_fh_pct is None:
+        return ""
+
+    elapsed_min = (now - prev_time) / 60.0
+    if elapsed_min < 2:
+        return ""
+
+    fh_delta_pct = fh_pct - prev_fh_pct
+    if fh_delta_pct <= 0:
+        return ""
+
+    session_rate = _rs_rate(10)
+    if session_rate is None:
+        return ""
+
+    expected_pct_per_hr = session_rate / 0.80
+    actual_pct_per_hr = fh_delta_pct / elapsed_min * 60
+    if actual_pct_per_hr > expected_pct_per_hr * 2.5 and fh_delta_pct > 3:
+        return f" {YELLOW}\u26a0 off-loop drain{RST}"
+    return ""
 
 
 def _format_reset(iso_str, style="time"):
