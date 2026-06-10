@@ -25,9 +25,9 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['peak_hours', 'model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
-  standard: ['peak_hours', 'model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['peak_hours', 'model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  minimal: ['model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -68,6 +68,7 @@ function loadLocalVersion() {
   } catch { return ''; }
 }
 const CURRENT_VERSION = loadLocalVersion();
+let wfCache = {};
 
 // ── Version helpers ──
 function parseVersion(value) {
@@ -155,6 +156,8 @@ function fmtSecs(s) { const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec
 function colorPct(p) { return p >= 80 ? RED : p >= 50 ? YELLOW : GREEN; }
 function git(...args) { try { return execFileSync('git', args, { timeout: 2000, encoding: 'utf8' }).trim(); } catch { return ''; } }
 function fmtTokens(n) { return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.floor(n/1e3)}K` : String(n); }
+function toNum(value, fallback = 0) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }
+function localDateStr(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 
 function fmtHour(h) {
   h = ((h % 24) + 24) % 24;
@@ -244,17 +247,168 @@ function formatReset(isoStr, style) {
   } catch { return ''; }
 }
 
+// ── Workflow helpers ──
+const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_creation_input_tokens"\s*:\s*(\d+)\s*,\s*"cache_read_input_tokens"\s*:\s*(\d+)\s*,\s*"output_tokens"\s*:\s*(\d+)/g;
+
+function projectSlug(cwd) {
+  // Empirical Claude Code rule: every char outside [A-Za-z0-9] becomes '-'
+  // ('C:\Users\nadav\github\Nadav-Plugins&Skils' -> 'C--Users-nadav-github-Nadav-Plugins-Skils').
+  return String(cwd || '').replace(/[^A-Za-z0-9]/g, '-');
+}
+
+function normalizeCwd(p) {
+  const normalized = path.normalize(String(p || ''));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function findSessionDir(stdin) {
+  const tp = stdin.transcript_path || '';
+  if (tp) {
+    const candidate = tp.endsWith('.jsonl') ? tp.slice(0, -6) : tp;
+    try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
+  }
+
+  const sessionId = stdin.session_id || '', cwd = stdin.cwd || '';
+  if (sessionId && cwd) {
+    const candidate = path.join(CLAUDE_DIR, 'projects', projectSlug(cwd), sessionId);
+    try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
+  }
+
+  // The statusline runs as a grandchild of Claude Code (CC -> shell -> node),
+  // so PID matching can never work; match the session entry by cwd instead,
+  // preferring busy status and the freshest updatedAt.
+  const sessionsDir = path.join(CLAUDE_DIR, 'sessions');
+  try {
+    let targetCwd = '';
+    try { targetCwd = normalizeCwd(cwd || process.cwd()); } catch {}
+    let best = null, bestRank = null;
+    if (targetCwd) {
+      for (const name of fs.readdirSync(sessionsDir)) {
+        if (!name.endsWith('.json')) continue;
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(sessionsDir, name), 'utf8'));
+          const sid = data.sessionId || '', cwd2 = data.cwd || '';
+          if (!sid || !cwd2 || normalizeCwd(cwd2) !== targetCwd) continue;
+          const rank = [data.status === 'busy' ? 1 : 0, toNum(data.updatedAt, 0)];
+          if (bestRank && (rank[0] < bestRank[0] || (rank[0] === bestRank[0] && rank[1] <= bestRank[1]))) continue;
+          const candidate = path.join(CLAUDE_DIR, 'projects', projectSlug(cwd2), sid);
+          try {
+            if (fs.statSync(candidate).isDirectory()) { best = candidate; bestRank = rank; }
+          } catch {}
+        } catch {}
+      }
+    }
+    if (best) return best;
+  } catch {}
+  return null;
+}
+
+function workflowCacheKey(sessionDir) {
+  const wfDir = path.join(sessionDir, 'workflows');
+  const liveDir = path.join(sessionDir, 'subagents', 'workflows');
+  let mtime1 = 0, count1 = 0, mtime2 = 0, count2 = 0;
+  try {
+    const st = fs.statSync(wfDir);
+    if (st.isDirectory()) {
+      mtime1 = st.mtimeMs;
+      count1 = fs.readdirSync(wfDir).filter(n => /^wf_.*\.json$/.test(n)).length;
+    }
+  } catch {}
+  try {
+    const st = fs.statSync(liveDir);
+    if (st.isDirectory()) {
+      mtime2 = st.mtimeMs;
+      count2 = fs.readdirSync(liveDir).filter(n => n.startsWith('wf_')).length;
+    }
+  } catch {}
+  return JSON.stringify([sessionDir, mtime1, count1, mtime2, count2]);
+}
+
+function readAgentLastUsageTokens(jsonlPath) {
+  try {
+    const fd = fs.openSync(jsonlPath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      const chunkSize = Math.min(65536, stat.size);
+      const buffer = Buffer.alloc(chunkSize);
+      fs.readSync(fd, buffer, 0, chunkSize, Math.max(0, stat.size - chunkSize));
+      const tail = buffer.toString('utf8');
+      const matches = [...tail.matchAll(USAGE_RE)];
+      if (!matches.length) return 0;
+      // The last match may be a partially-written usage block (live agent file).
+      // It is complete iff the match ends before EOF and the next char is not a
+      // digit (a digit would mean output_tokens was truncated mid-number).
+      let last = matches[matches.length - 1];
+      const end = last.index + last[0].length;
+      const complete = end < tail.length && !/[0-9]/.test(tail[end]);
+      if (!complete) {
+        if (matches.length < 2) return 0;
+        last = matches[matches.length - 2];
+      }
+      return Number(last[1]) + Number(last[2]) + Number(last[3]);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { return 0; }
+}
+
+function detectLiveWorkflows(sessionDir) {
+  const liveBase = path.join(sessionDir, 'subagents', 'workflows');
+  const completedDir = path.join(sessionDir, 'workflows');
+  const results = [];
+  try {
+    for (const name of fs.readdirSync(liveBase)) {
+      if (!name.startsWith('wf_')) continue;
+      const wfSubdir = path.join(liveBase, name);
+      try { if (!fs.statSync(wfSubdir).isDirectory()) continue; } catch { continue; }
+      if (fs.existsSync(path.join(completedDir, `${name}.json`))) continue;
+
+      let agents = 0, tokens = 0;
+      for (const fileName of fs.readdirSync(wfSubdir)) {
+        if (!/^agent-.*\.jsonl$/.test(fileName) || fileName.endsWith('.meta.json')) continue;
+        agents += 1;
+        tokens += readAgentLastUsageTokens(path.join(wfSubdir, fileName));
+      }
+      if (agents > 0) results.push({ name, agents, tokens });
+    }
+  } catch {}
+  return results;
+}
+
+function readCompletedWorkflows(sessionDir) {
+  const wfDir = path.join(sessionDir, 'workflows');
+  const completed = { total_tokens: 0, run_count: 0, agent_count: 0 };
+  try {
+    for (const fileName of fs.readdirSync(wfDir)) {
+      if (!/^wf_.*\.json$/.test(fileName)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(wfDir, fileName), 'utf8'));
+        if (data.status !== 'completed') continue;
+        completed.total_tokens += Number(data.totalTokens || 0);
+        completed.run_count += 1;
+        completed.agent_count += Number(data.agentCount || 0);
+      } catch {}
+    }
+  } catch {}
+  return completed;
+}
+
 // ── Segments ──
 const SEGMENTS = {
   banner(ctx) {
     const badges = [];
     const rel = buildReleaseNotice(ctx.schedule);
     if (rel) badges.push(rel);
-    const b = ctx.schedule.banner || {};
-    if (b.text) {
-      const today = new Date().toISOString().slice(0, 10);
+    let banners = Array.isArray(ctx.schedule.banners) ? ctx.schedule.banners : [];
+    const single = ctx.schedule.banner || {};
+    if (!banners.length && single.text) banners = [single];
+    // Compare against the LOCAL date (python parity) so both engines flip
+    // banners at the same local midnight, not at UTC midnight.
+    const today = localDateStr(ctx.now || new Date());
+    const map = { yellow: BG_YELLOW, red: BG_RED, green: BG_GREEN, blue: BG_BLUE, gray: BG_GRAY };
+    for (const b of banners) {
+      if (!b || !b.text) continue;
       if (!b.expires || today <= b.expires) {
-        const map = { yellow: BG_YELLOW, red: BG_RED, green: BG_GREEN, blue: BG_BLUE, gray: BG_GRAY };
         badges.push(`${map[b.color] || BG_YELLOW} ${b.text} ${RST}`);
       }
     }
@@ -327,6 +481,45 @@ const SEGMENTS = {
 
     return parts.join(' ');
   },
+  workflows(ctx) {
+    const sessionDir = findSessionDir(ctx.stdin || {});
+    if (!sessionDir) {
+      ctx._wfLive = [];
+      ctx._wfCompleted = {};
+      return '';
+    }
+
+    const key = workflowCacheKey(sessionDir);
+    if (wfCache.key === key) {
+      const payload = wfCache.payload || {};
+      ctx._wfLive = payload.live || [];
+      ctx._wfCompleted = payload.completed || {};
+      return wfCache.result || '';
+    }
+
+    const live = detectLiveWorkflows(sessionDir);
+    if (live.length) {
+      const agents = live.reduce((sum, item) => sum + item.agents, 0);
+      const tokens = live.reduce((sum, item) => sum + item.tokens, 0);
+      const result = `${CYAN}\u2699 ${agents} agents ctx \u03a3 ${fmtTokens(tokens)}${RST}`;
+      wfCache = { key, result, payload: { live, completed: {} } };
+      ctx._wfLive = live;
+      ctx._wfCompleted = {};
+      return result;
+    }
+
+    const completed = readCompletedWorkflows(sessionDir);
+    ctx._wfLive = [];
+    ctx._wfCompleted = completed;
+    if (!completed.run_count) {
+      wfCache = { key, result: '', payload: { live: [], completed } };
+      return '';
+    }
+
+    const result = `${DIM}wf:${RST} agents ctx \u03a3 ${WHITE}${fmtTokens(completed.total_tokens)}${RST} ${DIM}\u00b7 ${completed.run_count} runs${RST}`;
+    wfCache = { key, result, payload: { live: [], completed } };
+    return result;
+  },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
   git_dirty(ctx) {
     const p = git('status','--porcelain');
@@ -377,10 +570,64 @@ const SEGMENTS = {
     if (!usageData) return '';
     ctx.usageData = usageData;
     const fh = usageData.five_hour || {}, fhPct = Math.round(fh.utilization || 0);
-    const peakTag = ctx.isPeak ? ` ${YELLOW}\u26a1${RST}` : '';
     const tier = (ctx.config || {}).tier || 'standard';
-    if (tier === 'minimal') return `${colorPct(fhPct)}${fhPct}%${RST} ${DIM}5H${RST}${peakTag}`;
-    return `${buildUsageBar(fhPct)} ${colorPct(fhPct)}${fhPct}%${RST}${peakTag}`;
+    if (tier === 'minimal') return `${colorPct(fhPct)}${fhPct}%${RST} ${DIM}5H${RST}`;
+    return `${buildUsageBar(fhPct)} ${colorPct(fhPct)}${fhPct}%${RST}`;
+  },
+  usage_credits(ctx) {
+    const usageData = ctx.usageData;
+    if (!usageData) return '';
+    const extra = usageData.extra_usage;
+    if (!extra || typeof extra !== 'object' || Array.isArray(extra) || !Object.keys(extra).length) return '';
+    const enabled = Boolean(extra.enabled);
+    const consumed = toNum(extra.consumed_usd, 0);
+    const limit = toNum(extra.limit_usd, 0);
+    if (!enabled && consumed === 0) return '';
+    if (!enabled) return `${DIM}overflow: off${RST}`;
+    if (limit > 0) {
+      const pct = Math.floor(consumed * 100 / limit);
+      return `${DIM}overflow${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${limit.toFixed(0)}${RST}`;
+    }
+    return `${DIM}overflow${RST} ${YELLOW}$${consumed.toFixed(2)}${RST}`;
+  },
+  auth_mode() {
+    const apiKey = process.env.ANTHROPIC_API_KEY || '';
+    const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
+    if (apiKey) return `${BG_RED} API-KEY EXPORTED - claude -p bills API acct ${RST}`;
+    if (oauthToken) return oauthToken.startsWith('sk-ant-oat01-') ? `${DIM}auth:setup-token${RST}` : `${DIM}auth:oauth${RST}`;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, '.credentials.json'), 'utf8'));
+      if (((data.claudeAiOauth || {}).accessToken)) return `${DIM}auth:oauth${RST}`;
+    } catch {}
+    return `${DIM}auth:?${RST}`;
+  },
+  sdk_meter(ctx) {
+    const extra = (ctx.usageData || {}).extra_usage || {};
+    const direct = (ctx.usageData || {}).sdk_credit || {};
+    if (direct.remaining_usd != null) {
+      const limit = toNum(direct.limit_usd, 0);
+      const remaining = toNum(direct.remaining_usd, 0);
+      const consumed = Math.max(0, limit - remaining);
+      if (limit <= 0 || consumed === 0) return '';
+      const pct = Math.floor(consumed * 100 / limit);
+      let suffix = '';
+      if (pct >= 100 && !extra.enabled) suffix = ` ${BG_RED} BLOCKED ${RST}`;
+      else if (pct >= 100 && extra.enabled) suffix = ` ${YELLOW}overflow ON${RST}`;
+      return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${limit.toFixed(0)}${RST}${suffix}`;
+    }
+    let ledger;
+    try { ledger = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'statusline-sdk-ledger.json'), 'utf8')); } catch { return ''; }
+    // Ledger honesty: a stale ledger from a previous month is no-data, not a meter.
+    const nowDate = ctx.now || new Date();
+    const currentMonth = localDateStr(nowDate).slice(0, 7);
+    if (String(ledger.month || '') !== currentMonth) return '';
+    const consumed = toNum(ledger.month_total_usd, 0), ceiling = toNum(ledger.plan_ceiling_usd ?? 20, 20);
+    if (consumed === 0) return '';
+    const pct = ceiling > 0 ? Math.floor(consumed * 100 / ceiling) : 0;
+    let suffix = '';
+    if (pct >= 100 && !extra.enabled) suffix = ` ${BG_RED} BLOCKED ${RST}`;
+    else if (pct >= 100 && extra.enabled) suffix = ` ${YELLOW}overflow ON${RST}`;
+    return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${ceiling.toFixed(0)}${RST}${DIM} ~per-machine approx${RST}${suffix}`;
   },
   burn_rate(ctx) {
     const costData = ctx.stdin.cost || {}, cost = costData.total_cost_usd, durMs = costData.total_duration_ms;
@@ -421,8 +668,16 @@ const SEGMENTS = {
 };
 SEGMENTS.promo_2x = SEGMENTS.peak_hours;
 
+function runSegment(name, ctx) {
+  // No single segment may ever kill the statusline (python engine parity).
+  try { return SEGMENTS[name](ctx) || ''; } catch { return ''; }
+}
+
 // ── Full mode lines ──
 function buildTimeline(ctx) {
+  // No peak schedule in 'normal' mode — a peak/off-peak timeline would be
+  // misleading (mirrors seg_peak_hours, which also bails out in normal mode).
+  if (((ctx.schedule || {}).mode) === 'normal') return '';
   const hour = ctx.now.getHours(), minute = ctx.now.getMinutes();
   const weekday = ctx.now.getDay() === 0 ? 7 : ctx.now.getDay();
   const peakStart = ctx.peakStartLocal ?? 15, peakEnd = ctx.peakEndLocal ?? 21;
@@ -448,12 +703,61 @@ function buildRateLimitsLine(ctx) {
   if (!ud) return '';
   const fh = ud.five_hour || {}, fhPct = Math.round(fh.utilization || 0);
   const sd = ud.seven_day || {}, sdPct = Math.round(sd.utilization || 0);
-  const peakTag = ctx.isPeak ? ` ${YELLOW}\u26a1 peak${RST}` : ` ${GREEN}\u2713${RST}`;
+  const sds = ud.seven_day_sonnet || {}, sdsPct = Math.round(sds.utilization || 0);
   const labels = (ctx.schedule || {}).labels || {};
   const fhLabel = labels.five_hour || '5h', wkLabel = labels.weekly || 'weekly';
   const cur = `${DIM}\u2502${RST} ${GREEN}\u25b8${RST} ${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
   const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct)} ${colorPct(sdPct)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
-  return `${cur}${peakTag} ${DIM}\u00b7${RST} ${wk} ${DIM}\u2502${RST}`;
+  const parts = [cur, wk];
+  if (sdsPct > 0) {
+    parts.push(`${DIM}sonnet${RST} ${buildUsageBar(sdsPct)} ${colorPct(sdsPct)}${String(sdsPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sds.resets_at, 'datetime')}${RST}`);
+  }
+  return `${parts.join(` ${DIM}\u00b7${RST} `)}${checkOffloopDrain(ctx, ud)} ${DIM}\u2502${RST}`;
+}
+
+const OFFLOOP_STATE_PATH = path.join(CLAUDE_DIR, 'statusline-offloop-state.json');
+
+function readOffloopState() {
+  try {
+    const data = JSON.parse(fs.readFileSync(OFFLOOP_STATE_PATH, 'utf8'));
+    if (data && typeof data === 'object' && !Array.isArray(data)) return data;
+  } catch {}
+  return null;
+}
+
+function writeOffloopState(state) {
+  try {
+    const tmpPath = `${OFFLOOP_STATE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(state));
+    fs.renameSync(tmpPath, OFFLOOP_STATE_PATH);
+  } catch {}
+}
+
+function checkOffloopDrain(ctx, usageData) {
+  // Each render is a fresh process, so the prior reading must be persisted to
+  // disk: in-memory ctx state never survives between statusline refreshes.
+  const fhPct = toNum((usageData.five_hour || {}).utilization, 0);
+  const now = Date.now() / 1000;
+  const sessionCost = toNum(((ctx.stdin || {}).cost || {}).total_cost_usd, 0);
+  const prev = readOffloopState();
+  const prevPct = prev ? Number(prev.utilization) : NaN;
+  if (!Number.isFinite(prevPct)) {
+    writeOffloopState({ utilization: fhPct, session_cost: sessionCost, t: now });
+    return '';
+  }
+  const prevTime = toNum(prev.t, now);
+  const elapsedMin = (now - prevTime) / 60;
+  // Keep the baseline until it is old enough to compare against; overwriting
+  // on every refresh would pin elapsed near zero and the check could never fire.
+  if (elapsedMin < 2) return '';
+  writeOffloopState({ utilization: fhPct, session_cost: sessionCost, t: now });
+  const delta = fhPct - prevPct;
+  if (delta <= 0) return '';
+  const sessionRate = rs.rollingRate(10);
+  if (sessionRate == null) return '';
+  const expectedPctPerHr = sessionRate / 0.80;
+  const actualPctPerHr = delta / elapsedMin * 60;
+  return actualPctPerHr > expectedPctPerHr * 2.5 && delta > 3 ? ` ${YELLOW}\u26a0 off-loop drain${RST}` : '';
 }
 
 function buildMetricsLine(ctx) {
@@ -462,9 +766,48 @@ function buildMetricsLine(ctx) {
   if (burn) parts.push(`${GREEN}\u25b8${RST} ${burn}`);
   const cache = SEGMENTS.cache_hit(ctx);
   if (cache) parts.push(cache);
-  if (ctx.isPeak) parts.push(`${YELLOW}\u26a1 peak = limits drain faster${RST}`);
+  const wf = SEGMENTS.workflows(ctx);
+  if (wf) parts.push(wf);
   if (!parts.length) return '';
   return `${DIM}\u2502${RST} ${parts.join(` ${DIM}\u00b7${RST} `)} ${DIM}\u2502${RST}`;
+}
+
+// ── VS Code context ──
+function writeVscodeContext(ctx) {
+  // Write statusline data to %TEMP%/claude/statusline-context.json (python parity).
+  const contextDir = path.join(os.tmpdir(), 'claude');
+  fs.mkdirSync(contextDir, { recursive: true });
+  const contextPath = path.join(contextDir, 'statusline-context.json');
+
+  const usageData = ctx.usageData || {};
+  const wfLive = ctx._wfLive || [];
+  const wfCompleted = ctx._wfCompleted || {};
+  const stdin = ctx.stdin || {};
+  const cw = stdin.context_window || {};
+  const u = cw.current_usage || {};
+  const current = toNum(u.input_tokens, 0) + toNum(u.cache_creation_input_tokens, 0) + toNum(u.cache_read_input_tokens, 0);
+  const size = toNum(cw.context_window_size, 0);
+  const pct = size > 0 ? Math.trunc(current * 100 / size) : 0;
+
+  const payload = {
+    ts: Math.floor(Date.now() / 1000),
+    updated_at: new Date().toISOString(),
+    five_hour_pct: Math.trunc(toNum((usageData.five_hour || {}).utilization, 0)),
+    seven_day_pct: Math.trunc(toNum((usageData.seven_day || {}).utilization, 0)),
+    cost_usd: (stdin.cost || {}).total_cost_usd ?? 0,
+    current_usage: current,
+    context_window_size: size,
+    pct,
+    model: (stdin.model || {}).display_name || '',
+    is_peak: Boolean(ctx.isPeak),
+    active_workflow_agents: wfLive.reduce((sum, item) => sum + item.agents, 0),
+    subagent_tokens_live: wfLive.reduce((sum, item) => sum + item.tokens, 0),
+    subagent_runs_session: wfCompleted.run_count || 0,
+  };
+
+  const tmpPath = `${contextPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload));
+  fs.renameSync(tmpPath, contextPath);
 }
 
 // ── Telemetry ──
@@ -523,17 +866,20 @@ function main() {
   const ctx = { config, stdin, now, tzName, offsetHours, schedule, isPeak: false };
   const enabled = getEnabled(config, schedule);
   if (!enabled.includes('banner')) enabled.unshift('banner');
+  if (process.env.ANTHROPIC_API_KEY && !enabled.includes('auth_mode')) {
+    enabled.splice(enabled[0] === 'banner' ? 1 : 0, 0, 'auth_mode');
+  }
 
   const tier = config.tier || 'standard';
   const isFull = tier === 'full' || effectiveMode === 'full';
   const isStandard = tier === 'standard' && !isFull;
-  if (isFull || isStandard) SEGMENTS.rate_limits(ctx);
+  if (isFull || isStandard) runSegment('rate_limits', ctx);
 
   const parts = [], gitParts = [];
   for (const name of enabled) {
     const fn = SEGMENTS[name];
     if (!fn) continue;
-    const r = fn(ctx);
+    const r = runSegment(name, ctx);
     if (!r) continue;
     if (['git_branch', 'git_dirty'].includes(name)) gitParts.push(r);
     else parts.push(r);
@@ -559,6 +905,8 @@ function main() {
     const ml = buildMetricsLine(ctx);
     if (ml) process.stdout.write(`\n${ml}`);
   }
+
+  try { writeVscodeContext(ctx); } catch {}
 }
 
 main();

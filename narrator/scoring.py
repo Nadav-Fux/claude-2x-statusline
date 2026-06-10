@@ -250,28 +250,14 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
     elif obs.is_peak and max_rl < 80:
         key = "peak_rate_ok"
         results.append(Insight(
-            text=f"Peak hours — rate limits drain faster. Budget: {max_rl:.0f}% used. "
-                 f"Keep this pass focused; save broad exploration for off-peak.",
-            text_he=f"שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: {max_rl:.0f}% בשימוש. "
-                    f"עדיף לשמור את הסבב הזה ממוקד, ואת החקירה הרחבה לדחות ל-off-peak.",
+            text=f"Historical peak schedule is active in your custom tier. Budget: {max_rl:.0f}% used. "
+                 f"Use this as a local schedule cue, not a faster-drain warning.",
+            text_he=f"לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: {max_rl:.0f}% בשימוש. "
+                    f"תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.",
             urgency=7,
             novelty=_novelty(key, memory),
             actionability=5,
             uniqueness=5,
-            template_key=key,
-        ))
-
-    # ── Off-peak + rate limit < 50 % ─────────────────────────────────────────
-    elif not obs.is_peak and max_rl < 50:
-        key = "off_peak_wide_open"
-        results.append(Insight(
-            text=f"Off-peak with wide-open limits — good moment for heavy refactors, broad repo scans, "
-                 f"or subagents that generate lots of output.",
-            text_he="מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים, סריקות רחבות בריפו, או subagents שמייצרים הרבה פלט.",
-            urgency=4,
-            novelty=_novelty(key, memory),
-            actionability=7,
-            uniqueness=10,
             template_key=key,
         ))
 
@@ -403,6 +389,31 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             novelty=_novelty(key, memory),
             actionability=6,
             uniqueness=7,
+            template_key=key,
+        ))
+
+    if obs.active_workflow_agents > 0 and obs.subagent_tokens_live > 100_000:
+        tok_str = (
+            f"{obs.subagent_tokens_live / 1_000_000:.1f}M"
+            if obs.subagent_tokens_live >= 1_000_000
+            else f"{obs.subagent_tokens_live // 1000}K"
+        )
+        key = "workflow_background_drain"
+        results.append(Insight(
+            text=(
+                f"Workflows running {obs.active_workflow_agents} agents ({tok_str} ctx) in the background — "
+                f"your main context looks clean but account quota is draining. "
+                f"Rate-limit bars reflect this, not the cost line."
+            ),
+            text_he=(
+                f"Workflows מריצים {obs.active_workflow_agents} סוכנים ({tok_str} ctx) ברקע — "
+                f"ה-context הראשי נראה נקי אבל המכסה נצרכת. "
+                f"בר rate-limit משקף את זה, לא שורת העלות."
+            ),
+            urgency=7,
+            novelty=_novelty(key, memory),
+            actionability=5,
+            uniqueness=10,
             template_key=key,
         ))
 

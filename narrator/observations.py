@@ -20,6 +20,17 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+try:
+    from lib.workflows import (
+        detect_live_workflows,
+        find_session_dir,
+        read_completed_workflows,
+    )
+except ImportError:
+    detect_live_workflows = None
+    find_session_dir = None
+    read_completed_workflows = None
+
 # ---------------------------------------------------------------------------
 # Dataclass
 # ---------------------------------------------------------------------------
@@ -65,6 +76,11 @@ class Observation:
 
     # Cost milestones crossed this session (for scoring freshness)
     cost_milestones_hit: list = field(default_factory=list)
+
+    # Workflow fields
+    subagent_tokens_live: int = 0
+    subagent_runs_session: int = 0
+    active_workflow_agents: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +144,32 @@ def _load_statusline_state() -> dict:
         return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
         return {"samples": []}
+
+
+def _load_usage_cache() -> dict:
+    """Load the rate-limits usage cache written by seg_rate_limits()."""
+    cache_path = Path.home() / ".claude" / "statusline-usage-cache.json"
+    try:
+        age = time.time() - cache_path.stat().st_mtime
+        if age > 300:
+            return {}
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _safe_utilization(block) -> float:
+    """Coerce a usage-cache window block's utilization to float.
+
+    The cache can be valid JSON with the wrong shape (e.g. five_hour: null,
+    utilization: "abc") — never let that throw; fall back to 0.0.
+    """
+    if not isinstance(block, dict):
+        return 0.0
+    try:
+        return float(block.get("utilization", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _latest_sample(state: dict) -> Optional[dict]:
@@ -194,6 +236,11 @@ def build(memory: dict) -> Observation:
     if stdin_data:
         _apply_stdin(obs, stdin_data)
 
+    usage_cache = _load_usage_cache()
+    if usage_cache:
+        obs.rate_limit_5h_pct = _safe_utilization(usage_cache.get("five_hour"))
+        obs.rate_limit_7d_pct = _safe_utilization(usage_cache.get("seven_day"))
+
     # ── rolling_state samples ────────────────────────────────────────────────
     try:
         from lib import rolling_state as rs
@@ -245,6 +292,19 @@ def build(memory: dict) -> Observation:
     if total_in > 0 and obs.cache_read_tokens > 0:
         obs.cache_pct = obs.cache_read_tokens / total_in * 100.0
 
+    if find_session_dir is not None:
+        try:
+            session_dir = find_session_dir(stdin_data or {})
+            if session_dir:
+                live_wfs = detect_live_workflows(session_dir)
+                obs.active_workflow_agents = sum(item["agents"] for item in live_wfs)
+                obs.subagent_tokens_live = sum(item["tokens"] for item in live_wfs)
+                if not live_wfs:
+                    completed = read_completed_workflows(session_dir)
+                    obs.subagent_runs_session = completed["run_count"]
+        except Exception:
+            pass
+
     # ── peak hours ──────────────────────────────────────────────────────────
     if not stdin_data or "is_peak" not in stdin_data:
         obs.is_peak = _is_peak_hours()
@@ -287,9 +347,10 @@ def _apply_stdin(obs: Observation, data: dict) -> None:
     schedule = data.get("schedule", {})
     obs.schedule_mode = schedule.get("mode", "normal")
 
-    rate_limits = data.get("rate_limits", {})
-    obs.rate_limit_5h_pct = float(rate_limits.get("pct_5h", 0.0))
-    obs.rate_limit_7d_pct = float(rate_limits.get("pct_7d", 0.0))
+    # Claude Code hook payloads do not expose pct_5h/pct_7d. The narrator
+    # populates these from statusline-usage-cache.json in build().
+    obs.rate_limit_5h_pct = 0.0
+    obs.rate_limit_7d_pct = 0.0
 
 
 def _apply_sample(obs: Observation, sample: dict) -> None:

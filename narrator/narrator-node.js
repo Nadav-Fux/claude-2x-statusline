@@ -60,6 +60,7 @@ function buildObservation(memory) {
     total_input_tokens: 0, total_output_tokens: 0,
     cache_read_tokens: 0, cache_creation_tokens: 0,
     ctx_window_size: 200000, cost_milestones_hit: [],
+    subagent_tokens_live: 0, subagent_runs_session: 0, active_workflow_agents: 0,
   };
 
   // Stdin (piped from hook)
@@ -78,6 +79,16 @@ function buildObservation(memory) {
     obs.cache_read_tokens = Number(u.cache_read_input_tokens || 0);
     obs.cache_creation_tokens = Number(u.cache_creation_input_tokens || 0);
   }
+
+  try {
+    const usagePath = path.join(CLAUDE_DIR, 'statusline-usage-cache.json');
+    const st = fs.statSync(usagePath);
+    if (Date.now() / 1000 - st.mtimeMs / 1000 <= 300) {
+      const usage = JSON.parse(fs.readFileSync(usagePath, 'utf8'));
+      obs.rate_limit_5h_pct = Number((usage.five_hour || {}).utilization || 0);
+      obs.rate_limit_7d_pct = Number((usage.seven_day || {}).utilization || 0);
+    }
+  } catch {}
 
   // Rolling state
   try {
@@ -106,6 +117,8 @@ function buildObservation(memory) {
     obs.cache_pct = obs.cache_read_tokens / obs.total_input_tokens * 100;
   }
 
+  try { populateWorkflowObservation(obs, stdinData || {}); } catch {}
+
   // Memory-derived fields
   const cur = memory.current || {};
   if (cur.started_at) obs.session_duration_min = Math.max(obs.session_duration_min, (Date.now() / 1000 - cur.started_at) / 60);
@@ -113,6 +126,62 @@ function buildObservation(memory) {
   obs.cost_milestones_hit = cur.cost_milestones_hit || [];
 
   return obs;
+}
+
+const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_creation_input_tokens"\s*:\s*(\d+)\s*,\s*"cache_read_input_tokens"\s*:\s*(\d+)\s*,\s*"output_tokens"\s*:\s*(\d+)/g;
+
+function readLastUsage(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      const chunkSize = Math.min(65536, stat.size);
+      const buffer = Buffer.alloc(chunkSize);
+      fs.readSync(fd, buffer, 0, chunkSize, Math.max(0, stat.size - chunkSize));
+      const tail = buffer.toString('utf8');
+      const matches = [...tail.matchAll(USAGE_RE)];
+      if (!matches.length) return 0;
+      const last = matches[matches.length - 1];
+      return Number(last[1]) + Number(last[2]) + Number(last[3]);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { return 0; }
+}
+
+function populateWorkflowObservation(obs, stdinData) {
+  const tp = stdinData.transcript_path || '';
+  if (!tp) return;
+  const sessionDir = tp.endsWith('.jsonl') ? tp.slice(0, -6) : tp;
+  const liveBase = path.join(sessionDir, 'subagents', 'workflows');
+  const completedDir = path.join(sessionDir, 'workflows');
+  let liveAgents = 0, liveTokens = 0;
+  try {
+    for (const wfName of fs.readdirSync(liveBase)) {
+      if (!wfName.startsWith('wf_')) continue;
+      if (fs.existsSync(path.join(completedDir, `${wfName}.json`))) continue;
+      const wfDir = path.join(liveBase, wfName);
+      for (const fileName of fs.readdirSync(wfDir)) {
+        if (!/^agent-.*\.jsonl$/.test(fileName)) continue;
+        liveAgents += 1;
+        liveTokens += readLastUsage(path.join(wfDir, fileName));
+      }
+    }
+  } catch {}
+  obs.active_workflow_agents = liveAgents;
+  obs.subagent_tokens_live = liveTokens;
+  if (liveAgents > 0) return;
+  try {
+    let runs = 0;
+    for (const name of fs.readdirSync(completedDir)) {
+      if (!/^wf_.*\.json$/.test(name)) continue;
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(completedDir, name), 'utf8'));
+        if (manifest.status === 'completed') runs += 1;
+      } catch {}
+    }
+    obs.subagent_runs_session = runs;
+  } catch {}
 }
 
 // ── Scoring ──
@@ -184,10 +253,7 @@ function buildInsights(obs, memory) {
     results.push({ text: `Rate limit at ${maxRl.toFixed(0)}% — close to cap. Plan break before compact.`, text_he: `ה-rate limit הגיע ל-${maxRl.toFixed(0)}% — קרוב לתקרה. תכנן הפסקה לפני /compact.`, urgency: 10, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
   } else if (obs.is_peak && maxRl < 80) {
     const k = 'peak_rate_ok';
-    results.push({ text: `Peak hours — rate limits drain faster. Budget: ${maxRl.toFixed(0)}% used. Keep this pass focused; save broad exploration for off-peak.`, text_he: `שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: ${maxRl.toFixed(0)}% בשימוש. עדיף לשמור את הסבב הזה ממוקד, ואת החקירה הרחבה לדחות ל-off-peak.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
-  } else if (!obs.is_peak && maxRl < 50) {
-    const k = 'off_peak_wide_open';
-    results.push({ text: `Off-peak with wide-open limits — good moment for heavy refactors, broad repo scans, or subagents that generate lots of output.`, text_he: 'מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים, סריקות רחבות בריפו, או subagents שמייצרים הרבה פלט.', urgency: 4, novelty: novelty(k, memory), actionability: 7, uniqueness: 10, template_key: k });
+    results.push({ text: `Historical peak schedule is active in your custom tier. Budget: ${maxRl.toFixed(0)}% used. Use this as a local schedule cue, not a faster-drain warning.`, text_he: `לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: ${maxRl.toFixed(0)}% בשימוש. תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   }
 
   if (obs.session_duration_min > 120) {
@@ -208,6 +274,12 @@ function buildInsights(obs, memory) {
   if (obs.prompt_count > 30) {
     const k = 'many_prompts';
     results.push({ text: `${obs.prompt_count} prompts in this session. If you're shifting to a new task, a fresh session is usually faster than compacting.`, text_he: `${obs.prompt_count} פרומפטים בסשן הזה. אם אתה עובר למשימה חדשה, סשן חדש בדרך כלל מהיר יותר מcompact.`, urgency: 3, novelty: novelty(k, memory), actionability: 8, uniqueness: 8, template_key: k });
+  }
+
+  if (obs.active_workflow_agents > 0 && obs.subagent_tokens_live > 100000) {
+    const tok = obs.subagent_tokens_live >= 1000000 ? `${(obs.subagent_tokens_live / 1000000).toFixed(1)}M` : `${Math.floor(obs.subagent_tokens_live / 1000)}K`;
+    const k = 'workflow_background_drain';
+    results.push({ text: `Workflows running ${obs.active_workflow_agents} agents (${tok} ctx) in the background — your main context looks clean but account quota is draining. Rate-limit bars reflect this, not the cost line.`, text_he: `Workflows מריצים ${obs.active_workflow_agents} סוכנים (${tok} ctx) ברקע — ה-context הראשי נראה נקי אבל המכסה נצרכת. בר rate-limit משקף את זה, לא שורת העלות.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 10, template_key: k });
   }
 
   return results;
