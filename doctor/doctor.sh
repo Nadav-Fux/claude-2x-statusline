@@ -22,17 +22,19 @@ set -u
 # Stored as a bash associative array; each value is a multi-line string.
 declare -A SEG_DETAIL
 SEG_DETAIL[peak_hours]="What it shows:
-  Visual indicator showing whether you are currently inside or outside the
-  peak-hour window defined by Anthropic's rate-limiting policy.
+  Historical / custom-tier only visual indicator for the old peak-hour
+  schedule. Anthropic removed peak-hour throttling on 2026-05-06, so this
+  segment is no longer shown by default tiers.
 
 How it's computed:
-  Reads the schedule (remote schedule.json or local fallback). Compares the
-  current local time to today's peak window after converting Pacific time to
-  your system timezone (DST-aware).
+  Reads the schedule (remote schedule.json or local fallback). If a custom
+  tier enables peak_hours and the schedule mode is not normal, it compares the
+  current local time to the configured historical window after timezone
+  conversion.
 
 Display values:
-  Off-Peak — green badge; limits consumed at the normal (1×) rate.
-  Peak     — red or yellow badge; limits consumed faster.
+  Off-Peak — green badge.
+  Peak     — red or yellow badge.
 
 Countdown:
   'peak in 3h 22m'  — minutes until peak starts.
@@ -46,7 +48,7 @@ Colors:
   Green  = Peak almost over (< 30 minutes).
 
 When it hides:
-  Never; always present on all tiers."
+  Hidden on default tiers. Also hidden when schedule.mode is normal."
 
 SEG_DETAIL[model]="What it shows:
   The Claude model Claude Code is currently using, e.g. 'Opus 4.7' or
@@ -188,13 +190,21 @@ Parts explained:
   '5h'                      — 5-hour rolling window limit.
   '▰▰▱▱▱▱▱▱▱▱ 20%'         — filled blocks = consumed; 20% of window used.
   '⟳ 5:00pm'               — time when the 5-hour window resets (local time).
-  '⚡ peak'                  — shown during peak hours; consumption runs faster.
-  'weekly'                  — weekly limit block (not affected by peak hours).
+  'weekly'                  — weekly limit block.
   '⟳ 4/4 11:00pm'          — date and time of the next weekly reset.
 
 How it's computed:
   Polls the Anthropic usage API (or reads a locally cached snapshot). The
   engine re-fetches at most once per minute to avoid hammering the API.
+
+Off-loop drain indicator:
+  '⚠ off-loop drain' appears when the account 5h quota rises much faster
+  than this session's own spend — something outside this loop (another
+  machine, claude -p, workflows) is draining the quota. This is an
+  approximate heuristic: it converts session \$/hr to expected %/hr via a
+  rough calibration constant, and only fires on a 2.5× mismatch with at
+  least a 3% delta to reduce false positives. Treat it as a hint, not a
+  measurement.
 
 Colors:
   Green  = < 50% consumed.
@@ -203,6 +213,22 @@ Colors:
 
 When it hides:
   Not shown on the minimal tier. Present on standard and full tiers."
+
+SEG_DETAIL[workflows]="What it shows:
+  When a workflow (multi-agent orchestration) is running: the number of active
+  agents and their combined current context footprint.
+  When idle: session-cumulative tokens across completed workflow runs and the
+  number of runs.
+
+Label semantics:
+  'agents ctx Σ' means context footprint: input + cache_creation + cache_read
+  tokens from each agent's most recent turn. It is NOT cumulative API billing
+  across all turns. cache_read_input_tokens are re-billed each turn, so summing
+  every usage block would inflate the number.
+
+When it hides:
+  Hidden if no session directory can be found, or if no workflows have run this
+  session."
 
 SEG_DETAIL[env]="What it shows:
   Whether Claude Code is running on the local machine or over SSH.
@@ -296,9 +322,10 @@ How it's computed:
   hours in your local timezone.
 
 When it hides:
-  Not shown on minimal or standard tiers. On full tier, hidden on weekends
-  (when there are no peak hours) and when the schedule mode is 'normal'
-  (all-day free usage, no peak defined)."
+  Not shown on minimal or standard tiers. On full tier, hidden entirely when
+  the schedule mode is 'normal' (all-day free usage, no peak windows to
+  draw). On peak-mode schedules it renders even on off-peak days so the bar
+  stays a consistent visual anchor."
 
 SEG_DETAIL[metrics]="What it shows:
   The combined spending + cache metrics line (full tier only).
@@ -313,6 +340,72 @@ How it's computed:
 When it hides:
   Not shown on minimal or standard tiers. Hidden on full tier if all three
   sub-segments have no data."
+
+SEG_DETAIL[usage_credits]="What it shows:
+  Extra-usage (overflow) credit status from the Anthropic usage API:
+  whether pay-as-you-go overflow is enabled and how much has been consumed.
+  Examples:
+    'overflow ▰▰▱▱▱▱▱▱ \$3.10/\$25'  — overflow on; \$3.10 of a \$25 cap used.
+    'overflow \$3.10'                — overflow on, no cap reported.
+    'overflow: off'                 — overflow disabled (shown only after use).
+
+How it's computed:
+  Reads the extra_usage block of the cached usage API response
+  (~/.claude/statusline-usage-cache.json). Bar percentage is
+  consumed_usd / limit_usd × 100.
+
+Colors:
+  Green  = < 50% of the cap consumed.
+  Yellow = 50-80% consumed.
+  Red    = > 80% consumed.
+
+When it hides:
+  Hidden when the usage API reports no extra_usage block, or when overflow
+  is disabled and nothing has been consumed. Part of the full tier."
+
+SEG_DETAIL[auth_mode]="What it shows:
+  Which credential Claude Code is billing against right now.
+  Values:
+    'API-KEY EXPORTED - claude -p bills API acct' — red warning badge.
+    'auth:oauth'       — normal subscription OAuth login.
+    'auth:setup-token' — long-lived setup token (sk-ant-oat01-…).
+    'auth:?'           — no credential detected.
+
+How it's computed:
+  Checks ANTHROPIC_API_KEY first (exported key = claude -p bills the API
+  account, not your subscription), then CLAUDE_CODE_OAUTH_TOKEN, then
+  ~/.claude/.credentials.json.
+
+Colors:
+  Red background = exported API key (costs real API money).
+  Dim            = everything else.
+
+When it hides:
+  Opt-in segment (segments.auth_mode in statusline-config.json). The red
+  API-key warning is unconditional: it force-shows on every tier whenever
+  ANTHROPIC_API_KEY is exported, even if the segment is not enabled."
+
+SEG_DETAIL[sdk_meter]="What it shows:
+  Month-to-date SDK credit burn versus your plan ceiling.
+  Example: 'sdk ▰▰▰▰▰▰▱▱ \$15.00/\$20 ~per-machine approx'.
+  ' BLOCKED '     — ceiling reached and overflow is off (claude -p will fail).
+  'overflow ON'   — ceiling reached but overflow credit is enabled.
+
+How it's computed:
+  Prefers the sdk_credit block from the usage API when present. Otherwise
+  reads the local ledger ~/.claude/statusline-sdk-ledger.json, which sums
+  print-mode (claude -p) session costs recorded on THIS machine. The
+  '~per-machine approx' suffix is a deliberate honesty marker: the ledger is
+  an approximate heuristic — it cannot see other machines and infers
+  print-mode sessions from session metadata.
+
+Colors:
+  Green / Yellow / Red by percentage of ceiling consumed; red 'BLOCKED'
+  badge at 100% without overflow.
+
+When it hides:
+  Opt-in segment (segments.sdk_meter in statusline-config.json). Also hidden
+  when neither API data nor a ledger exists, or nothing has been consumed."
 
 SEG_DETAIL[banner]="What it shows:
   A broadcast message loaded from the remote schedule.json file.
@@ -330,17 +423,21 @@ When it hides:
 
 # One-line purpose table (used by --explain with no arg)
 declare -A SEG_ONELINER
-SEG_ONELINER[peak_hours]="Visual indicator of peak-hour window (when Opus throttling kicks in)"
+SEG_ONELINER[peak_hours]="Historical / custom-tier only peak-hour indicator"
 SEG_ONELINER[model]="Current model name (opus-4-7 / sonnet-4-6 / haiku-4-5)"
 SEG_ONELINER[context]="Tokens used / total context window and percentage"
 SEG_ONELINER[vim_mode]="Active Vim keybinding mode in Claude Code (NORMAL / INSERT)"
 SEG_ONELINER[agent]="Sub-agent name when running inside a multi-agent task"
+SEG_ONELINER[workflows]="Live workflow agent count + context Σ (or session cumulative)"
 SEG_ONELINER[worktree]="Git worktree name when inside a linked worktree (wt:name)"
 SEG_ONELINER[git_branch]="Currently checked-out git branch name"
 SEG_ONELINER[git_dirty]="Working-tree status: 'clean', 'N unsaved', or 'M unpushed'"
 SEG_ONELINER[cost]="Cumulative session cost in USD (e.g. \$15.83)"
 SEG_ONELINER[effort]="Thinking-effort level from settings.json (e:LO / e:MED / e:HI)"
-SEG_ONELINER[rate_limits]="5-hour and weekly rate-limit bars with reset timers"
+SEG_ONELINER[rate_limits]="5-hour and weekly rate-limit bars with reset timers (+ approximate off-loop drain hint)"
+SEG_ONELINER[usage_credits]="Extra-usage (overflow) credit status: enabled/consumed vs cap"
+SEG_ONELINER[auth_mode]="Active billing credential (auth:oauth / setup-token); red warning on exported API key"
+SEG_ONELINER[sdk_meter]="Month-to-date SDK credit burn vs plan ceiling (~per-machine approx ledger)"
 SEG_ONELINER[env]="Execution environment: LOCAL (cyan) or REMOTE/SSH (magenta)"
 SEG_ONELINER[burn_rate]="Spending rate over the last 10 min (e.g. \$6.3/hr); RED >\$50 projected"
 SEG_ONELINER[cache_hit]="Cache hit ratio + recent cache-read delta (e.g. cache 96% ↑2.3k)"
@@ -360,8 +457,9 @@ do_explain() {
         printf '%-22s %s\n' "SEGMENT" "PURPOSE"
         printf '%-22s %s\n' "──────────────────────" "──────────────────────────────────────────────────"
         local name
-        for name in peak_hours model context vim_mode agent worktree git_branch git_dirty \
-                    cost effort rate_limits env burn_rate cache_hit context_depletion \
+        for name in peak_hours model context vim_mode agent workflows worktree git_branch git_dirty \
+                    cost effort rate_limits usage_credits auth_mode sdk_meter env \
+                    burn_rate cache_hit context_depletion \
                     timeline metrics banner duration; do
             local line="${SEG_ONELINER[$name]:-}"
             if [[ -n "$line" ]]; then

@@ -26,8 +26,15 @@ from rolling_state import (
     rolling_tokens_out as _rs_tokens,
     cache_delta as _rs_cache_delta,
 )
+from workflows import (
+    detect_live_workflows as _wf_detect_live,
+    find_session_dir as _wf_find_session_dir,
+    read_completed_workflows as _wf_read_completed,
+    workflow_cache_key as _wf_cache_key,
+)
 
 DEBUG = os.environ.get("STATUSLINE_DEBUG") == "1"
+_WF_CACHE = {}
 
 def debug(msg):
     if DEBUG:
@@ -64,12 +71,12 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 #   line 4 — burn/cache metrics (build_metrics_line)
 # Do NOT alter the segment lists below; behaviour diverges only at render time.
 TIER_PRESETS = {
-    # Minimal: essentials only — peak, model, compact context, rate limit %, git
-    "minimal": ["peak_hours", "model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
+    # Minimal: essentials only — model, compact context, rate limit %, git
+    "minimal": ["model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
-    "standard": ["peak_hours", "model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "standard": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["peak_hours", "model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "full": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -457,6 +464,14 @@ def color_for_pct(pct):
     return GREEN
 
 
+def _as_float(value, default=0.0):
+    """Coerce possibly-null/garbage cache values to float (None → default)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_usage_bar(pct, width=10):
     pct = max(0, min(100, pct))
     filled = pct * width // 100
@@ -508,9 +523,21 @@ def seg_banner(ctx):
     if release_notice:
         badges.append(release_notice)
 
-    banner = schedule.get("banner", {})
-    text = banner.get("text", "")
-    if text:
+    banner_list = schedule.get("banners", [])
+    if not isinstance(banner_list, list):
+        banner_list = []
+    if not banner_list:
+        banner = schedule.get("banner", {})
+        if isinstance(banner, dict) and banner.get("text"):
+            banner_list = [banner]
+
+    color_map = {"yellow": BG_YELLOW, "red": BG_RED, "green": BG_GREEN, "blue": BG_BLUE, "gray": BG_GRAY}
+    for banner in banner_list:
+        if not isinstance(banner, dict):
+            continue
+        text = banner.get("text", "")
+        if not text:
+            continue
         expires = banner.get("expires", "")
         show_banner = True
         if expires:
@@ -522,7 +549,6 @@ def seg_banner(ctx):
                 pass
 
         if show_banner:
-            color_map = {"yellow": BG_YELLOW, "red": BG_RED, "green": BG_GREEN, "blue": BG_BLUE, "gray": BG_GRAY}
             bg = color_map.get(banner.get("color", "yellow"), BG_YELLOW)
             badges.append(f"{bg} {text} {RST}")
 
@@ -915,6 +941,48 @@ def seg_agent(ctx):
     return " ".join(parts) if parts else ""
 
 
+def seg_workflows(ctx):
+    """Show workflow agent context footprint: live count or session cumulative."""
+    session_dir = _wf_find_session_dir(ctx.get("stdin", {}))
+    if not session_dir:
+        ctx["_wf_live"] = []
+        ctx["_wf_completed"] = {}
+        return ""
+
+    cache_key = _wf_cache_key(session_dir)
+    if _WF_CACHE.get("key") == cache_key:
+        cached = _WF_CACHE.get("payload", {})
+        ctx["_wf_live"] = cached.get("live", [])
+        ctx["_wf_completed"] = cached.get("completed", {})
+        return _WF_CACHE.get("result", "")
+
+    live = _wf_detect_live(session_dir)
+    if live:
+        total_agents = sum(item["agents"] for item in live)
+        total_tokens = sum(item["tokens"] for item in live)
+        result = f"{CYAN}\u2699 {total_agents} agents ctx \u03a3 {_fmt_tokens(total_tokens)}{RST}"
+        payload = {"live": live, "completed": {}}
+        _WF_CACHE.update({"key": cache_key, "result": result, "payload": payload})
+        ctx["_wf_live"] = live
+        ctx["_wf_completed"] = {}
+        return result
+
+    completed = _wf_read_completed(session_dir)
+    ctx["_wf_live"] = []
+    ctx["_wf_completed"] = completed
+    if completed["run_count"] == 0:
+        _WF_CACHE.update({"key": cache_key, "result": "", "payload": {"live": [], "completed": completed}})
+        return ""
+
+    tok_str = _fmt_tokens(completed["total_tokens"])
+    result = (
+        f"{DIM}wf:{RST} agents ctx \u03a3 {WHITE}{tok_str}{RST} "
+        f"{DIM}\u00b7 {completed['run_count']} runs{RST}"
+    )
+    _WF_CACHE.update({"key": cache_key, "result": result, "payload": {"live": [], "completed": completed}})
+    return result
+
+
 def seg_rate_limits(ctx):
     """Fetch rate limits from Claude OAuth API (cached 60s)."""
     cache_dir = Path.home() / ".claude"
@@ -977,14 +1045,118 @@ def seg_rate_limits(ctx):
     fh_pct = int(fh.get("utilization", 0))
     tier = ctx.get("config", {}).get("tier", "standard")
 
-    # Add peak indicator to rate limit display
-    peak_tag = ""
-    if ctx.get("is_peak"):
-        peak_tag = f" {YELLOW}\u26a1{RST}"
-
     if tier == "minimal":
-        return f"{color_for_pct(fh_pct)}{fh_pct}%{RST} {DIM}5H{RST}{peak_tag}"
-    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}{peak_tag}"
+        return f"{color_for_pct(fh_pct)}{fh_pct}%{RST} {DIM}5H{RST}"
+    return f"{build_usage_bar(fh_pct)} {color_for_pct(fh_pct)}{fh_pct}%{RST}"
+
+
+def seg_usage_credits(ctx):
+    """Show extra_usage / SDK-credit overflow status from usage cache."""
+    usage_data = ctx.get("usage_data")
+    if not usage_data:
+        return ""
+
+    extra = usage_data.get("extra_usage", {})
+    if not isinstance(extra, dict) or not extra:
+        return ""
+
+    enabled = bool(extra.get("enabled", False))
+    consumed = _as_float(extra.get("consumed_usd"))
+    limit = _as_float(extra.get("limit_usd"))
+
+    if not enabled and consumed == 0:
+        return ""
+
+    if not enabled:
+        return f"{DIM}overflow: off{RST}"
+
+    if limit > 0:
+        pct = int(consumed * 100 / limit)
+        bar = build_usage_bar(pct, 8)
+        color = color_for_pct(pct)
+        return f"{DIM}overflow{RST} {bar} {color}${consumed:.2f}/${limit:.0f}{RST}"
+
+    return f"{DIM}overflow{RST} {YELLOW}${consumed:.2f}{RST}"
+
+
+def seg_auth_mode(ctx):
+    """Warn on exported API key; otherwise show detected Claude auth mode."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+
+    if api_key:
+        return f"{BG_RED} API-KEY EXPORTED - claude -p bills API acct {RST}"
+
+    if oauth_token:
+        if oauth_token.startswith("sk-ant-oat01-"):
+            return f"{DIM}auth:setup-token{RST}"
+        return f"{DIM}auth:oauth{RST}"
+
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    if creds_path.exists():
+        try:
+            data = json.loads(creds_path.read_text(encoding="utf-8"))
+            if data.get("claudeAiOauth", {}).get("accessToken"):
+                return f"{DIM}auth:oauth{RST}"
+        except Exception:
+            pass
+
+    return f"{DIM}auth:?{RST}"
+
+
+def _sdk_exhaustion_suffix(ctx, pct):
+    """BLOCKED / overflow-ON indicator once the SDK credit pool is exhausted."""
+    if pct < 100:
+        return ""
+    extra = (ctx.get("usage_data") or {}).get("extra_usage")
+    overflow_enabled = isinstance(extra, dict) and bool(extra.get("enabled", False))
+    if overflow_enabled:
+        return f" {YELLOW}overflow ON{RST}"
+    return f" {BG_RED} BLOCKED {RST}"
+
+
+def seg_sdk_meter(ctx):
+    """Show month-to-date SDK credit burn vs plan ceiling."""
+    sdk_direct = (ctx.get("usage_data") or {}).get("sdk_credit")
+    if isinstance(sdk_direct, dict) and sdk_direct.get("remaining_usd") is not None:
+        limit = _as_float(sdk_direct.get("limit_usd"))
+        remaining = _as_float(sdk_direct.get("remaining_usd"))
+        consumed = max(0.0, limit - remaining)
+        if limit <= 0 or consumed == 0:
+            return ""
+        pct = int(consumed * 100 / limit)
+        suffix = _sdk_exhaustion_suffix(ctx, pct)
+        return f"{DIM}sdk{RST} {build_usage_bar(pct, 8)} {color_for_pct(pct)}${consumed:.2f}/${limit:.0f}{RST}{suffix}"
+
+    # The ledger is externally fed (no official SDK-credit endpoint yet);
+    # render it only when stamped for the current month so stale data is
+    # never presented as live.
+    ledger_path = Path.home() / ".claude" / "statusline-sdk-ledger.json"
+    if not ledger_path.exists():
+        return ""
+
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(ledger, dict):
+        return ""
+
+    current_month = datetime.now().strftime("%Y-%m")
+    if str(ledger.get("month", "")) != current_month:
+        return ""
+
+    consumed = _as_float(ledger.get("month_total_usd"))
+    ceiling = _as_float(ledger.get("plan_ceiling_usd"), 20.0)
+    if consumed == 0:
+        return ""
+
+    pct = int(consumed * 100 / ceiling) if ceiling > 0 else 0
+    color = color_for_pct(pct)
+    bar = build_usage_bar(pct, 8)
+    suffix = _sdk_exhaustion_suffix(ctx, pct)
+
+    return f"{DIM}sdk{RST} {bar} {color}${consumed:.2f}/${ceiling:.0f}{RST}{DIM} ~per-machine approx{RST}{suffix}"
 
 
 def _get_oauth_token():
@@ -1024,6 +1196,12 @@ def _get_oauth_token():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_timeline(ctx):
+    # mode=normal (no peak restrictions): no peak/off-peak legend to draw —
+    # hide the timeline entirely (same gate as seg_peak_hours).
+    schedule = ctx.get("schedule") or {}
+    if schedule.get("mode") == "normal":
+        return ""
+
     now = ctx["local_time"]
     hour, minute = now.hour, now.minute
     weekday = now.isoweekday()
@@ -1081,8 +1259,8 @@ def build_rate_limits_line(ctx):
     sd_bar = build_usage_bar(sd_pct, bw)
     sd_color = color_for_pct(sd_pct)
 
-    # Peak indicator instead of 2x
-    peak_tag = f" {YELLOW}\u26a1 peak{RST}" if ctx.get("is_peak") else f" {GREEN}\u2713{RST}"
+    sds = usage_data.get("seven_day_sonnet", {})
+    sds_pct = int(sds.get("utilization", 0))
 
     fh_time = _format_reset(fh_reset, "time")
     sd_time = _format_reset(sd_reset, "datetime")
@@ -1095,8 +1273,91 @@ def build_rate_limits_line(ctx):
 
     current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
+    parts = [current, weekly]
+    if sds_pct > 0:
+        sds_bar = build_usage_bar(sds_pct, bw)
+        sds_color = color_for_pct(sds_pct)
+        sds_time = _format_reset(sds.get("resets_at", ""), "datetime")
+        parts.append(f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sds_time}{RST}")
 
-    return f"{current}{peak_tag} {DIM}\u00b7{RST} {weekly} {DIM}\u2502{RST}"
+    offloop = _check_offloop_drain(ctx, usage_data)
+    separator = f" {DIM}\u00b7{RST} "
+    return f"{separator.join(parts)}{offloop} {DIM}\u2502{RST}"
+
+
+# Off-loop drain state must survive across renders (each render is a fresh
+# process), so it lives in a tiny JSON file shared with the node engine.
+# Keep the filename and the field names ("utilization", "session_cost", "t")
+# exactly in sync with engines/node-engine.js.
+OFFLOOP_STATE_FILE = "statusline-offloop-state.json"
+
+
+def _offloop_state_path():
+    return Path.home() / ".claude" / OFFLOOP_STATE_FILE
+
+
+def _read_offloop_state(state_path):
+    """Read the previous reading; missing/corrupt file means no prior."""
+    try:
+        prev = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(prev, dict):
+            return prev
+    except Exception:
+        pass
+    return None
+
+
+def _write_offloop_state(state_path, fh_pct, session_cost, now):
+    """Atomic write (tmp + os.replace), same pattern as _write_vscode_context."""
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"utilization": fh_pct, "session_cost": session_cost, "t": now}
+        tmp_path = state_path.with_name(f"{state_path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(str(tmp_path), str(state_path))
+    except Exception:
+        pass
+
+
+def _check_offloop_drain(ctx, usage_data):
+    """Warn if account quota is rising faster than this session's spend."""
+    fh_pct = _as_float((usage_data.get("five_hour") or {}).get("utilization", 0))
+    session_cost = _as_float(
+        (ctx.get("stdin") or {}).get("cost", {}).get("total_cost_usd", 0.0)
+    )
+    now = time.time()
+    state_path = _offloop_state_path()
+
+    prev = _read_offloop_state(state_path)
+    prev_fh_pct = _as_float(prev.get("utilization"), None) if prev else None
+    prev_time = _as_float(prev.get("t"), now) if prev else now
+
+    if prev_fh_pct is None:
+        _write_offloop_state(state_path, fh_pct, session_cost, now)
+        return ""
+
+    elapsed_min = (now - prev_time) / 60.0
+    if elapsed_min < 2:
+        # Keep the prior reading as the anchor: renders happen every few
+        # seconds, so rewriting each tick would make a >=2min delta impossible.
+        return ""
+
+    # Window elapsed: re-anchor for the next check before evaluating.
+    _write_offloop_state(state_path, fh_pct, session_cost, now)
+
+    fh_delta_pct = fh_pct - prev_fh_pct
+    if fh_delta_pct <= 0:
+        return ""
+
+    session_rate = _rs_rate(10)
+    if session_rate is None:
+        return ""
+
+    expected_pct_per_hr = session_rate / 0.80
+    actual_pct_per_hr = fh_delta_pct / elapsed_min * 60
+    if actual_pct_per_hr > expected_pct_per_hr * 2.5 and fh_delta_pct > 3:
+        return f" {YELLOW}\u26a0 off-loop drain{RST}"
+    return ""
 
 
 def _format_reset(iso_str, style="time"):
@@ -1128,8 +1389,9 @@ def build_metrics_line(ctx):
     if cache:
         parts.append(cache)
 
-    if ctx.get("is_peak"):
-        parts.append(f"{YELLOW}\u26a1 peak = limits drain faster{RST}")
+    wf = seg_workflows(ctx)
+    if wf:
+        parts.append(wf)
 
     if not parts:
         return ""
@@ -1152,6 +1414,7 @@ SEGMENTS = {
     "burn_rate": seg_burn_rate,
     "vim_mode": seg_vim_mode,
     "agent": seg_agent,
+    "workflows": seg_workflows,
     "git_branch": seg_git_branch,
     "git_dirty": seg_git_dirty,
     "git_ahead_behind": seg_git_ahead_behind,
@@ -1160,9 +1423,22 @@ SEGMENTS = {
     "lines": seg_lines,
     "ts_errors": seg_ts_errors,
     "rate_limits": seg_rate_limits,
+    "usage_credits": seg_usage_credits,
+    "auth_mode": seg_auth_mode,
+    "sdk_meter": seg_sdk_meter,
     "effort": seg_effort,
     "env": seg_env,
 }
+
+
+def _run_segment(name, fn, ctx):
+    """Run one segment; no single segment may ever kill the statusline
+    (matches the node engine's per-segment guard)."""
+    try:
+        return fn(ctx)
+    except Exception as exc:
+        debug(f"segment {name} failed: {exc!r}")
+        return ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1215,30 +1491,30 @@ def main():
     # Inject banner at the start if present
     if "banner" not in enabled:
         enabled.insert(0, "banner")
+    if os.environ.get("ANTHROPIC_API_KEY") and "auth_mode" not in enabled:
+        insert_at = 1 if enabled and enabled[0] == "banner" else 0
+        enabled.insert(insert_at, "auth_mode")
 
     tier = config.get("tier", "standard")
     is_full_tier = tier == "full" or mode == "full"
     is_standard_tier = tier == "standard"
     # Standard and Full both need rate limits data for their extra lines
     if is_full_tier or is_standard_tier:
-        seg_rate_limits(ctx)  # populates ctx["usage_data"]
+        _run_segment("rate_limits", seg_rate_limits, ctx)  # populates ctx["usage_data"]
 
     # Build line 1
     parts = []
     git_parts = []
     for name in enabled:
-        if name in ("git_branch", "git_dirty", "git_ahead_behind"):
-            fn = SEGMENTS.get(name)
-            if fn:
-                r = fn(ctx)
-                if r:
-                    git_parts.append(r)
-        else:
-            fn = SEGMENTS.get(name)
-            if fn:
-                r = fn(ctx)
-                if r:
-                    parts.append(r)
+        fn = SEGMENTS.get(name)
+        if not fn:
+            continue
+        r = _run_segment(name, fn, ctx)
+        if r:
+            if name in ("git_branch", "git_dirty", "git_ahead_behind"):
+                git_parts.append(r)
+            else:
+                parts.append(r)
 
     if git_parts:
         parts.append(" ".join(git_parts))
@@ -1259,9 +1535,10 @@ def main():
     if is_full_tier:
         features = schedule.get("features", {})
 
-        # full mode: line 2 — visual 24h timeline. Always rendered (even on
-        # off-peak days) so the bar is a consistent anchor; a day with no
-        # peak window is a legitimate visual state, not a broken statusline.
+        # full mode: line 2 — visual 24h timeline. Rendered even on off-peak
+        # days so the bar is a consistent anchor; a day with no peak window is
+        # a legitimate visual state. Hidden entirely when the schedule mode is
+        # "normal" (build_timeline returns '').
         if features.get("show_timeline", True):
             timeline = build_timeline(ctx)
             if timeline:
@@ -1276,6 +1553,55 @@ def main():
         metrics = build_metrics_line(ctx)
         if metrics:
             print(f"\n{metrics}", end="")
+
+    try:
+        _write_vscode_context(ctx)
+    except Exception:
+        pass
+
+
+def _write_vscode_context(ctx):
+    """Write statusline data to %TEMP%/claude/statusline-context.json."""
+    import tempfile
+
+    context_dir = Path(tempfile.gettempdir()) / "claude"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    context_path = context_dir / "statusline-context.json"
+
+    usage_data = ctx.get("usage_data", {})
+    wf_live = ctx.get("_wf_live", [])
+    wf_completed = ctx.get("_wf_completed", {})
+    stdin_data = ctx.get("stdin", {})
+    cw = stdin_data.get("context_window", {})
+    current_usage = cw.get("current_usage", {})
+    current = (
+        int(current_usage.get("input_tokens", 0))
+        + int(current_usage.get("cache_creation_input_tokens", 0))
+        + int(current_usage.get("cache_read_input_tokens", 0))
+    )
+    size = int(cw.get("context_window_size", 0) or 0)
+    pct = int(current * 100 / size) if size > 0 else 0
+
+    payload = {
+        "ts": int(time.time()),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "five_hour_pct": int(usage_data.get("five_hour", {}).get("utilization", 0)),
+        "seven_day_pct": int(usage_data.get("seven_day", {}).get("utilization", 0)),
+        "cost_usd": stdin_data.get("cost", {}).get("total_cost_usd", 0),
+        "current_usage": current,
+        "context_window_size": size,
+        "pct": pct,
+        "model": stdin_data.get("model", {}).get("display_name", ""),
+        "is_peak": ctx.get("is_peak", False),
+        "active_workflow_agents": sum(item["agents"] for item in wf_live),
+        "subagent_tokens_live": sum(item["tokens"] for item in wf_live),
+        "subagent_runs_session": wf_completed.get("run_count", 0),
+    }
+
+    # Unique tmp name per process: concurrent sessions must not collide
+    tmp_path = context_path.with_name(f"{context_path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(str(tmp_path), str(context_path))
 
 
 TELEMETRY_URL = "https://statusline-telemetry.nadavf.workers.dev/ping"

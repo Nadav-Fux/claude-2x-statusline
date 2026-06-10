@@ -264,12 +264,12 @@ class TestCostMilestone:
 
 
 # ---------------------------------------------------------------------------
-# 5. Off-peak + low rate limit → "good moment for refactors"
+# 5. Retired peak-era templates
 # ---------------------------------------------------------------------------
 
 class TestOffPeakInsight:
-    def test_off_peak_wide_open_fires(self):
-        """Off-peak + rate_limit < 50% → 'good moment for heavy refactors' insight."""
+    def test_off_peak_wide_open_is_retired(self):
+        """Normal-mode low rate limits should not emit old peak-era advice."""
         mem = _empty_memory()
         obs = _obs(
             is_peak=False,
@@ -277,9 +277,8 @@ class TestOffPeakInsight:
             rate_limit_7d_pct=15.0,
         )
         insights = _build_insights(obs, mem)
-        off_peak = [i for i in insights if "refactors" in i.text.lower()]
-        assert off_peak, f"Expected off-peak insight, got: {[i.text for i in insights]}"
-        assert off_peak[0].template_key == "off_peak_wide_open"
+        off_peak = [i for i in insights if i.template_key == "off_peak_wide_open"]
+        assert not off_peak
 
     def test_off_peak_does_not_fire_when_rate_limit_high(self):
         """If rate limit > 80%, rate_limit_high takes precedence, no off_peak_wide_open."""
@@ -295,7 +294,7 @@ class TestOffPeakInsight:
         assert not off_peak
 
     def test_peak_hours_fires_instead_of_off_peak(self):
-        """is_peak=True → peak_rate_ok fires, not off_peak."""
+        """is_peak=True → historical/custom peak cue fires, not off_peak."""
         mem = _empty_memory()
         obs = _obs(
             is_peak=True,
@@ -304,12 +303,12 @@ class TestOffPeakInsight:
         )
         insights = _build_insights(obs, mem)
         off_peak = [i for i in insights if "refactors" in i.text.lower()]
-        peak_insights = [i for i in insights if "peak hours" in i.text.lower()]
+        peak_insights = [i for i in insights if i.template_key == "peak_rate_ok"]
         assert not off_peak
         assert peak_insights
 
-    def test_off_peak_actionability_is_7(self):
-        """off_peak_wide_open has actionability=7 (clear action suggestion)."""
+    def test_low_rate_limits_have_no_peak_era_advice(self):
+        """Low rate limits alone should not create a narrator insight."""
         mem = _empty_memory()
         obs = _obs(
             is_peak=False,
@@ -318,8 +317,7 @@ class TestOffPeakInsight:
         )
         insights = _build_insights(obs, mem)
         off_peak = [i for i in insights if i.template_key == "off_peak_wide_open"]
-        assert off_peak
-        assert off_peak[0].actionability == 7
+        assert not off_peak
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +366,6 @@ class TestScoreFormula:
         mem = _empty_memory()
         obs = Observation()  # all zeros, off-peak=False, no rate limit info
         results = pick(obs, mem)
-        # off_peak_wide_open fires for default obs (is_peak=False, both rate limits = 0 < 50)
         assert isinstance(results, list)
         assert len(results) <= 2
 
