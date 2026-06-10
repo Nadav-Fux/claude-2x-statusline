@@ -1,0 +1,4 @@
+{"type": "user", "message": {"content": "Start task"}, "isSidechain": true}
+{"type": "assistant", "message": {"content": "Starting...", "usage": {"input_tokens": 30000, "cache_creation_input_tokens": 15000, "cache_read_input_tokens": 0, "output_tokens": 500}}, "isSidechain": true}
+{"type": "user", "message": {"content": "Continue"}, "isSidechain": true}
+{"type": "assistant", "message": {"content": "Continuing...", "usage": {"input_tokens": 12000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 45826, "output_tokens": 800}}, "isSidechain": true}

@@ -26,8 +26,15 @@ from rolling_state import (
     rolling_tokens_out as _rs_tokens,
     cache_delta as _rs_cache_delta,
 )
+from workflows import (
+    detect_live_workflows as _wf_detect_live,
+    find_session_dir as _wf_find_session_dir,
+    read_completed_workflows as _wf_read_completed,
+    workflow_cache_key as _wf_cache_key,
+)
 
 DEBUG = os.environ.get("STATUSLINE_DEBUG") == "1"
+_WF_CACHE = {}
 
 def debug(msg):
     if DEBUG:
@@ -67,9 +74,9 @@ TIER_PRESETS = {
     # Minimal: essentials only — model, compact context, rate limit %, git
     "minimal": ["model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
-    "standard": ["model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "standard": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["model", "context", "vim_mode", "agent", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "full": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -926,6 +933,48 @@ def seg_agent(ctx):
     return " ".join(parts) if parts else ""
 
 
+def seg_workflows(ctx):
+    """Show workflow agent context footprint: live count or session cumulative."""
+    session_dir = _wf_find_session_dir(ctx.get("stdin", {}))
+    if not session_dir:
+        ctx["_wf_live"] = []
+        ctx["_wf_completed"] = {}
+        return ""
+
+    cache_key = _wf_cache_key(session_dir)
+    if _WF_CACHE.get("key") == cache_key:
+        cached = _WF_CACHE.get("payload", {})
+        ctx["_wf_live"] = cached.get("live", [])
+        ctx["_wf_completed"] = cached.get("completed", {})
+        return _WF_CACHE.get("result", "")
+
+    live = _wf_detect_live(session_dir)
+    if live:
+        total_agents = sum(item["agents"] for item in live)
+        total_tokens = sum(item["tokens"] for item in live)
+        result = f"{CYAN}\u2699 {total_agents} agents ctx \u03a3 {_fmt_tokens(total_tokens)}{RST}"
+        payload = {"live": live, "completed": {}}
+        _WF_CACHE.update({"key": cache_key, "result": result, "payload": payload})
+        ctx["_wf_live"] = live
+        ctx["_wf_completed"] = {}
+        return result
+
+    completed = _wf_read_completed(session_dir)
+    ctx["_wf_live"] = []
+    ctx["_wf_completed"] = completed
+    if completed["run_count"] == 0:
+        _WF_CACHE.update({"key": cache_key, "result": "", "payload": {"live": [], "completed": completed}})
+        return ""
+
+    tok_str = _fmt_tokens(completed["total_tokens"])
+    result = (
+        f"{DIM}wf:{RST} agents ctx \u03a3 {WHITE}{tok_str}{RST} "
+        f"{DIM}\u00b7 {completed['run_count']} runs{RST}"
+    )
+    _WF_CACHE.update({"key": cache_key, "result": result, "payload": {"live": [], "completed": completed}})
+    return result
+
+
 def seg_rate_limits(ctx):
     """Fetch rate limits from Claude OAuth API (cached 60s)."""
     cache_dir = Path.home() / ".claude"
@@ -1131,6 +1180,10 @@ def build_metrics_line(ctx):
     if cache:
         parts.append(cache)
 
+    wf = seg_workflows(ctx)
+    if wf:
+        parts.append(wf)
+
     if not parts:
         return ""
 
@@ -1152,6 +1205,7 @@ SEGMENTS = {
     "burn_rate": seg_burn_rate,
     "vim_mode": seg_vim_mode,
     "agent": seg_agent,
+    "workflows": seg_workflows,
     "git_branch": seg_git_branch,
     "git_dirty": seg_git_dirty,
     "git_ahead_behind": seg_git_ahead_behind,

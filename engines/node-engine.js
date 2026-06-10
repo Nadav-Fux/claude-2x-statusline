@@ -26,8 +26,8 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 // ── Config ──
 const TIER_PRESETS = {
   minimal: ['model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
-  standard: ['model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -68,6 +68,7 @@ function loadLocalVersion() {
   } catch { return ''; }
 }
 const CURRENT_VERSION = loadLocalVersion();
+let wfCache = {};
 
 // ── Version helpers ──
 function parseVersion(value) {
@@ -244,6 +245,127 @@ function formatReset(isoStr, style) {
   } catch { return ''; }
 }
 
+// ── Workflow helpers ──
+const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_creation_input_tokens"\s*:\s*(\d+)\s*,\s*"cache_read_input_tokens"\s*:\s*(\d+)\s*,\s*"output_tokens"\s*:\s*(\d+)/g;
+
+function projectSlug(cwd) {
+  return String(cwd || '').replace(/[\\/]/g, '-').replace(/:/g, '').replace(/^-+/, '');
+}
+
+function findSessionDir(stdin) {
+  const tp = stdin.transcript_path || '';
+  if (tp) {
+    const candidate = path.extname(tp) === '.jsonl' ? path.dirname(tp) : tp;
+    try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
+  }
+
+  const sessionId = stdin.session_id || '', cwd = stdin.cwd || '';
+  if (sessionId && cwd) {
+    const candidate = path.join(CLAUDE_DIR, 'projects', projectSlug(cwd), sessionId);
+    try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
+  }
+
+  const sessionsDir = path.join(CLAUDE_DIR, 'sessions');
+  try {
+    for (const name of fs.readdirSync(sessionsDir)) {
+      if (!name.endsWith('.json')) continue;
+      const filePath = path.join(sessionsDir, name);
+      try {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        if (String(data.pid || '') === String(process.pid) || path.basename(name, '.json') === String(process.pid)) {
+          const sid = data.sessionId || '', cwd2 = data.cwd || '';
+          if (sid && cwd2) {
+            const candidate = path.join(CLAUDE_DIR, 'projects', projectSlug(cwd2), sid);
+            try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+function workflowCacheKey(sessionDir) {
+  const wfDir = path.join(sessionDir, 'workflows');
+  const liveDir = path.join(sessionDir, 'subagents', 'workflows');
+  let mtime1 = 0, count1 = 0, mtime2 = 0, count2 = 0;
+  try {
+    const st = fs.statSync(wfDir);
+    if (st.isDirectory()) {
+      mtime1 = st.mtimeMs;
+      count1 = fs.readdirSync(wfDir).filter(n => /^wf_.*\.json$/.test(n)).length;
+    }
+  } catch {}
+  try {
+    const st = fs.statSync(liveDir);
+    if (st.isDirectory()) {
+      mtime2 = st.mtimeMs;
+      count2 = fs.readdirSync(liveDir).filter(n => n.startsWith('wf_')).length;
+    }
+  } catch {}
+  return JSON.stringify([sessionDir, mtime1, count1, mtime2, count2]);
+}
+
+function readAgentLastUsageTokens(jsonlPath) {
+  try {
+    const fd = fs.openSync(jsonlPath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      const chunkSize = Math.min(65536, stat.size);
+      const buffer = Buffer.alloc(chunkSize);
+      fs.readSync(fd, buffer, 0, chunkSize, Math.max(0, stat.size - chunkSize));
+      const tail = buffer.toString('utf8');
+      const matches = [...tail.matchAll(USAGE_RE)];
+      if (!matches.length) return 0;
+      const last = matches[matches.length - 1];
+      return Number(last[1]) + Number(last[2]) + Number(last[3]);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { return 0; }
+}
+
+function detectLiveWorkflows(sessionDir) {
+  const liveBase = path.join(sessionDir, 'subagents', 'workflows');
+  const completedDir = path.join(sessionDir, 'workflows');
+  const results = [];
+  try {
+    for (const name of fs.readdirSync(liveBase)) {
+      if (!name.startsWith('wf_')) continue;
+      const wfSubdir = path.join(liveBase, name);
+      try { if (!fs.statSync(wfSubdir).isDirectory()) continue; } catch { continue; }
+      if (fs.existsSync(path.join(completedDir, `${name}.json`))) continue;
+
+      let agents = 0, tokens = 0;
+      for (const fileName of fs.readdirSync(wfSubdir)) {
+        if (!/^agent-.*\.jsonl$/.test(fileName) || fileName.endsWith('.meta.json')) continue;
+        agents += 1;
+        tokens += readAgentLastUsageTokens(path.join(wfSubdir, fileName));
+      }
+      if (agents > 0) results.push({ name, agents, tokens });
+    }
+  } catch {}
+  return results;
+}
+
+function readCompletedWorkflows(sessionDir) {
+  const wfDir = path.join(sessionDir, 'workflows');
+  const completed = { total_tokens: 0, run_count: 0, agent_count: 0 };
+  try {
+    for (const fileName of fs.readdirSync(wfDir)) {
+      if (!/^wf_.*\.json$/.test(fileName)) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(wfDir, fileName), 'utf8'));
+        if (data.status !== 'completed') continue;
+        completed.total_tokens += Number(data.totalTokens || 0);
+        completed.run_count += 1;
+        completed.agent_count += Number(data.agentCount || 0);
+      } catch {}
+    }
+  } catch {}
+  return completed;
+}
+
 // ── Segments ──
 const SEGMENTS = {
   banner(ctx) {
@@ -329,6 +451,45 @@ const SEGMENTS = {
     if (worktreeName) parts.push(`${DIM}wt:${worktreeName}${RST}`);
 
     return parts.join(' ');
+  },
+  workflows(ctx) {
+    const sessionDir = findSessionDir(ctx.stdin || {});
+    if (!sessionDir) {
+      ctx._wfLive = [];
+      ctx._wfCompleted = {};
+      return '';
+    }
+
+    const key = workflowCacheKey(sessionDir);
+    if (wfCache.key === key) {
+      const payload = wfCache.payload || {};
+      ctx._wfLive = payload.live || [];
+      ctx._wfCompleted = payload.completed || {};
+      return wfCache.result || '';
+    }
+
+    const live = detectLiveWorkflows(sessionDir);
+    if (live.length) {
+      const agents = live.reduce((sum, item) => sum + item.agents, 0);
+      const tokens = live.reduce((sum, item) => sum + item.tokens, 0);
+      const result = `${CYAN}\u2699 ${agents} agents ctx \u03a3 ${fmtTokens(tokens)}${RST}`;
+      wfCache = { key, result, payload: { live, completed: {} } };
+      ctx._wfLive = live;
+      ctx._wfCompleted = {};
+      return result;
+    }
+
+    const completed = readCompletedWorkflows(sessionDir);
+    ctx._wfLive = [];
+    ctx._wfCompleted = completed;
+    if (!completed.run_count) {
+      wfCache = { key, result: '', payload: { live: [], completed } };
+      return '';
+    }
+
+    const result = `${DIM}wf:${RST} agents ctx \u03a3 ${WHITE}${fmtTokens(completed.total_tokens)}${RST} ${DIM}\u00b7 ${completed.run_count} runs${RST}`;
+    wfCache = { key, result, payload: { live: [], completed } };
+    return result;
   },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
   git_dirty(ctx) {
@@ -463,6 +624,8 @@ function buildMetricsLine(ctx) {
   if (burn) parts.push(`${GREEN}\u25b8${RST} ${burn}`);
   const cache = SEGMENTS.cache_hit(ctx);
   if (cache) parts.push(cache);
+  const wf = SEGMENTS.workflows(ctx);
+  if (wf) parts.push(wf);
   if (!parts.length) return '';
   return `${DIM}\u2502${RST} ${parts.join(` ${DIM}\u00b7${RST} `)} ${DIM}\u2502${RST}`;
 }

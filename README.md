@@ -539,7 +539,7 @@ The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rej
 | Tier     | Lines | Segments                                                                       |
 |----------|-------|--------------------------------------------------------------------------------|
 | minimal  | 1     | model, context, git_branch, git_dirty, rate_limits, env                       |
-| standard | 1     | model, context, vim_mode, agent, git_branch, git_dirty, cost,                 |
+| standard | 1     | model, context, vim_mode, agent, workflows, git_branch, git_dirty, cost,      |
 |          |       | effort, env                                                                    |
 | full     | 4     | Same segments as standard on line 1, plus: timeline (line 2), rate_limits bars |
 |          |       | (line 3), burn_rate + cache_hit + metrics (line 4)                             |
@@ -623,6 +623,7 @@ This statusline is dense by design &mdash; each segment answers a specific quest
 |:--------|:-------------|:--------|
 | `Opus 4.6` | Active model | The model Claude Code is currently using |
 | `360K/1.0M 36%` | Context usage | Tokens used / window size and percentage |
+| `⚙ 4 agents ctx Σ 312K` | Workflow footprint | Live: agents running + context Σ. Idle: session cumulative |
 | `$4.20` | Session cost | Total cost in USD for this session |
 | `LOCAL` / `REMOTE` | Environment | Cyan = local machine. Magenta = SSH/remote server |
 | `main` | Git branch | Current branch name |
