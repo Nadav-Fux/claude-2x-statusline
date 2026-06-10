@@ -156,6 +156,8 @@ function fmtSecs(s) { const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec
 function colorPct(p) { return p >= 80 ? RED : p >= 50 ? YELLOW : GREEN; }
 function git(...args) { try { return execFileSync('git', args, { timeout: 2000, encoding: 'utf8' }).trim(); } catch { return ''; } }
 function fmtTokens(n) { return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.floor(n/1e3)}K` : String(n); }
+function toNum(value, fallback = 0) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }
+function localDateStr(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 
 function fmtHour(h) {
   h = ((h % 24) + 24) % 24;
@@ -249,13 +251,20 @@ function formatReset(isoStr, style) {
 const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_creation_input_tokens"\s*:\s*(\d+)\s*,\s*"cache_read_input_tokens"\s*:\s*(\d+)\s*,\s*"output_tokens"\s*:\s*(\d+)/g;
 
 function projectSlug(cwd) {
-  return String(cwd || '').replace(/[\\/]/g, '-').replace(/:/g, '').replace(/^-+/, '');
+  // Empirical Claude Code rule: every char outside [A-Za-z0-9] becomes '-'
+  // ('C:\Users\nadav\github\Nadav-Plugins&Skils' -> 'C--Users-nadav-github-Nadav-Plugins-Skils').
+  return String(cwd || '').replace(/[^A-Za-z0-9]/g, '-');
+}
+
+function normalizeCwd(p) {
+  const normalized = path.normalize(String(p || ''));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 function findSessionDir(stdin) {
   const tp = stdin.transcript_path || '';
   if (tp) {
-    const candidate = path.extname(tp) === '.jsonl' ? path.dirname(tp) : tp;
+    const candidate = tp.endsWith('.jsonl') ? tp.slice(0, -6) : tp;
     try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
   }
 
@@ -265,22 +274,31 @@ function findSessionDir(stdin) {
     try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
   }
 
+  // The statusline runs as a grandchild of Claude Code (CC -> shell -> node),
+  // so PID matching can never work; match the session entry by cwd instead,
+  // preferring busy status and the freshest updatedAt.
   const sessionsDir = path.join(CLAUDE_DIR, 'sessions');
   try {
-    for (const name of fs.readdirSync(sessionsDir)) {
-      if (!name.endsWith('.json')) continue;
-      const filePath = path.join(sessionsDir, name);
-      try {
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        if (String(data.pid || '') === String(process.pid) || path.basename(name, '.json') === String(process.pid)) {
+    let targetCwd = '';
+    try { targetCwd = normalizeCwd(cwd || process.cwd()); } catch {}
+    let best = null, bestRank = null;
+    if (targetCwd) {
+      for (const name of fs.readdirSync(sessionsDir)) {
+        if (!name.endsWith('.json')) continue;
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(sessionsDir, name), 'utf8'));
           const sid = data.sessionId || '', cwd2 = data.cwd || '';
-          if (sid && cwd2) {
-            const candidate = path.join(CLAUDE_DIR, 'projects', projectSlug(cwd2), sid);
-            try { if (fs.statSync(candidate).isDirectory()) return candidate; } catch {}
-          }
-        }
-      } catch {}
+          if (!sid || !cwd2 || normalizeCwd(cwd2) !== targetCwd) continue;
+          const rank = [data.status === 'busy' ? 1 : 0, toNum(data.updatedAt, 0)];
+          if (bestRank && (rank[0] < bestRank[0] || (rank[0] === bestRank[0] && rank[1] <= bestRank[1]))) continue;
+          const candidate = path.join(CLAUDE_DIR, 'projects', projectSlug(cwd2), sid);
+          try {
+            if (fs.statSync(candidate).isDirectory()) { best = candidate; bestRank = rank; }
+          } catch {}
+        } catch {}
+      }
     }
+    if (best) return best;
   } catch {}
   return null;
 }
@@ -317,7 +335,16 @@ function readAgentLastUsageTokens(jsonlPath) {
       const tail = buffer.toString('utf8');
       const matches = [...tail.matchAll(USAGE_RE)];
       if (!matches.length) return 0;
-      const last = matches[matches.length - 1];
+      // The last match may be a partially-written usage block (live agent file).
+      // It is complete iff the match ends before EOF and the next char is not a
+      // digit (a digit would mean output_tokens was truncated mid-number).
+      let last = matches[matches.length - 1];
+      const end = last.index + last[0].length;
+      const complete = end < tail.length && !/[0-9]/.test(tail[end]);
+      if (!complete) {
+        if (matches.length < 2) return 0;
+        last = matches[matches.length - 2];
+      }
       return Number(last[1]) + Number(last[2]) + Number(last[3]);
     } finally {
       fs.closeSync(fd);
@@ -375,7 +402,9 @@ const SEGMENTS = {
     let banners = Array.isArray(ctx.schedule.banners) ? ctx.schedule.banners : [];
     const single = ctx.schedule.banner || {};
     if (!banners.length && single.text) banners = [single];
-    const today = (ctx.now || new Date()).toISOString().slice(0, 10);
+    // Compare against the LOCAL date (python parity) so both engines flip
+    // banners at the same local midnight, not at UTC midnight.
+    const today = localDateStr(ctx.now || new Date());
     const map = { yellow: BG_YELLOW, red: BG_RED, green: BG_GREEN, blue: BG_BLUE, gray: BG_GRAY };
     for (const b of banners) {
       if (!b || !b.text) continue;
@@ -548,17 +577,16 @@ const SEGMENTS = {
   usage_credits(ctx) {
     const usageData = ctx.usageData;
     if (!usageData) return '';
-    const extra = usageData.extra_usage || {};
-    if (!Object.keys(extra).length) return '';
+    const extra = usageData.extra_usage;
+    if (!extra || typeof extra !== 'object' || Array.isArray(extra) || !Object.keys(extra).length) return '';
     const enabled = Boolean(extra.enabled);
-    const consumed = Number(extra.consumed_usd || 0);
-    const limit = extra.limit_usd;
+    const consumed = toNum(extra.consumed_usd, 0);
+    const limit = toNum(extra.limit_usd, 0);
     if (!enabled && consumed === 0) return '';
     if (!enabled) return `${DIM}overflow: off${RST}`;
-    if (limit != null && Number(limit) > 0) {
-      const lim = Number(limit);
-      const pct = Math.floor(consumed * 100 / lim);
-      return `${DIM}overflow${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/${lim.toFixed(0)}${RST}`;
+    if (limit > 0) {
+      const pct = Math.floor(consumed * 100 / limit);
+      return `${DIM}overflow${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${limit.toFixed(0)}${RST}`;
     }
     return `${DIM}overflow${RST} ${YELLOW}$${consumed.toFixed(2)}${RST}`;
   },
@@ -574,25 +602,32 @@ const SEGMENTS = {
     return `${DIM}auth:?${RST}`;
   },
   sdk_meter(ctx) {
+    const extra = (ctx.usageData || {}).extra_usage || {};
     const direct = (ctx.usageData || {}).sdk_credit || {};
     if (direct.remaining_usd != null) {
-      const limit = Number(direct.limit_usd || 0);
-      const remaining = Number(direct.remaining_usd || 0);
+      const limit = toNum(direct.limit_usd, 0);
+      const remaining = toNum(direct.remaining_usd, 0);
       const consumed = Math.max(0, limit - remaining);
       if (limit <= 0 || consumed === 0) return '';
       const pct = Math.floor(consumed * 100 / limit);
-      return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/${limit.toFixed(0)}${RST}`;
+      let suffix = '';
+      if (pct >= 100 && !extra.enabled) suffix = ` ${BG_RED} BLOCKED ${RST}`;
+      else if (pct >= 100 && extra.enabled) suffix = ` ${YELLOW}overflow ON${RST}`;
+      return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${limit.toFixed(0)}${RST}${suffix}`;
     }
     let ledger;
     try { ledger = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'statusline-sdk-ledger.json'), 'utf8')); } catch { return ''; }
-    const consumed = Number(ledger.month_total_usd || 0), ceiling = Number(ledger.plan_ceiling_usd || 20);
+    // Ledger honesty: a stale ledger from a previous month is no-data, not a meter.
+    const nowDate = ctx.now || new Date();
+    const currentMonth = localDateStr(nowDate).slice(0, 7);
+    if (String(ledger.month || '') !== currentMonth) return '';
+    const consumed = toNum(ledger.month_total_usd, 0), ceiling = toNum(ledger.plan_ceiling_usd ?? 20, 20);
     if (consumed === 0) return '';
     const pct = ceiling > 0 ? Math.floor(consumed * 100 / ceiling) : 0;
-    const extra = (ctx.usageData || {}).extra_usage || {};
     let suffix = '';
     if (pct >= 100 && !extra.enabled) suffix = ` ${BG_RED} BLOCKED ${RST}`;
     else if (pct >= 100 && extra.enabled) suffix = ` ${YELLOW}overflow ON${RST}`;
-    return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/${ceiling.toFixed(0)}${RST}${DIM} ~per-machine approx${RST}${suffix}`;
+    return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${ceiling.toFixed(0)}${RST}${DIM} ~per-machine approx${RST}${suffix}`;
   },
   burn_rate(ctx) {
     const costData = ctx.stdin.cost || {}, cost = costData.total_cost_usd, durMs = costData.total_duration_ms;
@@ -633,8 +668,16 @@ const SEGMENTS = {
 };
 SEGMENTS.promo_2x = SEGMENTS.peak_hours;
 
+function runSegment(name, ctx) {
+  // No single segment may ever kill the statusline (python engine parity).
+  try { return SEGMENTS[name](ctx) || ''; } catch { return ''; }
+}
+
 // ── Full mode lines ──
 function buildTimeline(ctx) {
+  // No peak schedule in 'normal' mode — a peak/off-peak timeline would be
+  // misleading (mirrors seg_peak_hours, which also bails out in normal mode).
+  if (((ctx.schedule || {}).mode) === 'normal') return '';
   const hour = ctx.now.getHours(), minute = ctx.now.getMinutes();
   const weekday = ctx.now.getDay() === 0 ? 7 : ctx.now.getDay();
   const peakStart = ctx.peakStartLocal ?? 15, peakEnd = ctx.peakEndLocal ?? 21;
@@ -672,17 +715,43 @@ function buildRateLimitsLine(ctx) {
   return `${parts.join(` ${DIM}\u00b7${RST} `)}${checkOffloopDrain(ctx, ud)} ${DIM}\u2502${RST}`;
 }
 
+const OFFLOOP_STATE_PATH = path.join(CLAUDE_DIR, 'statusline-offloop-state.json');
+
+function readOffloopState() {
+  try {
+    const data = JSON.parse(fs.readFileSync(OFFLOOP_STATE_PATH, 'utf8'));
+    if (data && typeof data === 'object' && !Array.isArray(data)) return data;
+  } catch {}
+  return null;
+}
+
+function writeOffloopState(state) {
+  try {
+    const tmpPath = `${OFFLOOP_STATE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(state));
+    fs.renameSync(tmpPath, OFFLOOP_STATE_PATH);
+  } catch {}
+}
+
 function checkOffloopDrain(ctx, usageData) {
-  const fhPct = Number((usageData.five_hour || {}).utilization || 0);
-  const prev = ctx._prevFhPct;
+  // Each render is a fresh process, so the prior reading must be persisted to
+  // disk: in-memory ctx state never survives between statusline refreshes.
+  const fhPct = toNum((usageData.five_hour || {}).utilization, 0);
   const now = Date.now() / 1000;
-  const prevTime = ctx._prevFhTime || now;
-  ctx._prevFhPct = fhPct;
-  ctx._prevFhTime = now;
-  if (prev == null) return '';
+  const sessionCost = toNum(((ctx.stdin || {}).cost || {}).total_cost_usd, 0);
+  const prev = readOffloopState();
+  const prevPct = prev ? Number(prev.utilization) : NaN;
+  if (!Number.isFinite(prevPct)) {
+    writeOffloopState({ utilization: fhPct, session_cost: sessionCost, t: now });
+    return '';
+  }
+  const prevTime = toNum(prev.t, now);
   const elapsedMin = (now - prevTime) / 60;
+  // Keep the baseline until it is old enough to compare against; overwriting
+  // on every refresh would pin elapsed near zero and the check could never fire.
   if (elapsedMin < 2) return '';
-  const delta = fhPct - prev;
+  writeOffloopState({ utilization: fhPct, session_cost: sessionCost, t: now });
+  const delta = fhPct - prevPct;
   if (delta <= 0) return '';
   const sessionRate = rs.rollingRate(10);
   if (sessionRate == null) return '';
@@ -701,6 +770,44 @@ function buildMetricsLine(ctx) {
   if (wf) parts.push(wf);
   if (!parts.length) return '';
   return `${DIM}\u2502${RST} ${parts.join(` ${DIM}\u00b7${RST} `)} ${DIM}\u2502${RST}`;
+}
+
+// ── VS Code context ──
+function writeVscodeContext(ctx) {
+  // Write statusline data to %TEMP%/claude/statusline-context.json (python parity).
+  const contextDir = path.join(os.tmpdir(), 'claude');
+  fs.mkdirSync(contextDir, { recursive: true });
+  const contextPath = path.join(contextDir, 'statusline-context.json');
+
+  const usageData = ctx.usageData || {};
+  const wfLive = ctx._wfLive || [];
+  const wfCompleted = ctx._wfCompleted || {};
+  const stdin = ctx.stdin || {};
+  const cw = stdin.context_window || {};
+  const u = cw.current_usage || {};
+  const current = toNum(u.input_tokens, 0) + toNum(u.cache_creation_input_tokens, 0) + toNum(u.cache_read_input_tokens, 0);
+  const size = toNum(cw.context_window_size, 0);
+  const pct = size > 0 ? Math.trunc(current * 100 / size) : 0;
+
+  const payload = {
+    ts: Math.floor(Date.now() / 1000),
+    updated_at: new Date().toISOString(),
+    five_hour_pct: Math.trunc(toNum((usageData.five_hour || {}).utilization, 0)),
+    seven_day_pct: Math.trunc(toNum((usageData.seven_day || {}).utilization, 0)),
+    cost_usd: (stdin.cost || {}).total_cost_usd ?? 0,
+    current_usage: current,
+    context_window_size: size,
+    pct,
+    model: (stdin.model || {}).display_name || '',
+    is_peak: Boolean(ctx.isPeak),
+    active_workflow_agents: wfLive.reduce((sum, item) => sum + item.agents, 0),
+    subagent_tokens_live: wfLive.reduce((sum, item) => sum + item.tokens, 0),
+    subagent_runs_session: wfCompleted.run_count || 0,
+  };
+
+  const tmpPath = `${contextPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload));
+  fs.renameSync(tmpPath, contextPath);
 }
 
 // ── Telemetry ──
@@ -766,13 +873,13 @@ function main() {
   const tier = config.tier || 'standard';
   const isFull = tier === 'full' || effectiveMode === 'full';
   const isStandard = tier === 'standard' && !isFull;
-  if (isFull || isStandard) SEGMENTS.rate_limits(ctx);
+  if (isFull || isStandard) runSegment('rate_limits', ctx);
 
   const parts = [], gitParts = [];
   for (const name of enabled) {
     const fn = SEGMENTS[name];
     if (!fn) continue;
-    const r = fn(ctx);
+    const r = runSegment(name, ctx);
     if (!r) continue;
     if (['git_branch', 'git_dirty'].includes(name)) gitParts.push(r);
     else parts.push(r);
@@ -798,6 +905,8 @@ function main() {
     const ml = buildMetricsLine(ctx);
     if (ml) process.stdout.write(`\n${ml}`);
   }
+
+  try { writeVscodeContext(ctx); } catch {}
 }
 
 main();
