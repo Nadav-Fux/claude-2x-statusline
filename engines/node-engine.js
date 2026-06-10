@@ -562,6 +562,38 @@ const SEGMENTS = {
     }
     return `${DIM}overflow${RST} ${YELLOW}$${consumed.toFixed(2)}${RST}`;
   },
+  auth_mode() {
+    const apiKey = process.env.ANTHROPIC_API_KEY || '';
+    const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
+    if (apiKey) return `${BG_RED} API-KEY EXPORTED - claude -p bills API acct ${RST}`;
+    if (oauthToken) return oauthToken.startsWith('sk-ant-oat01-') ? `${DIM}auth:setup-token${RST}` : `${DIM}auth:oauth${RST}`;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, '.credentials.json'), 'utf8'));
+      if (((data.claudeAiOauth || {}).accessToken)) return `${DIM}auth:oauth${RST}`;
+    } catch {}
+    return `${DIM}auth:?${RST}`;
+  },
+  sdk_meter(ctx) {
+    const direct = (ctx.usageData || {}).sdk_credit || {};
+    if (direct.remaining_usd != null) {
+      const limit = Number(direct.limit_usd || 0);
+      const remaining = Number(direct.remaining_usd || 0);
+      const consumed = Math.max(0, limit - remaining);
+      if (limit <= 0 || consumed === 0) return '';
+      const pct = Math.floor(consumed * 100 / limit);
+      return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/${limit.toFixed(0)}${RST}`;
+    }
+    let ledger;
+    try { ledger = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'statusline-sdk-ledger.json'), 'utf8')); } catch { return ''; }
+    const consumed = Number(ledger.month_total_usd || 0), ceiling = Number(ledger.plan_ceiling_usd || 20);
+    if (consumed === 0) return '';
+    const pct = ceiling > 0 ? Math.floor(consumed * 100 / ceiling) : 0;
+    const extra = (ctx.usageData || {}).extra_usage || {};
+    let suffix = '';
+    if (pct >= 100 && !extra.enabled) suffix = ` ${BG_RED} BLOCKED ${RST}`;
+    else if (pct >= 100 && extra.enabled) suffix = ` ${YELLOW}overflow ON${RST}`;
+    return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/${ceiling.toFixed(0)}${RST}${DIM} ~per-machine approx${RST}${suffix}`;
+  },
   burn_rate(ctx) {
     const costData = ctx.stdin.cost || {}, cost = costData.total_cost_usd, durMs = costData.total_duration_ms;
     if (!cost || !durMs || durMs < 60000) return `${DIM}$?/hr${RST}`;
@@ -727,6 +759,9 @@ function main() {
   const ctx = { config, stdin, now, tzName, offsetHours, schedule, isPeak: false };
   const enabled = getEnabled(config, schedule);
   if (!enabled.includes('banner')) enabled.unshift('banner');
+  if (process.env.ANTHROPIC_API_KEY && !enabled.includes('auth_mode')) {
+    enabled.splice(enabled[0] === 'banner' ? 1 : 0, 0, 'auth_mode');
+  }
 
   const tier = config.tier || 'standard';
   const isFull = tier === 'full' || effectiveMode === 'full';

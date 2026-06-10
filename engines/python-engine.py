@@ -1072,6 +1072,72 @@ def seg_usage_credits(ctx):
     return f"{DIM}overflow{RST} {YELLOW}${consumed:.2f}{RST}"
 
 
+def seg_auth_mode(ctx):
+    """Warn on exported API key; otherwise show detected Claude auth mode."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+
+    if api_key:
+        return f"{BG_RED} API-KEY EXPORTED - claude -p bills API acct {RST}"
+
+    if oauth_token:
+        if oauth_token.startswith("sk-ant-oat01-"):
+            return f"{DIM}auth:setup-token{RST}"
+        return f"{DIM}auth:oauth{RST}"
+
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    if creds_path.exists():
+        try:
+            data = json.loads(creds_path.read_text(encoding="utf-8"))
+            if data.get("claudeAiOauth", {}).get("accessToken"):
+                return f"{DIM}auth:oauth{RST}"
+        except Exception:
+            pass
+
+    return f"{DIM}auth:?{RST}"
+
+
+def seg_sdk_meter(ctx):
+    """Show month-to-date SDK credit burn vs plan ceiling."""
+    sdk_direct = ctx.get("usage_data", {}).get("sdk_credit", {})
+    if sdk_direct.get("remaining_usd") is not None:
+        limit = float(sdk_direct.get("limit_usd", 0.0))
+        remaining = float(sdk_direct.get("remaining_usd", 0.0))
+        consumed = max(0.0, limit - remaining)
+        if limit <= 0 or consumed == 0:
+            return ""
+        pct = int(consumed * 100 / limit)
+        return f"{DIM}sdk{RST} {build_usage_bar(pct, 8)} {color_for_pct(pct)}${consumed:.2f}/${limit:.0f}{RST}"
+
+    ledger_path = Path.home() / ".claude" / "statusline-sdk-ledger.json"
+    if not ledger_path.exists():
+        return ""
+
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    consumed = float(ledger.get("month_total_usd", 0.0))
+    ceiling = float(ledger.get("plan_ceiling_usd", 20.0))
+    if consumed == 0:
+        return ""
+
+    pct = int(consumed * 100 / ceiling) if ceiling > 0 else 0
+    color = color_for_pct(pct)
+    bar = build_usage_bar(pct, 8)
+
+    extra = ctx.get("usage_data", {}).get("extra_usage", {})
+    overflow_enabled = bool(extra.get("enabled", False))
+    suffix = ""
+    if pct >= 100 and not overflow_enabled:
+        suffix = f" {BG_RED} BLOCKED {RST}"
+    elif pct >= 100 and overflow_enabled:
+        suffix = f" {YELLOW}overflow ON{RST}"
+
+    return f"{DIM}sdk{RST} {bar} {color}${consumed:.2f}/${ceiling:.0f}{RST}{DIM} ~per-machine approx{RST}{suffix}"
+
+
 def _get_oauth_token():
     """Try to find Claude OAuth token."""
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -1287,6 +1353,8 @@ SEGMENTS = {
     "ts_errors": seg_ts_errors,
     "rate_limits": seg_rate_limits,
     "usage_credits": seg_usage_credits,
+    "auth_mode": seg_auth_mode,
+    "sdk_meter": seg_sdk_meter,
     "effort": seg_effort,
     "env": seg_env,
 }
@@ -1342,6 +1410,9 @@ def main():
     # Inject banner at the start if present
     if "banner" not in enabled:
         enabled.insert(0, "banner")
+    if os.environ.get("ANTHROPIC_API_KEY") and "auth_mode" not in enabled:
+        insert_at = 1 if enabled and enabled[0] == "banner" else 0
+        enabled.insert(insert_at, "auth_mode")
 
     tier = config.get("tier", "standard")
     is_full_tier = tier == "full" or mode == "full"
