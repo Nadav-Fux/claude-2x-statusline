@@ -464,6 +464,14 @@ def color_for_pct(pct):
     return GREEN
 
 
+def _as_float(value, default=0.0):
+    """Coerce possibly-null/garbage cache values to float (None → default)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_usage_bar(pct, width=10):
     pct = max(0, min(100, pct))
     filled = pct * width // 100
@@ -1049,12 +1057,12 @@ def seg_usage_credits(ctx):
         return ""
 
     extra = usage_data.get("extra_usage", {})
-    if not extra:
+    if not isinstance(extra, dict) or not extra:
         return ""
 
     enabled = bool(extra.get("enabled", False))
-    consumed = float(extra.get("consumed_usd", 0.0))
-    limit = extra.get("limit_usd")
+    consumed = _as_float(extra.get("consumed_usd"))
+    limit = _as_float(extra.get("limit_usd"))
 
     if not enabled and consumed == 0:
         return ""
@@ -1062,8 +1070,7 @@ def seg_usage_credits(ctx):
     if not enabled:
         return f"{DIM}overflow: off{RST}"
 
-    if limit is not None and float(limit) > 0:
-        limit = float(limit)
+    if limit > 0:
         pct = int(consumed * 100 / limit)
         bar = build_usage_bar(pct, 8)
         color = color_for_pct(pct)
@@ -1097,18 +1104,33 @@ def seg_auth_mode(ctx):
     return f"{DIM}auth:?{RST}"
 
 
+def _sdk_exhaustion_suffix(ctx, pct):
+    """BLOCKED / overflow-ON indicator once the SDK credit pool is exhausted."""
+    if pct < 100:
+        return ""
+    extra = (ctx.get("usage_data") or {}).get("extra_usage")
+    overflow_enabled = isinstance(extra, dict) and bool(extra.get("enabled", False))
+    if overflow_enabled:
+        return f" {YELLOW}overflow ON{RST}"
+    return f" {BG_RED} BLOCKED {RST}"
+
+
 def seg_sdk_meter(ctx):
     """Show month-to-date SDK credit burn vs plan ceiling."""
-    sdk_direct = ctx.get("usage_data", {}).get("sdk_credit", {})
-    if sdk_direct.get("remaining_usd") is not None:
-        limit = float(sdk_direct.get("limit_usd", 0.0))
-        remaining = float(sdk_direct.get("remaining_usd", 0.0))
+    sdk_direct = (ctx.get("usage_data") or {}).get("sdk_credit")
+    if isinstance(sdk_direct, dict) and sdk_direct.get("remaining_usd") is not None:
+        limit = _as_float(sdk_direct.get("limit_usd"))
+        remaining = _as_float(sdk_direct.get("remaining_usd"))
         consumed = max(0.0, limit - remaining)
         if limit <= 0 or consumed == 0:
             return ""
         pct = int(consumed * 100 / limit)
-        return f"{DIM}sdk{RST} {build_usage_bar(pct, 8)} {color_for_pct(pct)}${consumed:.2f}/${limit:.0f}{RST}"
+        suffix = _sdk_exhaustion_suffix(ctx, pct)
+        return f"{DIM}sdk{RST} {build_usage_bar(pct, 8)} {color_for_pct(pct)}${consumed:.2f}/${limit:.0f}{RST}{suffix}"
 
+    # The ledger is externally fed (no official SDK-credit endpoint yet);
+    # render it only when stamped for the current month so stale data is
+    # never presented as live.
     ledger_path = Path.home() / ".claude" / "statusline-sdk-ledger.json"
     if not ledger_path.exists():
         return ""
@@ -1117,23 +1139,22 @@ def seg_sdk_meter(ctx):
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     except Exception:
         return ""
+    if not isinstance(ledger, dict):
+        return ""
 
-    consumed = float(ledger.get("month_total_usd", 0.0))
-    ceiling = float(ledger.get("plan_ceiling_usd", 20.0))
+    current_month = datetime.now().strftime("%Y-%m")
+    if str(ledger.get("month", "")) != current_month:
+        return ""
+
+    consumed = _as_float(ledger.get("month_total_usd"))
+    ceiling = _as_float(ledger.get("plan_ceiling_usd"), 20.0)
     if consumed == 0:
         return ""
 
     pct = int(consumed * 100 / ceiling) if ceiling > 0 else 0
     color = color_for_pct(pct)
     bar = build_usage_bar(pct, 8)
-
-    extra = ctx.get("usage_data", {}).get("extra_usage", {})
-    overflow_enabled = bool(extra.get("enabled", False))
-    suffix = ""
-    if pct >= 100 and not overflow_enabled:
-        suffix = f" {BG_RED} BLOCKED {RST}"
-    elif pct >= 100 and overflow_enabled:
-        suffix = f" {YELLOW}overflow ON{RST}"
+    suffix = _sdk_exhaustion_suffix(ctx, pct)
 
     return f"{DIM}sdk{RST} {bar} {color}${consumed:.2f}/${ceiling:.0f}{RST}{DIM} ~per-machine approx{RST}{suffix}"
 
@@ -1175,6 +1196,12 @@ def _get_oauth_token():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_timeline(ctx):
+    # mode=normal (no peak restrictions): no peak/off-peak legend to draw —
+    # hide the timeline entirely (same gate as seg_peak_hours).
+    schedule = ctx.get("schedule") or {}
+    if schedule.get("mode") == "normal":
+        return ""
+
     now = ctx["local_time"]
     hour, minute = now.hour, now.minute
     weekday = now.isoweekday()
@@ -1258,21 +1285,65 @@ def build_rate_limits_line(ctx):
     return f"{separator.join(parts)}{offloop} {DIM}\u2502{RST}"
 
 
+# Off-loop drain state must survive across renders (each render is a fresh
+# process), so it lives in a tiny JSON file shared with the node engine.
+# Keep the filename and the field names ("utilization", "session_cost", "t")
+# exactly in sync with engines/node-engine.js.
+OFFLOOP_STATE_FILE = "statusline-offloop-state.json"
+
+
+def _offloop_state_path():
+    return Path.home() / ".claude" / OFFLOOP_STATE_FILE
+
+
+def _read_offloop_state(state_path):
+    """Read the previous reading; missing/corrupt file means no prior."""
+    try:
+        prev = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(prev, dict):
+            return prev
+    except Exception:
+        pass
+    return None
+
+
+def _write_offloop_state(state_path, fh_pct, session_cost, now):
+    """Atomic write (tmp + os.replace), same pattern as _write_vscode_context."""
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"utilization": fh_pct, "session_cost": session_cost, "t": now}
+        tmp_path = state_path.with_name(f"{state_path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(str(tmp_path), str(state_path))
+    except Exception:
+        pass
+
+
 def _check_offloop_drain(ctx, usage_data):
     """Warn if account quota is rising faster than this session's spend."""
-    fh_pct = float(usage_data.get("five_hour", {}).get("utilization", 0))
-    prev_fh_pct = ctx.get("_prev_fh_pct")
+    fh_pct = _as_float((usage_data.get("five_hour") or {}).get("utilization", 0))
+    session_cost = _as_float(
+        (ctx.get("stdin") or {}).get("cost", {}).get("total_cost_usd", 0.0)
+    )
     now = time.time()
-    prev_time = ctx.get("_prev_fh_time", now)
-    ctx["_prev_fh_pct"] = fh_pct
-    ctx["_prev_fh_time"] = now
+    state_path = _offloop_state_path()
+
+    prev = _read_offloop_state(state_path)
+    prev_fh_pct = _as_float(prev.get("utilization"), None) if prev else None
+    prev_time = _as_float(prev.get("t"), now) if prev else now
 
     if prev_fh_pct is None:
+        _write_offloop_state(state_path, fh_pct, session_cost, now)
         return ""
 
     elapsed_min = (now - prev_time) / 60.0
     if elapsed_min < 2:
+        # Keep the prior reading as the anchor: renders happen every few
+        # seconds, so rewriting each tick would make a >=2min delta impossible.
         return ""
+
+    # Window elapsed: re-anchor for the next check before evaluating.
+    _write_offloop_state(state_path, fh_pct, session_cost, now)
 
     fh_delta_pct = fh_pct - prev_fh_pct
     if fh_delta_pct <= 0:
@@ -1360,6 +1431,16 @@ SEGMENTS = {
 }
 
 
+def _run_segment(name, fn, ctx):
+    """Run one segment; no single segment may ever kill the statusline
+    (matches the node engine's per-segment guard)."""
+    try:
+        return fn(ctx)
+    except Exception as exc:
+        debug(f"segment {name} failed: {exc!r}")
+        return ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1419,24 +1500,21 @@ def main():
     is_standard_tier = tier == "standard"
     # Standard and Full both need rate limits data for their extra lines
     if is_full_tier or is_standard_tier:
-        seg_rate_limits(ctx)  # populates ctx["usage_data"]
+        _run_segment("rate_limits", seg_rate_limits, ctx)  # populates ctx["usage_data"]
 
     # Build line 1
     parts = []
     git_parts = []
     for name in enabled:
-        if name in ("git_branch", "git_dirty", "git_ahead_behind"):
-            fn = SEGMENTS.get(name)
-            if fn:
-                r = fn(ctx)
-                if r:
-                    git_parts.append(r)
-        else:
-            fn = SEGMENTS.get(name)
-            if fn:
-                r = fn(ctx)
-                if r:
-                    parts.append(r)
+        fn = SEGMENTS.get(name)
+        if not fn:
+            continue
+        r = _run_segment(name, fn, ctx)
+        if r:
+            if name in ("git_branch", "git_dirty", "git_ahead_behind"):
+                git_parts.append(r)
+            else:
+                parts.append(r)
 
     if git_parts:
         parts.append(" ".join(git_parts))
@@ -1457,9 +1535,10 @@ def main():
     if is_full_tier:
         features = schedule.get("features", {})
 
-        # full mode: line 2 — visual 24h timeline. Always rendered (even on
-        # off-peak days) so the bar is a consistent anchor; a day with no
-        # peak window is a legitimate visual state, not a broken statusline.
+        # full mode: line 2 — visual 24h timeline. Rendered even on off-peak
+        # days so the bar is a consistent anchor; a day with no peak window is
+        # a legitimate visual state. Hidden entirely when the schedule mode is
+        # "normal" (build_timeline returns '').
         if features.get("show_timeline", True):
             timeline = build_timeline(ctx)
             if timeline:
@@ -1519,7 +1598,8 @@ def _write_vscode_context(ctx):
         "subagent_runs_session": wf_completed.get("run_count", 0),
     }
 
-    tmp_path = context_path.with_suffix(".tmp")
+    # Unique tmp name per process: concurrent sessions must not collide
+    tmp_path = context_path.with_name(f"{context_path.name}.{os.getpid()}.tmp")
     tmp_path.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(str(tmp_path), str(context_path))
 

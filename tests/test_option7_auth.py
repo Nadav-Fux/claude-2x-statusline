@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,12 @@ def test_api_key_warning_is_unconditional_in_main(tmp_path):
     env["USERPROFILE"] = str(fake_home)
     env["HOME"] = str(fake_home)
     env["ANTHROPIC_API_KEY"] = "test-key"
+    # Sandbox the engine's %TEMP%/claude/statusline-context.json write so the
+    # subprocess never touches the real temp dir (TMPDIR/TEMP/TMP cover
+    # tempfile.gettempdir() lookups on every platform).
+    env["TMPDIR"] = str(tmp_path)
+    env["TEMP"] = str(tmp_path)
+    env["TMP"] = str(tmp_path)
     proc = subprocess.run(
         [sys.executable, "engines/python-engine.py", "--tier=minimal"],
         input=json.dumps(
@@ -81,13 +88,17 @@ def test_api_key_warning_is_unconditional_in_main(tmp_path):
     assert "API-KEY EXPORTED" in proc.stdout
 
 
+def _current_month():
+    return datetime.now().strftime("%Y-%m")
+
+
 def test_sdk_meter_reads_ledger(tmp_path, monkeypatch):
     _require_engine()
     fake_home = tmp_path / "home"
     claude_dir = fake_home / ".claude"
     claude_dir.mkdir(parents=True)
     (claude_dir / "statusline-sdk-ledger.json").write_text(
-        json.dumps({"month_total_usd": 15.0, "plan_ceiling_usd": 20.0}),
+        json.dumps({"month": _current_month(), "month_total_usd": 15.0, "plan_ceiling_usd": 20.0}),
         encoding="utf-8",
     )
     monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
@@ -105,9 +116,46 @@ def test_sdk_meter_marks_blocked(tmp_path, monkeypatch):
     claude_dir = fake_home / ".claude"
     claude_dir.mkdir(parents=True)
     (claude_dir / "statusline-sdk-ledger.json").write_text(
-        json.dumps({"month_total_usd": 21.0, "plan_ceiling_usd": 20.0}),
+        json.dumps({"month": _current_month(), "month_total_usd": 21.0, "plan_ceiling_usd": 20.0}),
         encoding="utf-8",
     )
     monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
 
     assert "BLOCKED" in engine.seg_sdk_meter({"usage_data": {"extra_usage": {"enabled": False}}})
+
+
+def test_sdk_meter_ignores_stale_or_unstamped_ledger(tmp_path, monkeypatch):
+    _require_engine()
+    fake_home = tmp_path / "home"
+    claude_dir = fake_home / ".claude"
+    claude_dir.mkdir(parents=True)
+    ledger_path = claude_dir / "statusline-sdk-ledger.json"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+
+    # Stale month → no-data
+    ledger_path.write_text(
+        json.dumps({"month": "2020-01", "month_total_usd": 15.0, "plan_ceiling_usd": 20.0}),
+        encoding="utf-8",
+    )
+    assert engine.seg_sdk_meter({"usage_data": {}}) == ""
+
+    # Missing month stamp → no-data
+    ledger_path.write_text(
+        json.dumps({"month_total_usd": 15.0, "plan_ceiling_usd": 20.0}),
+        encoding="utf-8",
+    )
+    assert engine.seg_sdk_meter({"usage_data": {}}) == ""
+
+
+def test_sdk_meter_direct_path_marks_exhaustion(monkeypatch):
+    _require_engine()
+    ctx = {
+        "usage_data": {
+            "sdk_credit": {"limit_usd": 20.0, "remaining_usd": 0.0},
+            "extra_usage": {"enabled": False},
+        }
+    }
+    assert "BLOCKED" in engine.seg_sdk_meter(ctx)
+
+    ctx["usage_data"]["extra_usage"]["enabled"] = True
+    assert "overflow ON" in engine.seg_sdk_meter(ctx)

@@ -45,3 +45,13 @@ def test_usage_credits_reports_disabled_after_consumption():
     assert "overflow: off" in engine.seg_usage_credits(
         {"usage_data": {"extra_usage": {"enabled": False, "consumed_usd": 1.0}}}
     )
+
+
+def test_usage_credits_survives_null_cache_values():
+    _require_engine()
+    # float(None) used to raise; null/garbage cache values must coerce safely
+    result = engine.seg_usage_credits(
+        {"usage_data": {"extra_usage": {"enabled": True, "consumed_usd": None, "limit_usd": None}}}
+    )
+    assert isinstance(result, str)
+    assert engine.seg_usage_credits({"usage_data": {"extra_usage": "garbage"}}) == ""
