@@ -27,7 +27,7 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 const TIER_PRESETS = {
   minimal: ['model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
   standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -544,6 +544,23 @@ const SEGMENTS = {
     const tier = (ctx.config || {}).tier || 'standard';
     if (tier === 'minimal') return `${colorPct(fhPct)}${fhPct}%${RST} ${DIM}5H${RST}`;
     return `${buildUsageBar(fhPct)} ${colorPct(fhPct)}${fhPct}%${RST}`;
+  },
+  usage_credits(ctx) {
+    const usageData = ctx.usageData;
+    if (!usageData) return '';
+    const extra = usageData.extra_usage || {};
+    if (!Object.keys(extra).length) return '';
+    const enabled = Boolean(extra.enabled);
+    const consumed = Number(extra.consumed_usd || 0);
+    const limit = extra.limit_usd;
+    if (!enabled && consumed === 0) return '';
+    if (!enabled) return `${DIM}overflow: off${RST}`;
+    if (limit != null && Number(limit) > 0) {
+      const lim = Number(limit);
+      const pct = Math.floor(consumed * 100 / lim);
+      return `${DIM}overflow${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/${lim.toFixed(0)}${RST}`;
+    }
+    return `${DIM}overflow${RST} ${YELLOW}$${consumed.toFixed(2)}${RST}`;
   },
   burn_rate(ctx) {
     const costData = ctx.stdin.cost || {}, cost = costData.total_cost_usd, durMs = costData.total_duration_ms;
