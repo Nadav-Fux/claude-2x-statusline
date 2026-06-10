@@ -16,16 +16,27 @@ _USAGE_PATTERN = re.compile(
 
 
 def project_slug(cwd: str) -> str:
-    return cwd.replace("/", "-").replace("\\", "-").replace(":", "").lstrip("-")
+    """Mirror Claude Code's project-dir naming: every non-alphanumeric char -> '-'.
+
+    Verified empirically against ~/.claude/projects, e.g.
+    'C:\\Users\\nadav\\github\\Nadav-Plugins&Skils' ->
+    'C--Users-nadav-github-Nadav-Plugins-Skils'.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def _normalize_cwd(path_str: str) -> str:
+    return os.path.normcase(os.path.normpath(path_str))
 
 
 def find_session_dir(stdin_data: dict) -> Path | None:
-    """Derive the Claude Code session directory from hook stdin or PID state."""
+    """Derive the Claude Code session directory from hook stdin or session state."""
     transcript_path = stdin_data.get("transcript_path", "")
     if transcript_path:
         path = Path(transcript_path)
         if path.suffix == ".jsonl":
-            path = path.parent
+            # The transcript <sid>.jsonl is a SIBLING of the session dir <sid>/.
+            path = path.with_suffix("")
         if path.is_dir():
             return path
 
@@ -36,21 +47,39 @@ def find_session_dir(stdin_data: dict) -> Path | None:
         if candidate.is_dir():
             return candidate
 
+    # The statusline runs as a grandchild of Claude Code (CC -> shell -> python),
+    # so PID matching can never work; match the session entry by cwd instead,
+    # preferring busy status and the freshest updatedAt.
     sessions_dir = Path.home() / ".claude" / "sessions"
     if sessions_dir.is_dir():
-        pid = str(os.getpid())
-        for file_path in sessions_dir.glob("*.json"):
-            try:
-                data = json.loads(file_path.read_text(encoding="utf-8"))
-                if str(data.get("pid", "")) == pid or file_path.stem == pid:
+        try:
+            target_cwd = _normalize_cwd(cwd or os.getcwd())
+        except Exception:
+            target_cwd = ""
+        best = None
+        best_rank = None
+        if target_cwd:
+            for file_path in sessions_dir.glob("*.json"):
+                try:
+                    data = json.loads(file_path.read_text(encoding="utf-8"))
                     sid = data.get("sessionId", "")
                     cwd2 = data.get("cwd", "")
-                    if sid and cwd2:
-                        candidate = Path.home() / ".claude" / "projects" / project_slug(cwd2) / sid
-                        if candidate.is_dir():
-                            return candidate
-            except Exception:
-                pass
+                    if not sid or not cwd2 or _normalize_cwd(cwd2) != target_cwd:
+                        continue
+                    rank = (
+                        1 if data.get("status") == "busy" else 0,
+                        int(data.get("updatedAt") or 0),
+                    )
+                    if best_rank is not None and rank <= best_rank:
+                        continue
+                    candidate = Path.home() / ".claude" / "projects" / project_slug(cwd2) / sid
+                    if candidate.is_dir():
+                        best = candidate
+                        best_rank = rank
+                except Exception:
+                    pass
+        if best is not None:
+            return best
 
     return None
 
@@ -89,9 +118,14 @@ def read_agent_last_usage_tokens(jsonl_path: Path) -> int:
         if not matches:
             return 0
 
+        # The last match is complete iff the file continues past it and the
+        # final number was not truncated mid-write. In real transcripts the
+        # usage block is followed by ',"server_tool_use":{...}', so checking
+        # for '}'/'\n' right after the match would always misfire.
         last = matches[-1]
-        after_match = tail_text[last.end():last.end() + 20]
-        if after_match and not any(char in after_match for char in ("}", "\n")):
+        end = last.end()
+        complete = end < len(tail_text) and not tail_text[end].isdigit()
+        if not complete:
             if len(matches) >= 2:
                 last = matches[-2]
             else:
