@@ -430,9 +430,9 @@ python -m pytest tests/ -v
 
 ### What is this?
 
-A modular statusline plugin for Claude Code that shows a **live dashboard** at the bottom of your terminal. At a glance you see: peak hours status, model info, context usage, rate limits, session cost, burn rate, cache efficiency, and git status.
+A modular statusline plugin for Claude Code that shows a **live dashboard** at the bottom of your terminal. At a glance you see: model info, context usage, rate limits, session cost, burn rate, cache efficiency, and git status.
 
-**The killer feature:** Peak hours schedule auto-updates from GitHub. When Anthropic changes their policy, the maintainer updates one JSON file and every user gets the new schedule automatically &mdash; no `git pull`, no reinstall.
+**The killer feature:** Policy labels and banners auto-update from GitHub. When Anthropic changes their policy, the maintainer updates one JSON file and every user gets the new labels or notices automatically &mdash; no `git pull`, no reinstall.
 
 ---
 
@@ -442,7 +442,7 @@ A modular statusline plugin for Claude Code that shows a **live dashboard** at t
 
 ![Minimal](assets/tier-minimal.svg)
 
-Peak status, model, context %, 5-hour limit %, environment, and git.
+Model, context %, 5-hour limit %, environment, and git.
 
 ### Standard &mdash; 2 lines
 
@@ -454,9 +454,9 @@ Full token counts, session cost, and a second line with graphical rate limit bar
 
 ![Full](assets/tier-full.svg)
 
-Line 1: Clean status bar. Line 2: Visual timeline of peak/off-peak. Line 3: Rate limit bars with resets. Line 4: Burn rate ($/hr), context depletion estimate, and cache hit ratio.
+Line 1: Clean status bar. Line 2: Visual schedule timeline. Line 3: Rate limit bars with resets. Line 4: Burn rate ($/hr), context depletion estimate, and cache hit ratio.
 
-The **Peak** badge turns **red** (lots of peak time left), **yellow** (1-2 hours remaining), or **green** (under 30 min &mdash; almost over), with a countdown showing exactly when peak ends.
+Peak-hour throttling was removed on 2026-05-06. The old `peak_hours` segment is retained only for custom-tier users who still want a historical schedule cue.
 
 ---
 
@@ -464,20 +464,15 @@ The **Peak** badge turns **red** (lots of peak time left), **yellow** (1-2 hours
 
 The installer automatically detects supported editors and installs a companion status bar extension with live data and color coding.
 
-**Off-Peak &mdash; all green:**
+**Healthy usage:**
 
 ![Off-Peak](assets/vscode-offpeak.svg)
-
-**Peak hours:**
-
-![Peak](assets/vscode-peak.svg)
 
 **High usage &mdash; warning:**
 
 ![High Usage](assets/vscode-high.svg)
 
 **Features:**
-- **Peak/Off-Peak** with countdown and next-peak timer (color-coded)
 - **Rate limits** with battery bars &mdash; separate 5h and 7d, each with its own color
 - **Context window** &mdash; reads live data from the terminal statusline
 - **Effort level** &mdash; HI / MED / LO with color coding
@@ -486,8 +481,8 @@ The installer automatically detects supported editors and installs a companion s
 
 | Color | Meaning |
 |-------|---------|
-| **Teal** | Healthy &mdash; low usage / off-peak |
-| **Yellow** (warning bg) | Moderate &mdash; 50-79% usage or peak hours |
+| **Teal** | Healthy &mdash; low usage |
+| **Yellow** (warning bg) | Moderate &mdash; 50-79% usage |
 | **Red** (error bg) | Critical &mdash; 80%+ usage |
 
 **Supported editors:** VS Code, Cursor, Windsurf, Antigravity (Google). Any VS Code&ndash;based editor should work.
@@ -522,7 +517,7 @@ git clone https://github.com/Nadav-Fux/claude-2x-statusline.git ~/.claude/cc-2x-
 irm https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/install.ps1 | iex
 ```
 
-The installer asks which tier you want, writes the config, updates `settings.json`, installs slash commands, and fetches the initial peak hours schedule. It prints exactly which runtime it selected before proceeding. **Restart Claude Code to activate.**
+The installer asks which tier you want, writes the config, updates `settings.json`, installs slash commands, and fetches the initial remote schedule. It prints exactly which runtime it selected before proceeding. **Restart Claude Code to activate.**
 
 ### Runtime requirements
 
@@ -543,13 +538,13 @@ The installer uses a shared runtime resolver (`lib/resolve-runtime.sh`) that rej
 
 | Tier     | Lines | Segments                                                                       |
 |----------|-------|--------------------------------------------------------------------------------|
-| minimal  | 1     | peak_hours, model, context, git_branch, git_dirty, rate_limits, env            |
-| standard | 1     | peak_hours, model, context, vim_mode, agent, git_branch, git_dirty, cost,      |
+| minimal  | 1     | model, context, git_branch, git_dirty, rate_limits, env                       |
+| standard | 1     | model, context, vim_mode, agent, git_branch, git_dirty, cost,                 |
 |          |       | effort, env                                                                    |
 | full     | 4     | Same segments as standard on line 1, plus: timeline (line 2), rate_limits bars |
 |          |       | (line 3), burn_rate + cache_hit + metrics (line 4)                             |
 
-On off-peak days (weekdays not in the peak schedule, and all-day normal-mode schedules), the timeline line is auto-hidden; rate limit bars and metrics still render.
+On all-day normal-mode schedules, the timeline line is auto-hidden; rate limit bars and metrics still render.
 
 ### Switch Anytime
 
@@ -620,15 +615,12 @@ This statusline is dense by design &mdash; each segment answers a specific quest
 ### Main Status Line
 
 ```
- Off-Peak  ▸ peak in 3h 22m ▸ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
- ╰─ peak ─╯  ╰─ countdown ─╯  ╰ model ╯  ╰── context ──╯  ╰ $$ ╯  ╰ env ╯  ╰─── git ───╯
+ Opus 4.6 ▸ 360K/1.0M 36% ▸ $4.20 ▸ REMOTE ▸ main 2 unsaved
+ ╰ model ╯  ╰── context ──╯  ╰ $$ ╯  ╰ env ╯  ╰─── git ───╯
 ```
 
 | Segment | What it shows | Details |
 |:--------|:-------------|:--------|
-| `Off-Peak` / `Peak` | Current peak status | Green = Off-Peak (normal). Red/yellow = Peak (limits consumed faster) |
-| `peak in 3h 22m` | Countdown | Time until the next peak window starts (or ends, during peak) |
-| `3pm-9pm` | Peak window | Peak hours converted to your local timezone |
 | `Opus 4.6` | Active model | The model Claude Code is currently using |
 | `360K/1.0M 36%` | Context usage | Tokens used / window size and percentage |
 | `$4.20` | Session cost | Total cost in USD for this session |
@@ -660,8 +652,7 @@ When you see `wt:name`: you are working in a linked git worktree. Run `/explain 
 | `5h` | 5-hour rolling window limit |
 | `▰▰▱▱▱▱▱▱▱▱ 20%` | Graphical bar + percentage consumed |
 | `⟳ 5:00pm` | When this limit resets (local time) |
-| `⚡ peak` | Appears during peak &mdash; consumption rate is higher |
-| `weekly` | Weekly limit (does not change during peak) |
+| `weekly` | Weekly limit |
 | `⟳ 4/4 11:00pm` | Weekly reset date and time |
 
 ### Spending & Cache (Full only)
@@ -688,7 +679,7 @@ When you see `cache reuse 96% ↑2.3k saving`: 96% of cache tokens this tick cam
 │ ━━━━━━━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━ │  ━ off-peak  ━ peak (3pm-9pm)
 ```
 
-A visual representation of today's peak/off-peak windows with a marker showing where you are now. The legend shows the peak hours in your local timezone. On all-day-free (`schedule.mode == "normal"`) days the bar shows a solid off-peak band with the label `Off-Peak all day ✔`.
+A visual representation of the configured schedule with a marker showing where you are now. In current normal-mode schedules (`schedule.mode == "normal"`), the timeline line is hidden by default.
 
 ---
 

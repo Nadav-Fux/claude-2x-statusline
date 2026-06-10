@@ -25,9 +25,9 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['peak_hours', 'model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
-  standard: ['peak_hours', 'model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['peak_hours', 'model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  minimal: ['model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  standard: ['model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -377,10 +377,9 @@ const SEGMENTS = {
     if (!usageData) return '';
     ctx.usageData = usageData;
     const fh = usageData.five_hour || {}, fhPct = Math.round(fh.utilization || 0);
-    const peakTag = ctx.isPeak ? ` ${YELLOW}\u26a1${RST}` : '';
     const tier = (ctx.config || {}).tier || 'standard';
-    if (tier === 'minimal') return `${colorPct(fhPct)}${fhPct}%${RST} ${DIM}5H${RST}${peakTag}`;
-    return `${buildUsageBar(fhPct)} ${colorPct(fhPct)}${fhPct}%${RST}${peakTag}`;
+    if (tier === 'minimal') return `${colorPct(fhPct)}${fhPct}%${RST} ${DIM}5H${RST}`;
+    return `${buildUsageBar(fhPct)} ${colorPct(fhPct)}${fhPct}%${RST}`;
   },
   burn_rate(ctx) {
     const costData = ctx.stdin.cost || {}, cost = costData.total_cost_usd, durMs = costData.total_duration_ms;
@@ -448,12 +447,11 @@ function buildRateLimitsLine(ctx) {
   if (!ud) return '';
   const fh = ud.five_hour || {}, fhPct = Math.round(fh.utilization || 0);
   const sd = ud.seven_day || {}, sdPct = Math.round(sd.utilization || 0);
-  const peakTag = ctx.isPeak ? ` ${YELLOW}\u26a1 peak${RST}` : ` ${GREEN}\u2713${RST}`;
   const labels = (ctx.schedule || {}).labels || {};
   const fhLabel = labels.five_hour || '5h', wkLabel = labels.weekly || 'weekly';
   const cur = `${DIM}\u2502${RST} ${GREEN}\u25b8${RST} ${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
   const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct)} ${colorPct(sdPct)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
-  return `${cur}${peakTag} ${DIM}\u00b7${RST} ${wk} ${DIM}\u2502${RST}`;
+  return `${cur} ${DIM}\u00b7${RST} ${wk} ${DIM}\u2502${RST}`;
 }
 
 function buildMetricsLine(ctx) {
@@ -462,7 +460,6 @@ function buildMetricsLine(ctx) {
   if (burn) parts.push(`${GREEN}\u25b8${RST} ${burn}`);
   const cache = SEGMENTS.cache_hit(ctx);
   if (cache) parts.push(cache);
-  if (ctx.isPeak) parts.push(`${YELLOW}\u26a1 peak = limits drain faster${RST}`);
   if (!parts.length) return '';
   return `${DIM}\u2502${RST} ${parts.join(` ${DIM}\u00b7${RST} `)} ${DIM}\u2502${RST}`;
 }

@@ -22,17 +22,19 @@ set -u
 # Stored as a bash associative array; each value is a multi-line string.
 declare -A SEG_DETAIL
 SEG_DETAIL[peak_hours]="What it shows:
-  Visual indicator showing whether you are currently inside or outside the
-  peak-hour window defined by Anthropic's rate-limiting policy.
+  Historical / custom-tier only visual indicator for the old peak-hour
+  schedule. Anthropic removed peak-hour throttling on 2026-05-06, so this
+  segment is no longer shown by default tiers.
 
 How it's computed:
-  Reads the schedule (remote schedule.json or local fallback). Compares the
-  current local time to today's peak window after converting Pacific time to
-  your system timezone (DST-aware).
+  Reads the schedule (remote schedule.json or local fallback). If a custom
+  tier enables peak_hours and the schedule mode is not normal, it compares the
+  current local time to the configured historical window after timezone
+  conversion.
 
 Display values:
-  Off-Peak — green badge; limits consumed at the normal (1×) rate.
-  Peak     — red or yellow badge; limits consumed faster.
+  Off-Peak — green badge.
+  Peak     — red or yellow badge.
 
 Countdown:
   'peak in 3h 22m'  — minutes until peak starts.
@@ -46,7 +48,7 @@ Colors:
   Green  = Peak almost over (< 30 minutes).
 
 When it hides:
-  Never; always present on all tiers."
+  Hidden on default tiers. Also hidden when schedule.mode is normal."
 
 SEG_DETAIL[model]="What it shows:
   The Claude model Claude Code is currently using, e.g. 'Opus 4.7' or
@@ -188,8 +190,7 @@ Parts explained:
   '5h'                      — 5-hour rolling window limit.
   '▰▰▱▱▱▱▱▱▱▱ 20%'         — filled blocks = consumed; 20% of window used.
   '⟳ 5:00pm'               — time when the 5-hour window resets (local time).
-  '⚡ peak'                  — shown during peak hours; consumption runs faster.
-  'weekly'                  — weekly limit block (not affected by peak hours).
+  'weekly'                  — weekly limit block.
   '⟳ 4/4 11:00pm'          — date and time of the next weekly reset.
 
 How it's computed:
@@ -330,7 +331,7 @@ When it hides:
 
 # One-line purpose table (used by --explain with no arg)
 declare -A SEG_ONELINER
-SEG_ONELINER[peak_hours]="Visual indicator of peak-hour window (when Opus throttling kicks in)"
+SEG_ONELINER[peak_hours]="Historical / custom-tier only peak-hour indicator"
 SEG_ONELINER[model]="Current model name (opus-4-7 / sonnet-4-6 / haiku-4-5)"
 SEG_ONELINER[context]="Tokens used / total context window and percentage"
 SEG_ONELINER[vim_mode]="Active Vim keybinding mode in Claude Code (NORMAL / INSERT)"

@@ -79,6 +79,16 @@ function buildObservation(memory) {
     obs.cache_creation_tokens = Number(u.cache_creation_input_tokens || 0);
   }
 
+  try {
+    const usagePath = path.join(CLAUDE_DIR, 'statusline-usage-cache.json');
+    const st = fs.statSync(usagePath);
+    if (Date.now() / 1000 - st.mtimeMs / 1000 <= 300) {
+      const usage = JSON.parse(fs.readFileSync(usagePath, 'utf8'));
+      obs.rate_limit_5h_pct = Number((usage.five_hour || {}).utilization || 0);
+      obs.rate_limit_7d_pct = Number((usage.seven_day || {}).utilization || 0);
+    }
+  } catch {}
+
   // Rolling state
   try {
     obs.burn_10m = rs.rollingRate(10);
@@ -184,10 +194,7 @@ function buildInsights(obs, memory) {
     results.push({ text: `Rate limit at ${maxRl.toFixed(0)}% — close to cap. Plan break before compact.`, text_he: `ה-rate limit הגיע ל-${maxRl.toFixed(0)}% — קרוב לתקרה. תכנן הפסקה לפני /compact.`, urgency: 10, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
   } else if (obs.is_peak && maxRl < 80) {
     const k = 'peak_rate_ok';
-    results.push({ text: `Peak hours — rate limits drain faster. Budget: ${maxRl.toFixed(0)}% used. Keep this pass focused; save broad exploration for off-peak.`, text_he: `שעות שיא — ה-rate limits נצרכים מהר יותר. Budget: ${maxRl.toFixed(0)}% בשימוש. עדיף לשמור את הסבב הזה ממוקד, ואת החקירה הרחבה לדחות ל-off-peak.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
-  } else if (!obs.is_peak && maxRl < 50) {
-    const k = 'off_peak_wide_open';
-    results.push({ text: `Off-peak with wide-open limits — good moment for heavy refactors, broad repo scans, or subagents that generate lots of output.`, text_he: 'מחוץ לשעות השיא עם מכסות פתוחות — רגע טוב לרפקטורים כבדים, סריקות רחבות בריפו, או subagents שמייצרים הרבה פלט.', urgency: 4, novelty: novelty(k, memory), actionability: 7, uniqueness: 10, template_key: k });
+    results.push({ text: `Historical peak schedule is active in your custom tier. Budget: ${maxRl.toFixed(0)}% used. Use this as a local schedule cue, not a faster-drain warning.`, text_he: `לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: ${maxRl.toFixed(0)}% בשימוש. תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   }
 
   if (obs.session_duration_min > 120) {

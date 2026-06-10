@@ -76,12 +76,12 @@ class TestSessionStart:
         """run("session_start") with valid observations returns a non-empty string."""
         seeded_obs({
             "is_peak": False,
-            "rate_limit_5h_pct": 10.0,
+            "rate_limit_5h_pct": 85.0,
             "rate_limit_7d_pct": 5.0,
             "session_duration_min": 0.0,
         })
         result = run("session_start")
-        # Should return something (off-peak fires at minimum)
+        # Should return something for a real actionable condition.
         assert result is not None
         assert isinstance(result, str)
         assert len(result) > 0
