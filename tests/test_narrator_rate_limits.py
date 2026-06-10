@@ -52,3 +52,29 @@ def test_build_reads_rate_limits_from_usage_cache_not_stdin(tmp_path, monkeypatc
 
     assert obs.rate_limit_5h_pct == 72.5
     assert obs.rate_limit_7d_pct == 41.25
+
+
+def test_build_survives_wrong_shape_usage_cache(tmp_path, monkeypatch):
+    """Valid JSON with the wrong shape must coerce to 0.0, not throw."""
+    fake_home = tmp_path / "home"
+    claude_dir = fake_home / ".claude"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / "statusline-usage-cache.json").write_text(
+        json.dumps(
+            {
+                "five_hour": None,
+                "seven_day": {"utilization": "abc"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    monkeypatch.setattr(observations, "_is_peak_hours", lambda: False)
+    monkeypatch.setattr(observations, "_load_statusline_state", lambda: {"samples": []})
+    monkeypatch.setattr(observations, "_read_stdin_json", lambda: None)
+
+    obs = observations.build({"current": {}})
+
+    assert obs.rate_limit_5h_pct == 0.0
+    assert obs.rate_limit_7d_pct == 0.0

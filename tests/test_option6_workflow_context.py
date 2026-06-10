@@ -33,7 +33,8 @@ def test_observation_populates_live_workflow_fields(tmp_path, monkeypatch):
         observations,
         "_read_stdin_json",
         lambda: {
-            "transcript_path": str(session_dir / "session.jsonl"),
+            # Real layout: transcript <sid>.jsonl is a sibling of the session dir.
+            "transcript_path": str(session_dir) + ".jsonl",
             "context_window": {
                 "context_window_size": 200000,
                 "current_usage": {"input_tokens": 10},
@@ -48,7 +49,7 @@ def test_observation_populates_live_workflow_fields(tmp_path, monkeypatch):
     obs = observations.build({"current": {}})
 
     assert obs.active_workflow_agents == 1
-    assert obs.subagent_tokens_live == 57_826
+    assert obs.subagent_tokens_live == 62_000
 
 
 def test_workflow_background_drain_template_fires():
@@ -82,7 +83,7 @@ def test_python_engine_writes_vscode_context_file(tmp_path):
         [sys.executable, "engines/python-engine.py", "--tier=standard"],
         input=json.dumps(
             {
-                "transcript_path": str(session_dir / "session.jsonl"),
+                "transcript_path": str(session_dir) + ".jsonl",
                 "model": {"display_name": "Sonnet"},
                 "cost": {"total_cost_usd": 1.25},
                 "context_window": {
@@ -101,6 +102,6 @@ def test_python_engine_writes_vscode_context_file(tmp_path):
 
     payload = json.loads((tmp_path / "claude" / "statusline-context.json").read_text(encoding="utf-8"))
     assert payload["active_workflow_agents"] == 1
-    assert payload["subagent_tokens_live"] == 57_826
+    assert payload["subagent_tokens_live"] == 62_000
     assert payload["current_usage"] == 50_000
     assert payload["pct"] == 25

@@ -242,18 +242,30 @@ function Seg_banner {
         }
     }
 
-    $b = $schedule.banner
-    if ($b -and $b.text) {
+    # banners[] (preferred) with legacy single-banner fallback — mirrors seg_banner
+    $bannerList = @()
+    if ($schedule.banners) { $bannerList = @($schedule.banners) }
+    if ($bannerList.Count -eq 0) {
+        $single = $schedule.banner
+        if ($single -and $single.text) { $bannerList = @($single) }
+    }
+    $colors = @{ yellow=$BGY; red=$BGR; green=$BGG; blue=$BGBLUE; gray=$BGGRAY }
+    $rendered = 0
+    foreach ($b in $bannerList) {
+        if ($rendered -ge 2) { break }
+        if (-not $b -or -not $b.text) { continue }
         $showBanner = $true
         if ($b.expires) {
             try {
-                if ((Get-Date).Date -gt ([DateTime]::Parse($b.expires)).Date) { $showBanner = $false }
+                # Expiry is inclusive: hide only after the expiry day has passed (local date)
+                if ((Get-Date).Date -gt ([DateTime]::Parse([string]$b.expires)).Date) { $showBanner = $false }
             } catch {}
         }
         if ($showBanner) {
-            $colors = @{ yellow=$BGY; red=$BGR; green=$BGG; blue=$BGBLUE; gray=$BGGRAY }
-            $bg = if ($colors[$b.color]) { $colors[$b.color] } else { $BGY }
+            $bg = $BGY
+            if ($b.color -and $colors.ContainsKey([string]$b.color)) { $bg = $colors[[string]$b.color] }
             $badges += "${bg} $($b.text) ${RST}"
+            $rendered++
         }
     }
 
