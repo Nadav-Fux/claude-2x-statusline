@@ -4,7 +4,7 @@
 Reads JSON from stdin (provided by Claude Code) + config file,
 runs enabled segments, outputs ANSI-colored status line.
 
-v2.1 — Peak hours awareness with auto-timezone and remote schedule.
+v2.2 — Peak hours awareness with auto-timezone and remote schedule.
 """
 import sys
 import json
@@ -730,7 +730,7 @@ def seg_git_dirty(ctx):
             unpushed = int(ahead)
 
     if not uncommitted and not unpushed:
-        return f"{GREEN}clean{RST}"
+        return f"{GREEN}saved{RST}"
 
     if uncommitted and unpushed:
         return f"{YELLOW}{uncommitted} changed, {unpushed} unpushed{RST}"
@@ -1648,7 +1648,7 @@ def maybe_heartbeat(config):
             if mtime.strftime("%Y-%m-%d") == today:
                 return
         payload = json.dumps({
-            "id": uid, "v": "2.1", "engine": "python",
+            "id": uid, "v": "2.2", "engine": "python",
             "tier": config.get("tier", "standard"),
             "os": sys.platform, "event": "heartbeat",
         })
