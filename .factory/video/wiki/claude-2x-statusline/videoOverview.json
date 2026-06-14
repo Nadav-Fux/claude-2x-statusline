@@ -1,0 +1,8 @@
+{
+  "status": "skipped",
+  "warnings": [
+    "Video generation skipped: Node.js not available (required for HyperFrames)",
+    "Video generation skipped: FFmpeg not available (required for rendering/muxing)",
+    "Video generation skipped: No TTS engine available (edge-tts not installed)"
+  ]
+}
