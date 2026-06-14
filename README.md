@@ -266,7 +266,7 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 ### עדכון אוטומטי מרחוק
 
-התוסף מושך קובץ `schedule.json` מ-GitHub כל 6 שעות. אם Anthropic משנים את שעות העומס, אני מעדכן את הקובץ ב-repo &mdash; וכל המשתמשים מקבלים את העדכון **אוטומטית**, בלי `git pull`, בלי התקנה מחדש.
+התוסף מושך קובץ `schedule.json` מ-GitHub כל 3 שעות. אם Anthropic משנים את שעות העומס, אני מעדכן את הקובץ ב-repo &mdash; וכל המשתמשים מקבלים את העדכון **אוטומטית**, בלי `git pull`, בלי התקנה מחדש.
 
 ---
 
@@ -287,8 +287,8 @@ Anthropic מגבילה את קצב הצריכה של מכסת ה-5 שעות בש
 
 ```json
 {
-  "id": "sha256('hostname:username')[:16]",
-  "v": "2.1.0",
+  "id": "secrets.token_hex(8)",
+  "v": "2.2.0",
   "engine": "python",
   "tier": "full",
   "os": "linux",
@@ -802,8 +802,8 @@ Sent **once per machine**: either at install time (if you ran `install.sh`) or o
 
 ```json
 {
-  "id": "sha256(\"hostname:username\")[:16]",
-  "v": "2.1.0",
+  "id": "secrets.token_hex(8)",
+  "v": "2.2.0",
   "engine": "python",
   "tier": "full",
   "os": "linux",
@@ -893,7 +893,7 @@ Telemetry: off — no diagnostics sent.
 - No real names, email addresses, or any directly identifying information.
 - No session IDs or per-prompt telemetry.
 - No IP addresses beyond what the Cloudflare edge sees as part of normal HTTP (and Cloudflare does not log IPs to KV).
-- The `id` / `code` field is an 8-character hex prefix of `SHA-256("hostname:username")`. It cannot be reversed to reveal either value.
+- The `id` field is a 16-character random hex string (`secrets.token_hex(8)`), generated once per machine. It is anonymous and carries no host or user information. The doctor diagnostic `code` field is an 8-character hex prefix of `SHA-256("hostname:username")`, used only for correlating doctor reports, and cannot be reversed to reveal either value.
 - Full reports are sanitized: real home paths, usernames, and hostnames are replaced before the data leaves your machine.
 
 ### Endpoint
@@ -987,7 +987,7 @@ https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.j
 
 **How it works:**
 
-1. Every **6 hours**, the plugin checks for a new schedule (configurable via `schedule_cache_hours`)
+1. Every **3 hours**, the plugin checks for a new schedule (configurable via `schedule_cache_hours`)
 2. The fetched schedule is cached locally at `~/.claude/statusline-schedule.json`
 3. If the fetch fails, the cached version is used
 4. If no cache exists, a hardcoded fallback is used

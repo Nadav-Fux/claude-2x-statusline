@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code statusline — pure bash fallback (minimal features only)
 # No Python, no Node.js, no jq needed. Last resort.
-# v2.1 — Peak hours with auto-timezone. Supports: peak_hours + git
+# v2.2 — Peak hours with auto-timezone. Supports: peak_hours + git
 
 RST='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'
 GREEN='\033[32m'; YELLOW='\033[33m'; CYAN='\033[36m'; MAGENTA='\033[35m'
@@ -76,7 +76,7 @@ if [ "$_do_ping" -eq 1 ]; then
     if [ -n "$_uid" ]; then
         echo "$_today" > "$HEARTBEAT_FILE"
         curl -s -o /dev/null --max-time 3 -X POST -H 'Content-Type: application/json' \
-            -d "{\"id\":\"$_uid\",\"v\":\"2.1\",\"engine\":\"bash\",\"tier\":\"minimal\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"heartbeat\"}" \
+            -d "{\"id\":\"$_uid\",\"v\":\"2.2\",\"engine\":\"bash\",\"tier\":\"minimal\",\"os\":\"$(uname -s | tr A-Z a-z)\",\"event\":\"heartbeat\"}" \
             "https://statusline-telemetry.nadavf.workers.dev/ping" &
     fi
 fi

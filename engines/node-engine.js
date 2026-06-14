@@ -124,13 +124,15 @@ function getEnabled(config, schedule) {
 // ── Schedule ──
 function loadSchedule(config) {
   const cachePath = path.join(CLAUDE_DIR, 'statusline-schedule.json');
-  const cacheHours = config.schedule_cache_hours || 3;
+  const configCacheHours = config.schedule_cache_hours || 3;
   try {
     const stat = fs.statSync(cachePath);
     const ageHours = (Date.now() - stat.mtimeMs) / 3600000;
-    if (ageHours < cacheHours) {
-      const cached = normalizeSchedule(JSON.parse(fs.readFileSync(cachePath, 'utf8')));
-      if (cached) return cached;
+    const cached = normalizeSchedule(JSON.parse(fs.readFileSync(cachePath, 'utf8')));
+    if (cached) {
+      const remoteTtl = cached.cache_hours;
+      const effectiveTtl = remoteTtl != null ? remoteTtl : configCacheHours;
+      if (ageHours < effectiveTtl) return cached;
     }
   } catch {}
   try {
@@ -161,7 +163,7 @@ function localDateStr(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1)
 
 function fmtHour(h) {
   h = ((h % 24) + 24) % 24;
-  const hInt = Math.floor(h), mInt = Math.round((h - hInt) * 60);
+  const hInt = Math.floor(h), mInt = Math.floor((h - hInt) * 60);
   const ampm = hInt < 12 ? 'am' : 'pm', display = hInt % 12 || 12;
   return mInt ? `${display}:${String(mInt).padStart(2,'0')}${ampm}` : `${display}${ampm}`;
 }

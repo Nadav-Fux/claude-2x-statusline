@@ -125,7 +125,103 @@ function buildObservation(memory) {
   obs.prompt_count = cur.prompt_count || 0;
   obs.cost_milestones_hit = cur.cost_milestones_hit || [];
 
+  // Peak hours detection (parallel to Python's _is_peak_hours)
+  try { obs.is_peak = detectIsPeak(); } catch {}
+
+  // Trend fields from rolling_observations
+  const rollingObs = cur.rolling_observations || [];
+  const trends = computeTrendFields(rollingObs, Date.now() / 1000);
+  if (trends.cost_5m_ago != null) obs.cost_delta_5m = obs.cost_usd - trends.cost_5m_ago;
+  if (trends.cost_20m_ago != null) obs.cost_delta_20m = obs.cost_usd - trends.cost_20m_ago;
+  if (trends.ctx_5m_ago != null) obs.ctx_delta_5m = obs.ctx_pct - trends.ctx_5m_ago;
+
   return obs;
+}
+
+// ── Peak hours ──
+
+function detectIsPeak() {
+  let schedule;
+  try { schedule = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'statusline-schedule.json'), 'utf8')); }
+  catch { return false; }
+  if (!schedule || schedule.mode === 'normal') return false;
+  const peak = schedule.peak;
+  if (!peak || !peak.enabled) return false;
+
+  const now = new Date();
+  const localOffset = -now.getTimezoneOffset() / 60;
+  const hour = now.getHours() + now.getMinutes() / 60;
+  const weekday = now.getDay() === 0 ? 7 : now.getDay();
+  const peakDays = peak.days || [1,2,3,4,5];
+  const srcOffset = getSourceOffsetForPeak(peak.tz || 'America/Los_Angeles');
+  const rawStart = (peak.start || 5) - srcOffset + localOffset;
+  const peakDayOffset = Math.floor(rawStart / 24);
+  const startLocal = ((rawStart % 24) + 24) % 24;
+  const endLocal = (((peak.end || 11) - srcOffset + localOffset) % 24 + 24) % 24;
+  const effectiveDays = peakDays.map(d => shiftWd(d, peakDayOffset));
+  const isPeakDay = effectiveDays.includes(weekday);
+  const prevWd = weekday === 1 ? 7 : weekday - 1;
+  const prevWasPeak = effectiveDays.includes(prevWd);
+
+  if (endLocal > startLocal) {
+    if (isPeakDay && hour >= startLocal && hour < endLocal) return true;
+  } else {
+    if (isPeakDay && hour >= startLocal) return true;
+    if (prevWasPeak && hour < endLocal) return true;
+  }
+  return false;
+}
+
+function shiftWd(d, delta) { return ((d - 1 + delta) % 7 + 7) % 7 + 1; }
+
+function getSourceOffsetForPeak(tz) {
+  if (!tz || tz === 'UTC' || tz === 'Etc/UTC') return 0;
+  if (tz === 'America/Los_Angeles') return getPacOffset();
+  const pac = getPacOffset();
+  const offsets = { 'America/New_York': pac + 3, 'America/Chicago': pac + 2, 'America/Denver': pac + 1 };
+  return offsets[tz] ?? pac;
+}
+
+function getPacOffset() {
+  const now = new Date(), year = now.getUTCFullYear();
+  const mar1 = new Date(Date.UTC(year, 2, 1));
+  const dstStart = new Date(Date.UTC(year, 2, 1 + ((7 - mar1.getUTCDay()) % 7) + 7, 10));
+  const nov1 = new Date(Date.UTC(year, 10, 1));
+  const dstEnd = new Date(Date.UTC(year, 10, 1 + ((7 - nov1.getUTCDay()) % 7), 9));
+  return (now >= dstStart && now < dstEnd) ? -7 : -8;
+}
+
+// ── Trend fields ──
+
+function computeTrendFields(rollingObs, now) {
+  const result = { cost_5m_ago: null, cost_20m_ago: null, ctx_5m_ago: null };
+  if (!rollingObs || !rollingObs.length) return result;
+
+  const target5m = now - 5 * 60;
+  const target20m = now - 20 * 60;
+
+  const closest = (target) => {
+    const candidates = rollingObs.filter(o => typeof o.ts === 'number');
+    if (!candidates.length) return null;
+    let best = candidates[0], bestDist = Math.abs(candidates[0].ts - target);
+    for (let i = 1; i < candidates.length; i++) {
+      const dist = Math.abs(candidates[i].ts - target);
+      if (dist < bestDist) { best = candidates[i]; bestDist = dist; }
+    }
+    return best;
+  };
+
+  const obs5m = closest(target5m);
+  const obs20m = closest(target20m);
+
+  if (obs5m && Math.abs(obs5m.ts - target5m) < 180) {
+    result.cost_5m_ago = obs5m.cost_usd ?? null;
+    result.ctx_5m_ago = obs5m.ctx_pct ?? null;
+  }
+  if (obs20m && Math.abs(obs20m.ts - target20m) < 300) {
+    result.cost_20m_ago = obs20m.cost_usd ?? null;
+  }
+  return result;
 }
 
 const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_creation_input_tokens"\s*:\s*(\d+)\s*,\s*"cache_read_input_tokens"\s*:\s*(\d+)\s*,\s*"output_tokens"\s*:\s*(\d+)/g;
@@ -276,6 +372,20 @@ function buildInsights(obs, memory) {
     results.push({ text: `${obs.prompt_count} prompts in this session. If you're shifting to a new task, a fresh session is usually faster than compacting.`, text_he: `${obs.prompt_count} פרומפטים בסשן הזה. אם אתה עובר למשימה חדשה, סשן חדש בדרך כלל מהיר יותר מcompact.`, urgency: 3, novelty: novelty(k, memory), actionability: 8, uniqueness: 8, template_key: k });
   }
 
+  if (obs.ctx_pct > 50 && obs.prompt_count > 20) {
+    const m = nextMilestone(obs.cost_usd);
+    const recentMilestone = m != null && !obs.cost_milestones_hit.includes(m);
+    if (!recentMilestone) {
+      const k = 'pivot_suggestion';
+      results.push({ text: `Deep in this session (${obs.ctx_pct.toFixed(0)}% context, ${obs.prompt_count} prompts). If this is turning into a new direction, consider rewind + fresh prompt rather than pushing forward with all the prior dead-ends in context.`, text_he: `עמוק בתוך הסשן (${obs.ctx_pct.toFixed(0)}% context, ${obs.prompt_count} פרומפטים). אם זה נהיה כיוון חדש — עדיף rewind והמשך נקי, במקום לגרור אחריך את כל הניסיונות שכבר לא רלוונטיים.`, urgency: 5, novelty: novelty(k, memory), actionability: 7, uniqueness: 9, template_key: k });
+    }
+  }
+
+  if (obs.session_duration_min > 15 && obs.burn_10m != null && obs.burn_10m > 8) {
+    const k = 'subagent_suggestion';
+    results.push({ text: `Heavy work? Subagents keep the main session clean — spawn one for anything that generates lots of intermediate output you won't need back.`, text_he: `עבודה כבדה? Subagents שומרים את הסשן הראשי נקי — שלח סוכן נפרד לכל משימה שמייצרת הרבה פלט ביניים שלא תצטרך בחזרה.`, urgency: 2, novelty: novelty(k, memory), actionability: 6, uniqueness: 7, template_key: k });
+  }
+
   if (obs.active_workflow_agents > 0 && obs.subagent_tokens_live > 100000) {
     const tok = obs.subagent_tokens_live >= 1000000 ? `${(obs.subagent_tokens_live / 1000000).toFixed(1)}M` : `${Math.floor(obs.subagent_tokens_live / 1000)}K`;
     const k = 'workflow_background_drain';
@@ -300,10 +410,26 @@ function callHaiku(obs, memory, rulesText) {
   if (!apiKey) return null;
 
   const recent = (memory.current?.delivered_narratives || []).slice(-5).map(n => n.text || n);
+  const priorSessions = (memory.prior_sessions || []).slice(0, 3).map(ps => ({
+    session_id: ps.session_id || '',
+    ended_at: ps.ended_at || 0,
+    summary: (ps.narratives || []).length ? ps.narratives[ps.narratives.length - 1].text || '' : '',
+  }));
   const payload = {
-    current_state: { cost_usd: obs.cost_usd, burn_10m: obs.burn_10m, burn_session: obs.burn_session, ctx_pct: Math.round(obs.ctx_pct), ctx_mins_left: obs.ctx_mins_left, cache_pct: Math.round(obs.cache_pct), session_duration_min: Math.round(obs.session_duration_min), prompt_count: obs.prompt_count, is_peak: obs.is_peak },
+    current_state: {
+      cost_usd: obs.cost_usd, burn_10m: obs.burn_10m, burn_session: obs.burn_session,
+      ctx_pct: Math.round(obs.ctx_pct * 10) / 10, ctx_mins_left: obs.ctx_mins_left,
+      cache_pct: Math.round(obs.cache_pct * 10) / 10, cache_delta_5m_tokens: obs.cache_delta_5m,
+      session_duration_min: Math.round(obs.session_duration_min * 10) / 10,
+      prompt_count: obs.prompt_count, is_peak: obs.is_peak,
+      rate_limit_5h_pct: obs.rate_limit_5h_pct, rate_limit_7d_pct: obs.rate_limit_7d_pct,
+    },
+    recent_trends: {
+      cost_delta_5m: obs.cost_delta_5m, cost_delta_20m: obs.cost_delta_20m, ctx_delta_5m: obs.ctx_delta_5m,
+    },
     recent_narratives: recent,
     rules_engine_pick: rulesText,
+    prior_sessions_summary: priorSessions,
   };
 
   return new Promise(resolve => {

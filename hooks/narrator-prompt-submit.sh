@@ -27,7 +27,7 @@ fi
 
 # Try Python narrator first (full feature parity + Haiku support)
 if [ -n "$PY" ]; then
-    STATUSLINE_NARR_ROOT="$NARR_ROOT_NATIVE" exec "$PY" -c "
+    STATUSLINE_NARR_ROOT="$NARR_ROOT_NATIVE" "$PY" -c "
 import os, sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 narr_root = os.environ.get('STATUSLINE_NARR_ROOT', '')
@@ -42,6 +42,9 @@ try:
 except Exception:
     pass
 "
+    if [ $? -eq 0 ]; then
+        exit 0
+    fi
 fi
 
 # Fallback: Node.js narrator (full rules engine + optional Haiku)

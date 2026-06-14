@@ -141,7 +141,7 @@ function maybeHeartbeat() {
     const uid = getTelemetryId();
     if (!uid) { return; }
     const payload = JSON.stringify({
-      id: uid, v: '0.1.1', engine: 'vscode', tier: config.tier || 'standard',
+      id: uid, v: '0.2.0', engine: 'vscode', tier: config.tier || 'standard',
       os: process.platform, event: 'heartbeat',
     });
     fs.writeFileSync(HEARTBEAT_PATH, today);
@@ -403,7 +403,7 @@ async function fetchUsage(): Promise<UsageData | null> {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
       'anthropic-beta': 'oauth-2025-04-20',
-      'User-Agent': 'claude-statusline-vscode/0.1.0',
+      'User-Agent': 'claude-statusline-vscode/0.2.0',
     });
     const parsed = JSON.parse(data);
     // Validate response has expected fields (reject error responses like 429)
