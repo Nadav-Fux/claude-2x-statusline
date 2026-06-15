@@ -137,50 +137,6 @@ test('C1: ctx_pct formula excludes output_tokens — subprocess integration', ()
   }
 });
 
-test('C1: ctx_pct formula — cache_read tokens included, output excluded (unit)', () => {
-  /**
-   * Pure-unit: compute ctx_pct manually and confirm the formula used in
-   * buildObservation:
-   *   used = input + cache_creation + cache_read  (output excluded)
-   *   ctx_pct = min(100, used / ctx_window * 100)
-   *
-   * input=50k, output=5k, cache_read=450k, cache_creation=0, ctx_window=200k
-   *   correct: (50000 + 0 + 450000) / 200000 * 100 = 250 → capped 100
-   *   wrong  : (50000 + 5000) / 200000 * 100 = 27.5
-   */
-  const input = 50000, output = 5000, cacheRead = 450000, cacheCreation = 0;
-  const ctxWindow = 200000;
-
-  // The formula from narrator-node.js line 108:
-  // const used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens;
-  const usedCorrect = input + cacheCreation + cacheRead;
-  const ctxPctCorrect = Math.min(100, (usedCorrect / ctxWindow) * 100);
-
-  const usedWrong = input + output + cacheRead + cacheCreation;
-  const ctxPctWrong = Math.min(100, (usedWrong / ctxWindow) * 100);
-
-  // Correct: 100% (capped); wrong: also 100% in this case (both saturate)
-  // The distinguishing test is the subprocess test above.
-  // This test just documents the formula's expected value:
-  assert.equal(ctxPctCorrect, 100, 'correct formula should give 100%');
-  // Verify output tokens are NOT a source of ctx usage by checking the formula
-  // does NOT include output:
-  assert.ok(
-    usedCorrect === input + cacheCreation + cacheRead,
-    'used must equal input + cache_creation + cache_read (no output_tokens)',
-  );
-  assert.ok(
-    usedCorrect !== input + output + cacheRead + cacheCreation || output === 0,
-    'formula must differ from wrong formula when output > 0',
-  );
-  // Confirm: wrong formula includes output, which inflates ctx_pct
-  assert.equal(
-    usedWrong,
-    input + output + cacheRead + cacheCreation,
-  );
-  assert.ok(usedWrong > usedCorrect, 'wrong formula overcounts due to output');
-});
-
 // ── L4: nextMilestone returns int, template_key uses int ─────────────────────
 
 test('L4: nextMilestone(0) → null', () => {
@@ -493,9 +449,9 @@ test('pick: high burn beats low cache in ordering', () => {
   const texts = results.map(i => i.text);
   const burnIdx = texts.findIndex(t => t.toLowerCase().includes('burning'));
   const cacheIdx = texts.findIndex(t => t.toLowerCase().includes('cache hit'));
-  if (burnIdx !== -1 && cacheIdx !== -1) {
-    assert.ok(burnIdx < cacheIdx, 'burn_high should rank before cache_low');
-  }
+  assert.notEqual(burnIdx, -1, 'Expected burn_high insight in results');
+  assert.notEqual(cacheIdx, -1, 'Expected cache_low insight in results');
+  assert.ok(burnIdx < cacheIdx, 'burn_high should rank before cache_low');
 });
 
 // ── Score formula ─────────────────────────────────────────────────────────────
