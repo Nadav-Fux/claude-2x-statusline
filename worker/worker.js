@@ -44,8 +44,24 @@ export default {
 };
 
 async function handlePing(request, env, cors) {
+  // H7: Rate limiting — only when we have a real client IP
+  const clientIp = request.headers.get('CF-Connecting-IP');
+  if (clientIp) {
+    const rlKey = `rl:${clientIp}`;
+    const lastPing = await env.TELEMETRY.get(rlKey);
+    if (lastPing) {
+      return new Response('ok', { status: 429, headers: cors });
+    }
+    await env.TELEMETRY.put(rlKey, '1', { expirationTtl: 30 });
+  }
+
   try {
-    const body = await request.json();
+    // H7: Read body and enforce real payload size (not just Content-Length header)
+    const rawBody = await request.arrayBuffer();
+    if (rawBody.byteLength > 10240) {
+      return new Response('Payload too large', { status: 413, headers: cors });
+    }
+    const body = JSON.parse(new TextDecoder().decode(rawBody));
     const { id, v, engine, tier, os, event } = body;
     const failedIds = normalizeFailedIds(body.failed_ids);
 
@@ -56,8 +72,12 @@ async function handlePing(request, env, cors) {
     const today = new Date().toISOString().slice(0, 10);
     const value = [engine, tier, os, v].join(':');
 
-    // DAU — one key per user per day, 90-day TTL
-    await env.TELEMETRY.put(`dau:${today}:${id}`, value, { expirationTtl: 7776000 });
+    // DAU — one key per user per day, 90-day TTL.
+    // H11: Store engine/tier in metadata so /stats can read it from list() without N+1 gets.
+    await env.TELEMETRY.put(`dau:${today}:${id}`, value, {
+      expirationTtl: 7776000,
+      metadata: { engine: engine || 'unknown', tier: tier || 'standard' },
+    });
 
     // Install — first-seen only
     if (event === 'install') {
@@ -100,11 +120,8 @@ async function handlePing(request, env, cors) {
 }
 
 async function handleStats(request, env, cors) {
-  // Simple auth via query param or header
-  const url = new URL(request.url);
-  const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
-  const expectedToken = await env.TELEMETRY.get('_auth_token');
-  if (expectedToken && token !== expectedToken) {
+  // H6: Deny by default — require auth token
+  if (!await checkAuth(request, env)) {
     return new Response('Unauthorized', { status: 401, headers: cors });
   }
 
@@ -126,14 +143,11 @@ async function handleStats(request, env, cors) {
     keys.forEach(k => sevenDayIds.add(k.name.split(':').pop()));
   }
 
-  // Engine breakdown from today's DAU
+  // Engine breakdown from today's DAU — H11: use metadata from list() to avoid N+1 KV gets
   const engines = {};
   for (const key of dauToday) {
-    const val = await env.TELEMETRY.get(key.name);
-    if (val) {
-      const engine = val.split(':')[0];
-      engines[engine] = (engines[engine] || 0) + 1;
-    }
+    const engine = key.metadata?.engine || 'unknown';
+    engines[engine] = (engines[engine] || 0) + 1;
   }
 
   const stats = {
@@ -173,15 +187,9 @@ async function checkAuth(request, env) {
   return true;
 }
 
-async function checkOptionalAuth(request, env) {
-  const url = new URL(request.url);
-  const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
-  const expectedToken = await env.TELEMETRY.get('_auth_token');
-  return !expectedToken || token === expectedToken;
-}
-
 async function handleFailures(request, env, cors) {
-  if (!await checkOptionalAuth(request, env)) {
+  // H6: Deny by default — require auth token
+  if (!await checkAuth(request, env)) {
     return new Response('Unauthorized', { status: 401, headers: cors });
   }
 
@@ -241,6 +249,10 @@ async function handleFailures(request, env, cors) {
   });
 }
 
+// Note: This function does N+1 KV gets (list + individual value reads per key).
+// Event payloads exceed 1KB so they can't be stored in KV metadata. This is
+// a structural limitation of Workers KV; fixing requires Durable Objects or a
+// dedicated aggregation cron.
 async function accumulateEventStats(kv, prefix, byOs, aggregateFailIndex, onRecord) {
   const keys = await listAllKeys(kv, prefix);
   for (const key of keys) {

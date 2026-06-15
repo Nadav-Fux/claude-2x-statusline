@@ -138,8 +138,16 @@ def _read_stdin_json() -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def _load_statusline_state() -> dict:
-    """Load the rolling state JSON directly (for cost/token data)."""
-    state_path = Path.home() / ".claude" / "statusline-state.json"
+    """Load the rolling state JSON directly (for cost/token data).
+
+    Uses rolling_state._state_path() to respect per-session scoping
+    when set_session_id() has been called.
+    """
+    try:
+        from lib import rolling_state as rs
+        state_path = rs._state_path()
+    except Exception:
+        state_path = Path.home() / ".claude" / "statusline-state.json"
     try:
         return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
@@ -244,6 +252,8 @@ def build(memory: dict) -> Observation:
     # ── rolling_state samples ────────────────────────────────────────────────
     try:
         from lib import rolling_state as rs
+        if stdin_data and stdin_data.get("session_id"):
+            rs.set_session_id(stdin_data["session_id"])
         obs.burn_10m = rs.rolling_rate(10)
         obs.cache_delta_5m = rs.cache_delta(5)
     except Exception:
@@ -279,7 +289,7 @@ def build(memory: dict) -> Observation:
 
     # ── context % and minutes left ───────────────────────────────────────────
     if obs.ctx_window_size > 0 and obs.total_input_tokens > 0:
-        used = obs.total_input_tokens + obs.total_output_tokens
+        used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens
         obs.ctx_pct = min(100.0, used / obs.ctx_window_size * 100.0)
 
         if obs.session_duration_min > 1 and obs.ctx_pct > 0:

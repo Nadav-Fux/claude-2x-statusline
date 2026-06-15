@@ -94,7 +94,7 @@ def test_first_heartbeat_creates_telemetry_id_and_sends_once(tmp_telemetry_paths
 
     assert payload["event"] == "heartbeat"
     assert payload["engine"] == "python"
-    assert payload["v"] == "2.1"
+    assert payload["v"] == "2.2"
     assert "id" in payload
     assert len(payload["id"]) == 16
 

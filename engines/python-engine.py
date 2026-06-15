@@ -25,6 +25,7 @@ from rolling_state import (
     rolling_rate as _rs_rate,
     rolling_tokens_out as _rs_tokens,
     cache_delta as _rs_cache_delta,
+    set_session_id as _rs_set_session_id,
 )
 from workflows import (
     detect_live_workflows as _wf_detect_live,
@@ -1449,6 +1450,11 @@ def main():
     maybe_heartbeat(config)
     debug(f"config: tier={config.get('tier')}")
     stdin_data = read_stdin()
+
+    # Scope rolling state to this session to prevent cross-session contamination
+    _sid = stdin_data.get("session_id", "")
+    if _sid:
+        _rs_set_session_id(_sid)
 
     # Mode from args or config
     mode = config.get("mode", "minimal")

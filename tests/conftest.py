@@ -66,8 +66,10 @@ def tmp_state_dir(tmp_path, monkeypatch):
     # If rolling_state is already imported, refresh its module-level paths
     if "lib.rolling_state" in sys.modules:
         rs = sys.modules["lib.rolling_state"]
+        rs._CLAUDE_DIR = fake_home / ".claude"
         rs._STATE_PATH = fake_home / ".claude" / "statusline-state.json"
         rs._TMP_PATH = fake_home / ".claude" / "statusline-state.json.tmp"
+        rs._SESSION_SUFFIX = ""
 
     yield fake_home, fake_claude / "statusline-state.json"
 

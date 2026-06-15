@@ -37,7 +37,7 @@ class Insight:
 # Cost milestones
 # ---------------------------------------------------------------------------
 
-_COST_MILESTONES = [5.0, 10.0, 25.0, 50.0, 100.0]
+_COST_MILESTONES = [5, 10, 25, 50, 100]
 
 
 def _next_milestone(cost: float) -> Optional[float]:

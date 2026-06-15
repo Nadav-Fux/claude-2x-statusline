@@ -843,7 +843,8 @@ function maybeHeartbeat(config) {
     if (!uid) return;
     fs.writeFileSync(HEARTBEAT_PATH, today);
     const payload = JSON.stringify({ id: uid, v: '2.2', engine: 'node', tier: config.tier || 'standard', os: process.platform, event: 'heartbeat' });
-    const child = spawn('curl', ['-s', '-o', '/dev/null', '--max-time', '3', '-X', 'POST', '-H', 'Content-Type: application/json', '-d', payload, TELEMETRY_URL], { stdio: 'ignore', detached: true });
+    const devnull = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const child = spawn('curl', ['-s', '-o', devnull, '--max-time', '3', '-X', 'POST', '-H', 'Content-Type: application/json', '-d', payload, TELEMETRY_URL], { stdio: 'ignore', detached: true });
     child.unref();
   } catch {}
 }
@@ -853,7 +854,9 @@ function main() {
   const config = loadConfig();
   maybeHeartbeat(config);
   let stdin = {};
-  try { const raw = fs.readFileSync(0, 'utf8').trim(); if (raw) stdin = JSON.parse(raw); } catch {}
+  try { if (!process.stdin.isTTY) { const raw = fs.readFileSync(0, 'utf8').trim(); if (raw) stdin = JSON.parse(raw); } } catch {}
+
+  if (stdin.session_id) rs.setSessionId(stdin.session_id);
 
   const mode = config.mode || 'minimal';
   for (const arg of process.argv.slice(2)) {
