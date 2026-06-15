@@ -30,7 +30,7 @@ def set_session_id(session_id: str) -> None:
     rolling metrics.
     """
     global _SESSION_SUFFIX
-    if session_id and len(session_id) >= 4:
+    if session_id and isinstance(session_id, str) and len(session_id) >= 4:
         _SESSION_SUFFIX = session_id[:8]
     else:
         _SESSION_SUFFIX = ""
