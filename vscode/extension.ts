@@ -80,6 +80,8 @@ let wdItem: vscode.StatusBarItem;
 let ctxItem: vscode.StatusBarItem;
 let infoItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
+let currentIntervalSec = 30;
+let isRefreshing = false;
 let cachedSchedule: Schedule | null = null;
 const TELEMETRY_URL = 'https://statusline-telemetry.nadavf.workers.dev/ping';
 const HEARTBEAT_PATH = path.join(CLAUDE_DIR, '.statusline-heartbeat');
@@ -110,10 +112,25 @@ export function activate(context: vscode.ExtensionContext) {
   maybeHeartbeat();
 
   // Start periodic refresh
-  const intervalSec = vscode.workspace.getConfiguration('claudeStatusline').get<number>('refreshInterval', 30);
-  refreshTimer = setInterval(() => refresh(), intervalSec * 1000);
+  currentIntervalSec = vscode.workspace.getConfiguration('claudeStatusline').get<number>('refreshInterval', 30);
+  refreshTimer = setInterval(() => refresh(), currentIntervalSec * 1000);
 
-  // Re-read config on change
+  // H8: Re-read config on VS Code settings change (refreshInterval, etc.)
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('claudeStatusline')) {
+        const newInterval = vscode.workspace.getConfiguration('claudeStatusline').get<number>('refreshInterval', 30);
+        if (newInterval !== currentIntervalSec && refreshTimer) {
+          clearInterval(refreshTimer);
+          currentIntervalSec = newInterval;
+          refreshTimer = setInterval(() => refresh(), currentIntervalSec * 1000);
+        }
+        refresh();
+      }
+    })
+  );
+
+  // Re-read config on file change
   const configWatcher = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(CLAUDE_DIR, 'statusline-config.json')
   );
@@ -155,6 +172,8 @@ function maybeHeartbeat() {
 // ── Main refresh ──
 
 async function refresh() {
+  if (isRefreshing) return;
+  isRefreshing = true;
   try {
     const config = loadConfig();
     const vsConfig = vscode.workspace.getConfiguration('claudeStatusline');
@@ -169,10 +188,10 @@ async function refresh() {
     updateInfoItem(tier);
   } catch {
     // Silently fail — statusline is non-critical
+  } finally {
+    isRefreshing = false;
   }
 }
-
-// ── Config ──
 
 function loadConfig(): StatuslineConfig {
   try {
@@ -451,19 +470,43 @@ function getOAuthToken(): string {
     if (token) { return token; }
   } catch { /* no creds file */ }
 
-  // Windows Credential Manager
+  // Windows Credential Manager — H9: Get-StoredCredential needs external module;
+  // use cmdkey + Win32 CredRead via PowerShell P/Invoke instead
   if (process.platform === 'win32') {
     try {
+      const psScript = [
+        'Add-Type @"',
+        'using System;',
+        'using System.Runtime.InteropServices;',
+        'public class WinCred {',
+        '  [DllImport("advapi32.dll", SetLastError = true)]',
+        '  public static extern bool CredRead(string target, uint type, uint flags, out IntPtr cred);',
+        '  [DllImport("advapi32.dll")] public static extern void CredFree(IntPtr cred);',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  public struct CRED { public uint Flags; public uint Type; public string TargetName;',
+        '    public string Comment; public long LastWritten; public uint BlobSize;',
+        '    public IntPtr Blob; public uint Persist; public uint AttrCount;',
+        '    public IntPtr Attrs; public string Alias; public string UserName; }',
+        '}"@',
+        '$p = [IntPtr]::Zero',
+        'if ([WinCred]::CredRead("Claude Code-credentials", 1, 0, [ref]$p)) {',
+        '  $c = [System.Runtime.InteropServices.Marshal]::PtrToStructure($p, [WinCred+CRED])',
+        '  $b = New-Object byte[] $c.BlobSize',
+        '  [System.Runtime.InteropServices.Marshal]::Copy($c.Blob, $b, 0, $c.BlobSize)',
+        '  $s = [System.Text.Encoding]::Unicode.GetString($b)',
+        '  [WinCred]::CredFree($p)',
+        '  Write-Output $s -NoEnumerate',
+        '}'
+      ].join('\n');
       const result = execFileSync('powershell.exe', [
-        '-NoProfile', '-Command',
-        `$c = Get-StoredCredential -Target 'Claude Code-credentials' -ErrorAction SilentlyContinue; if ($c) { [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($c.Password)) }`
-      ], { timeout: 3000, encoding: 'utf8' });
+        '-NoProfile', '-NoLogo', '-Command', psScript
+      ], { timeout: 5000, encoding: 'utf8' });
       if (result.trim()) {
         const data = JSON.parse(result.trim());
         const token = data?.claudeAiOauth?.accessToken;
         if (token) { return token; }
       }
-    } catch { /* no credential */ }
+    } catch { /* no credential or CredRead failed */ }
   }
 
   // macOS Keychain

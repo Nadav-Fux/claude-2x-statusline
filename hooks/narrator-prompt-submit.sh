@@ -40,7 +40,7 @@ try:
         sys.stdout.write(text)
         sys.stdout.write('\n')
 except Exception:
-    pass
+    sys.exit(1)
 "
     if [ $? -eq 0 ]; then
         exit 0

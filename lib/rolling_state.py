@@ -10,29 +10,70 @@ import os
 import time
 from pathlib import Path
 
+_CLAUDE_DIR = Path.home() / ".claude"
 _STATE_PATH = Path.home() / ".claude" / "statusline-state.json"
 _TMP_PATH = Path.home() / ".claude" / "statusline-state.json.tmp"
 _MAX_AGE_SECS = 3600  # 60-minute ring
 
+# Session suffix — when set, state is stored in a per-session file to avoid
+# cross-session cost contamination when multiple Claude Code instances run
+# concurrently on the same machine.
+_SESSION_SUFFIX = ""
+
+
+def set_session_id(session_id: str) -> None:
+    """Set the session suffix for per-session state isolation.
+
+    When set, state is read from / written to statusline-state-{suffix}.json
+    instead of the global file. Call this from the engine with the session_id
+    from stdin to prevent parallel sessions from corrupting each other's
+    rolling metrics.
+    """
+    global _SESSION_SUFFIX
+    if session_id and len(session_id) >= 4:
+        _SESSION_SUFFIX = session_id[:8]
+    else:
+        _SESSION_SUFFIX = ""
+
+
+def _state_path() -> Path:
+    if _SESSION_SUFFIX:
+        return _CLAUDE_DIR / f"statusline-state-{_SESSION_SUFFIX}.json"
+    return _STATE_PATH
+
+
+def _tmp_path() -> Path:
+    if _SESSION_SUFFIX:
+        return _CLAUDE_DIR / f"statusline-state-{_SESSION_SUFFIX}.json.tmp"
+    return _TMP_PATH
+
 
 def _load() -> dict:
     """Load state from disk. Returns {"samples": []} on missing or corrupt file."""
+    path = _state_path()
     try:
-        text = _STATE_PATH.read_text(encoding="utf-8")
-        return json.loads(text)
+        text = path.read_text(encoding="utf-8")
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            return {"samples": []}
+        return data
     except FileNotFoundError:
         return {"samples": []}
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         # Corrupt file — reset to empty
+        return {"samples": []}
+    except Exception:
         return {"samples": []}
 
 
 def _save(state: dict) -> None:
     """Atomically write state to disk."""
     text = json.dumps(state, separators=(",", ":"))
+    tmp = _tmp_path()
+    target = _state_path()
     try:
-        _TMP_PATH.write_text(text, encoding="utf-8")
-        os.replace(str(_TMP_PATH), str(_STATE_PATH))
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(str(tmp), str(target))
     except OSError:
         # If we can't write, silently skip — statusline must not crash
         pass

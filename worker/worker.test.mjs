@@ -9,18 +9,18 @@ class MemoryKv {
   }
 
   async get(key) {
-    return this.store.has(key) ? this.store.get(key) : null;
+    return this.store.has(key) ? this.store.get(key).value : null;
   }
 
-  async put(key, value) {
-    this.store.set(key, value);
+  async put(key, value, options = {}) {
+    this.store.set(key, { value, metadata: options.metadata || null });
   }
 
   async list({ prefix = '' } = {}) {
     const keys = [...this.store.keys()]
       .filter(key => key.startsWith(prefix))
       .sort()
-      .map(name => ({ name }));
+      .map(name => ({ name, metadata: this.store.get(name).metadata || {} }));
     return { keys, list_complete: true };
   }
 }
@@ -35,19 +35,33 @@ async function readJson(response) {
   return JSON.parse(await response.text());
 }
 
+let _ipCounter = 0;
+
 async function postPing(env, body) {
+  _ipCounter++;
   return worker.fetch(
     new Request('https://statusline.test/ping', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': `203.0.113.${_ipCounter % 250 + 1}`,
+      },
       body: JSON.stringify(body),
     }),
     env,
   );
 }
 
+test('GET /stats requires auth (deny-by-default)', async () => {
+  const env = makeEnv();
+
+  const response = await worker.fetch(new Request('https://statusline.test/stats'), env);
+  assert.equal(response.status, 401);
+});
+
 test('GET /stats counts unique ping records for today', async () => {
   const env = makeEnv();
+  await env.TELEMETRY.put('_auth_token', 'secret-token');
 
   await postPing(env, {
     id: 'aaaaaaaaaaaa',
@@ -66,7 +80,12 @@ test('GET /stats counts unique ping records for today', async () => {
     event: 'heartbeat',
   });
 
-  const response = await worker.fetch(new Request('https://statusline.test/stats'), env);
+  const response = await worker.fetch(
+    new Request('https://statusline.test/stats', {
+      headers: { Authorization: 'Bearer secret-token' },
+    }),
+    env,
+  );
   const data = await readJson(response);
 
   assert.equal(response.status, 200);
@@ -75,10 +94,23 @@ test('GET /stats counts unique ping records for today', async () => {
   assert.deepEqual(data.engines_today, { node: 1, python: 1 });
 });
 
-test('GET /failures stays open when auth token is not configured', async () => {
+test('GET /failures requires auth (deny-by-default)', async () => {
   const env = makeEnv();
 
   const response = await worker.fetch(new Request('https://statusline.test/failures'), env);
+  assert.equal(response.status, 401);
+});
+
+test('GET /failures returns empty stats when authed and no data', async () => {
+  const env = makeEnv();
+  await env.TELEMETRY.put('_auth_token', 'secret-token');
+
+  const response = await worker.fetch(
+    new Request('https://statusline.test/failures', {
+      headers: { Authorization: 'Bearer secret-token' },
+    }),
+    env,
+  );
   const data = await readJson(response);
 
   assert.equal(response.status, 200);

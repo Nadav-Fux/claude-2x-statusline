@@ -34,7 +34,7 @@ function loadMemory() {
 
 function saveMemory(data) {
   try {
-    fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+    fs.mkdirSync(CLAUDE_DIR, { recursive: true, mode: 0o700 });
     fs.writeFileSync(MEMORY_TMP, JSON.stringify(data), 'utf8');
     fs.renameSync(MEMORY_TMP, MEMORY_PATH);
   } catch {}
@@ -65,7 +65,7 @@ function buildObservation(memory) {
 
   // Stdin (piped from hook)
   let stdinData = null;
-  try { const raw = fs.readFileSync(0, 'utf8').trim(); if (raw) stdinData = JSON.parse(raw); } catch {}
+  try { if (!process.stdin.isTTY) { const raw = fs.readFileSync(0, 'utf8').trim(); if (raw) stdinData = JSON.parse(raw); } } catch {}
 
   if (stdinData) {
     const c = stdinData.cost || {};
@@ -92,6 +92,7 @@ function buildObservation(memory) {
 
   // Rolling state
   try {
+    if (stdinData?.session_id) rs.setSessionId(stdinData.session_id);
     obs.burn_10m = rs.rollingRate(10);
     obs.cache_delta_5m = rs.cacheDelta(5);
   } catch {}
@@ -104,7 +105,7 @@ function buildObservation(memory) {
 
   // Context %
   if (obs.ctx_window_size > 0 && obs.total_input_tokens > 0) {
-    const used = obs.total_input_tokens + obs.total_output_tokens;
+    const used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens;
     obs.ctx_pct = Math.min(100, used / obs.ctx_window_size * 100);
     if (obs.session_duration_min > 1 && obs.ctx_pct > 0) {
       const rate = obs.ctx_pct / obs.session_duration_min;
@@ -335,7 +336,7 @@ function buildInsights(obs, memory) {
 
   const milestone = nextMilestone(obs.cost_usd);
   if (milestone != null && !obs.cost_milestones_hit.includes(milestone)) {
-    const rate = obs.burn_10m ?? obs.burn_session;
+    let rate = obs.burn_10m ?? obs.burn_session;
     if (rate == null && obs.session_duration_min >= 1 && obs.cost_usd > 0) { const raw = obs.cost_usd / (obs.session_duration_min / 60); if (raw <= 200) rate = raw; }
     if (rate != null && rate > 0) {
       const projected = rate * 5, k = `milestone_${milestone}`;
@@ -547,4 +548,4 @@ async function run(mode) {
   } catch { return null; }
 }
 
-module.exports = { run };
+module.exports = { run, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak };

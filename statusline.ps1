@@ -138,8 +138,10 @@ if ($args -contains '--minimal') { $mode = 'minimal' }
 # Stdin
 $stdinData = @{}
 try {
-    $raw = [Console]::In.ReadToEnd()
-    if ($raw.Trim()) { $stdinData = $raw | ConvertFrom-Json }
+    if ([Console]::IsInputRedirected) {
+        $raw = [Console]::In.ReadToEnd()
+        if ($raw.Trim()) { $stdinData = $raw | ConvertFrom-Json }
+    }
 } catch {}
 
 # Timezone — auto-detect local

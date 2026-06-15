@@ -79,6 +79,7 @@ def test_python_engine_writes_vscode_context_file(tmp_path):
     env["USERPROFILE"] = str(fake_home)
     env["TMP"] = str(tmp_path)
     env["TEMP"] = str(tmp_path)
+    env["TMPDIR"] = str(tmp_path)
     subprocess.run(
         [sys.executable, "engines/python-engine.py", "--tier=standard"],
         input=json.dumps(
