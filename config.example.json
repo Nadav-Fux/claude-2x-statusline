@@ -16,5 +16,8 @@
     "sdk_meter": false
   },
   "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
-  "schedule_cache_hours": 3
+  "schedule_cache_hours": 3,
+  "_comment_width": "Responsive width: lines reflow to the terminal (COLUMNS) automatically. Set max_width to cap line length even on wide terminals; set reflow=false to force the legacy single line.",
+  "max_width": 0,
+  "reflow": true
 }

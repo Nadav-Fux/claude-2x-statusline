@@ -27,6 +27,43 @@ def _make_live_session(tmp_path: Path) -> Path:
     return session_dir
 
 
+def test_seg_workflows_spend_persists_after_manifest_gone(tmp_path, monkeypatch):
+    """The workflow Σ must survive the completion manifest disappearing.
+
+    Reproduces the user-visible bug: workflow spend vanished when a run finished
+    without a manifest (interrupt) or on a tier switch. The per-session
+    high-water-mark keeps it visible (dimmed, labelled idle).
+    """
+    import re
+
+    engine = observations._load_python_engine_module()
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    monkeypatch.setattr(engine, "_wf_find_session_dir", lambda stdin: session_dir)
+
+    def render():
+        engine._WF_CACHE.clear()
+        return re.sub(r"\x1b\[[0-9;]*m", "", engine.seg_workflows({"stdin": {}}))
+
+    # Nothing yet → segment self-hides.
+    assert render() == ""
+
+    # A completed workflow manifest → idle Σ is shown.
+    wf_dir = session_dir / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "wf_a.json").write_text(
+        json.dumps({"status": "completed", "totalTokens": 2_300_000, "agentCount": 4})
+    )
+    out = render()
+    assert "wf idle" in out and "2.3M" in out, out
+
+    # Manifest removed (interrupt / cleanup) → spend STILL shown from the peak file.
+    shutil.rmtree(wf_dir)
+    out2 = render()
+    assert "2.3M" in out2, f"spend must persist after manifest gone, got: {out2!r}"
+    assert (session_dir / ".statusline-wf-peak.json").is_file()
+
+
 def test_observation_populates_live_workflow_fields(tmp_path, monkeypatch):
     session_dir = _make_live_session(tmp_path)
     monkeypatch.setattr(

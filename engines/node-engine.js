@@ -25,7 +25,7 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  minimal: ['model', 'context', 'workflows', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
   standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
   full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
@@ -172,6 +172,60 @@ function buildUsageBar(pct, width = 10) {
   pct = Math.max(0, Math.min(100, pct));
   const filled = Math.floor(pct * width / 100), empty = width - filled;
   return `${colorPct(pct)}${'\u25b0'.repeat(filled)}${DIM}${'\u25b1'.repeat(empty)}${RST}`;
+}
+
+// \u2500\u2500 Responsive width (mirror of python-engine resolve_render_width/reflow_parts) \u2500\u2500
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+function isWideChar(cp) {
+  return (
+    (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
+    (cp >= 0x3041 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+    (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
+    (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+    (cp >= 0xFE30 && cp <= 0xFE4F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+    (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F000 && cp <= 0x1FAFF)
+  );
+}
+function visibleWidth(s) {
+  let w = 0;
+  for (const ch of s.replace(ANSI_RE, '')) w += isWideChar(ch.codePointAt(0)) ? 2 : 1;
+  return w;
+}
+function resolveRenderWidth(config) {
+  if (config.reflow === false) return 0;
+  let cols = parseInt(process.env.COLUMNS || '0', 10); if (!Number.isFinite(cols) || cols < 0) cols = 0;
+  let cap = parseInt(config.max_width || '0', 10); if (!Number.isFinite(cap) || cap < 0) cap = 0;
+  if (cols > 0 && cap > 0) return Math.min(cols, cap);
+  return cols || cap;
+}
+function reflowParts(parts, sep, width) {
+  const lines = []; let cur = [], curW = 0; const sepW = visibleWidth(sep);
+  for (const p of parts) {
+    const pw = visibleWidth(p);
+    const add = cur.length ? pw + sepW : pw;
+    if (cur.length && curW + add > width) { lines.push(cur.join(sep)); cur = [p]; curW = pw; }
+    else { cur.push(p); curW += add; }
+  }
+  if (cur.length) lines.push(cur.join(sep));
+  return lines;
+}
+
+// Bordered dashboard row(s): one "│ ▸ a · b · c │" line, or several bordered
+// rows when it would exceed width. Mirror of python render_dashboard_line.
+function renderDashboardLine(parts, width, trailing = '') {
+  if (!parts.length) return '';
+  const border = `${DIM}│${RST}`;
+  const head = `${border} ${GREEN}▸${RST} `;
+  const cont = `${border}   `;
+  const sep = ` ${DIM}·${RST} `;
+  const oneLine = `${head}${parts.join(sep)}${trailing} ${border}`;
+  if (width <= 0 || visibleWidth(oneLine) <= width) return oneLine;
+  // Reserve columns for the prefix and the closing " │" so rows stay <= width.
+  const avail = Math.max(1, width - visibleWidth(head) - 2);
+  const rows = reflowParts(parts, sep, avail);
+  const last = rows.length - 1;
+  const out = rows.map((row, i) => `${i === 0 ? head : cont}${row}${i === last ? trailing : ''} ${border}`);
+  return out.join('\n');
 }
 
 // ── Timezone ──
@@ -395,6 +449,23 @@ function readCompletedWorkflows(sessionDir) {
   return completed;
 }
 
+// Session high-water-mark of workflow tokens/runs (survives idle + tier switch).
+function wfPeakPath(sessionDir) { return path.join(sessionDir, '.statusline-wf-peak.json'); }
+function loadWfPeak(sessionDir) {
+  try {
+    const d = JSON.parse(fs.readFileSync(wfPeakPath(sessionDir), 'utf8'));
+    return { peak_tokens: Number(d.peak_tokens || 0), peak_runs: Number(d.peak_runs || 0) };
+  } catch { return { peak_tokens: 0, peak_runs: 0 }; }
+}
+function saveWfPeak(sessionDir, tokens, runs) {
+  try {
+    const p = wfPeakPath(sessionDir);
+    const tmp = `${p}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ peak_tokens: tokens, peak_runs: runs }));
+    fs.renameSync(tmp, p);
+  } catch {}
+}
+
 // ── Segments ──
 const SEGMENTS = {
   banner(ctx) {
@@ -500,26 +571,30 @@ const SEGMENTS = {
     }
 
     const live = detectLiveWorkflows(sessionDir);
-    if (live.length) {
-      const agents = live.reduce((sum, item) => sum + item.agents, 0);
-      const tokens = live.reduce((sum, item) => sum + item.tokens, 0);
-      const result = `${CYAN}\u2699 ${agents} agents ctx \u03a3 ${fmtTokens(tokens)}${RST}`;
-      wfCache = { key, result, payload: { live, completed: {} } };
-      ctx._wfLive = live;
-      ctx._wfCompleted = {};
-      return result;
-    }
-
     const completed = readCompletedWorkflows(sessionDir);
-    ctx._wfLive = [];
-    ctx._wfCompleted = completed;
-    if (!completed.run_count) {
-      wfCache = { key, result: '', payload: { live: [], completed } };
-      return '';
+    const liveAgents = live.reduce((sum, item) => sum + item.agents, 0);
+    const liveTokens = live.reduce((sum, item) => sum + item.tokens, 0);
+
+    // Update the session high-water-mark (cumulative = completed + current live).
+    const sessionTokens = completed.total_tokens + liveTokens;
+    const sessionRuns = completed.run_count + live.length;
+    const peak = loadWfPeak(sessionDir);
+    const peakTokens = Math.max(peak.peak_tokens, sessionTokens);
+    const peakRuns = Math.max(peak.peak_runs, sessionRuns);
+    if (peakTokens !== peak.peak_tokens || peakRuns !== peak.peak_runs) saveWfPeak(sessionDir, peakTokens, peakRuns);
+
+    let result;
+    if (live.length) {
+      result = `${CYAN}\u2699 ${liveAgents} agents ctx \u03a3 ${fmtTokens(liveTokens)}${RST}`;
+    } else if (peakTokens > 0) {
+      result = `${DIM}wf idle \u00b7 \u03a3 ${RST}${WHITE}${fmtTokens(peakTokens)}${RST}${DIM} \u00b7 ${peakRuns} runs${RST}`;
+    } else {
+      result = '';
     }
 
-    const result = `${DIM}wf:${RST} agents ctx \u03a3 ${WHITE}${fmtTokens(completed.total_tokens)}${RST} ${DIM}\u00b7 ${completed.run_count} runs${RST}`;
-    wfCache = { key, result, payload: { live: [], completed } };
+    ctx._wfLive = live;
+    ctx._wfCompleted = completed;
+    wfCache = { key, result, payload: { live, completed } };
     return result;
   },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
@@ -708,13 +783,13 @@ function buildRateLimitsLine(ctx) {
   const sds = ud.seven_day_sonnet || {}, sdsPct = Math.round(sds.utilization || 0);
   const labels = (ctx.schedule || {}).labels || {};
   const fhLabel = labels.five_hour || '5h', wkLabel = labels.weekly || 'weekly';
-  const cur = `${DIM}\u2502${RST} ${GREEN}\u25b8${RST} ${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
+  const cur = `${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
   const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct)} ${colorPct(sdPct)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
   const parts = [cur, wk];
   if (sdsPct > 0) {
     parts.push(`${DIM}sonnet${RST} ${buildUsageBar(sdsPct)} ${colorPct(sdsPct)}${String(sdsPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sds.resets_at, 'datetime')}${RST}`);
   }
-  return `${parts.join(` ${DIM}\u00b7${RST} `)}${checkOffloopDrain(ctx, ud)} ${DIM}\u2502${RST}`;
+  return renderDashboardLine(parts, ctx.renderWidth || 0, checkOffloopDrain(ctx, ud));
 }
 
 const OFFLOOP_STATE_PATH = path.join(CLAUDE_DIR, 'statusline-offloop-state.json');
@@ -765,13 +840,13 @@ function checkOffloopDrain(ctx, usageData) {
 function buildMetricsLine(ctx) {
   const parts = [];
   const burn = SEGMENTS.burn_rate(ctx);
-  if (burn) parts.push(`${GREEN}\u25b8${RST} ${burn}`);
+  if (burn) parts.push(burn);
   const cache = SEGMENTS.cache_hit(ctx);
   if (cache) parts.push(cache);
   const wf = SEGMENTS.workflows(ctx);
   if (wf) parts.push(wf);
   if (!parts.length) return '';
-  return `${DIM}\u2502${RST} ${parts.join(` ${DIM}\u00b7${RST} `)} ${DIM}\u2502${RST}`;
+  return renderDashboardLine(parts, ctx.renderWidth || 0);
 }
 
 // ── VS Code context ──
@@ -868,7 +943,7 @@ function main() {
 
   const { now, tzName, offsetHours } = getLocalTime();
   const schedule = loadSchedule(config);
-  const ctx = { config, stdin, now, tzName, offsetHours, schedule, isPeak: false };
+  const ctx = { config, stdin, now, tzName, offsetHours, schedule, isPeak: false, renderWidth: resolveRenderWidth(config) };
   const enabled = getEnabled(config, schedule);
   if (!enabled.includes('banner')) enabled.unshift('banner');
   if (process.env.ANTHROPIC_API_KEY && !enabled.includes('auth_mode')) {
@@ -892,7 +967,11 @@ function main() {
   if (gitParts.length) parts.push(gitParts.join(' '));
 
   const arrowColor = ctx.isPeak ? YELLOW : GREEN;
-  process.stdout.write(parts.join(` ${arrowColor}\u25b8${RST} `));
+  const arrow = ` ${arrowColor}\u25b8${RST} `;
+  // Responsive width: reflow the segment line to fit the terminal (COLUMNS)
+  // instead of one wide line; falls back to a single line when width is unknown.
+  const renderWidth = ctx.renderWidth;
+  process.stdout.write(renderWidth > 0 && parts.length ? reflowParts(parts, arrow, renderWidth).join('\n') : parts.join(arrow));
 
   if (isStandard) {
     const rl = buildRateLimitsLine(ctx);

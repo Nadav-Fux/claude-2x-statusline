@@ -9,9 +9,11 @@ v2.2 — Peak hours awareness with auto-timezone and remote schedule.
 import sys
 import json
 import os
+import re
 import subprocess
 import hashlib
 import time
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -72,8 +74,10 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 #   line 4 — burn/cache metrics (build_metrics_line)
 # Do NOT alter the segment lists below; behaviour diverges only at render time.
 TIER_PRESETS = {
-    # Minimal: essentials only — model, compact context, rate limit %, git
-    "minimal": ["model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
+    # Minimal: essentials only — model, compact context, rate limit %, git.
+    # workflows is included so an active/idle workflow spend never vanishes on a
+    # tier switch (the segment self-hides when there's nothing to report).
+    "minimal": ["model", "context", "workflows", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
     "standard": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
@@ -481,6 +485,86 @@ def build_usage_bar(pct, width=10):
     filled_chars = "\u25b0" * filled
     empty_chars = "\u25b1" * empty
     return f"{color}{filled_chars}{DIM}{empty_chars}{RST}"
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def visible_width(s):
+    """Display columns of a string: strips ANSI SGR codes, counts wide chars as 2."""
+    plain = _ANSI_RE.sub("", s)
+    w = 0
+    for ch in plain:
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def resolve_render_width(config):
+    """Target line width for reflow, or 0 to disable wrapping.
+
+    Claude Code exports COLUMNS = the terminal width before running the
+    statusline (v2.1.153+); that makes the bar responsive to the window. An
+    explicit config "max_width" caps it (useful for keeping lines short on wide
+    terminals); config "reflow": false turns wrapping off entirely.
+    """
+    if config.get("reflow") is False:
+        return 0
+    try:
+        cols = int(os.environ.get("COLUMNS", "0") or 0)
+    except (TypeError, ValueError):
+        cols = 0
+    try:
+        cap = int(config.get("max_width", 0) or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    if cols > 0 and cap > 0:
+        return min(cols, cap)
+    return cols or cap
+
+
+def reflow_parts(parts, sep, width):
+    """Pack parts onto lines, wrapping to a new line when the next part would
+    exceed width. Keeps at least one part per line (never truncates content)."""
+    lines, cur, cur_w = [], [], 0
+    sep_w = visible_width(sep)
+    for p in parts:
+        pw = visible_width(p)
+        add = pw if not cur else pw + sep_w
+        if cur and cur_w + add > width:
+            lines.append(sep.join(cur))
+            cur, cur_w = [p], pw
+        else:
+            cur.append(p)
+            cur_w += add
+    if cur:
+        lines.append(sep.join(cur))
+    return lines
+
+
+def render_dashboard_line(parts, width, trailing=""):
+    """Render bordered dashboard parts as one row (│ ▸ a · b · c │) on wide
+    terminals, or wrap to several rows when narrow. Every row carries the │
+    border on both sides (leading row keeps the ▸ marker; trailing goes on the
+    last row before the closing border), matching the single-row form."""
+    if not parts:
+        return ""
+    border = f"{DIM}│{RST}"
+    head = f"{border} {GREEN}▸{RST} "
+    cont = f"{border}   "
+    sep = f" {DIM}·{RST} "
+    one_line = f"{head}{sep.join(parts)}{trailing} {border}"
+    if width <= 0 or visible_width(one_line) <= width:
+        return one_line
+    # Reserve columns for the prefix and the closing " │" so rows stay <= width.
+    avail = max(1, width - visible_width(head) - 2)
+    rows = reflow_parts(parts, sep, avail)
+    last = len(rows) - 1
+    out = []
+    for i, row in enumerate(rows):
+        prefix = head if i == 0 else cont
+        tail = trailing if i == last else ""
+        out.append(f"{prefix}{row}{tail} {border}")
+    return "\n".join(out)
 
 
 def git_cmd(*args, timeout=2):
@@ -942,8 +1026,36 @@ def seg_agent(ctx):
     return " ".join(parts) if parts else ""
 
 
+def _wf_peak_path(session_dir):
+    return session_dir / ".statusline-wf-peak.json"
+
+
+def _wf_load_peak(session_dir):
+    """Session high-water-mark of workflow tokens/runs (survives idle + tier switch)."""
+    try:
+        data = json.loads(_wf_peak_path(session_dir).read_text(encoding="utf-8"))
+        return {"peak_tokens": int(data.get("peak_tokens", 0)), "peak_runs": int(data.get("peak_runs", 0))}
+    except Exception:
+        return {"peak_tokens": 0, "peak_runs": 0}
+
+
+def _wf_save_peak(session_dir, tokens, runs):
+    try:
+        p = _wf_peak_path(session_dir)
+        tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"peak_tokens": int(tokens), "peak_runs": int(runs)}), encoding="utf-8")
+        os.replace(str(tmp), str(p))
+    except Exception:
+        pass
+
+
 def seg_workflows(ctx):
-    """Show workflow agent context footprint: live count or session cumulative."""
+    """Workflow agent context footprint: live, or the persistent session total.
+
+    Tracks a per-session high-water-mark of cumulative workflow tokens/runs so the
+    spend never silently vanishes \u2014 not when the workflow finishes, not when a run
+    is interrupted without a completion manifest, and not on a tier switch.
+    """
     session_dir = _wf_find_session_dir(ctx.get("stdin", {}))
     if not session_dir:
         ctx["_wf_live"] = []
@@ -958,29 +1070,32 @@ def seg_workflows(ctx):
         return _WF_CACHE.get("result", "")
 
     live = _wf_detect_live(session_dir)
-    if live:
-        total_agents = sum(item["agents"] for item in live)
-        total_tokens = sum(item["tokens"] for item in live)
-        result = f"{CYAN}\u2699 {total_agents} agents ctx \u03a3 {_fmt_tokens(total_tokens)}{RST}"
-        payload = {"live": live, "completed": {}}
-        _WF_CACHE.update({"key": cache_key, "result": result, "payload": payload})
-        ctx["_wf_live"] = live
-        ctx["_wf_completed"] = {}
-        return result
-
     completed = _wf_read_completed(session_dir)
-    ctx["_wf_live"] = []
-    ctx["_wf_completed"] = completed
-    if completed["run_count"] == 0:
-        _WF_CACHE.update({"key": cache_key, "result": "", "payload": {"live": [], "completed": completed}})
-        return ""
+    live_agents = sum(item["agents"] for item in live)
+    live_tokens = sum(item["tokens"] for item in live)
 
-    tok_str = _fmt_tokens(completed["total_tokens"])
-    result = (
-        f"{DIM}wf:{RST} agents ctx \u03a3 {WHITE}{tok_str}{RST} "
-        f"{DIM}\u00b7 {completed['run_count']} runs{RST}"
-    )
-    _WF_CACHE.update({"key": cache_key, "result": result, "payload": {"live": [], "completed": completed}})
+    # Update the session high-water-mark (cumulative = completed + current live).
+    session_tokens = completed["total_tokens"] + live_tokens
+    session_runs = completed["run_count"] + len(live)
+    peak = _wf_load_peak(session_dir)
+    peak_tokens = max(peak["peak_tokens"], session_tokens)
+    peak_runs = max(peak["peak_runs"], session_runs)
+    if peak_tokens != peak["peak_tokens"] or peak_runs != peak["peak_runs"]:
+        _wf_save_peak(session_dir, peak_tokens, peak_runs)
+
+    if live:
+        result = f"{CYAN}\u2699 {live_agents} agents ctx \u03a3 {_fmt_tokens(live_tokens)}{RST}"
+    elif peak_tokens > 0:
+        result = (
+            f"{DIM}wf idle \u00b7 \u03a3 {RST}{WHITE}{_fmt_tokens(peak_tokens)}{RST}"
+            f"{DIM} \u00b7 {peak_runs} runs{RST}"
+        )
+    else:
+        result = ""
+
+    ctx["_wf_live"] = live
+    ctx["_wf_completed"] = completed
+    _WF_CACHE.update({"key": cache_key, "result": result, "payload": {"live": live, "completed": completed}})
     return result
 
 
@@ -1272,7 +1387,7 @@ def build_rate_limits_line(ctx):
     fh_label = labels.get("five_hour", "5h")
     wk_label = labels.get("weekly", "weekly")
 
-    current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
+    current = f"{WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
     parts = [current, weekly]
     if sds_pct > 0:
@@ -1282,8 +1397,7 @@ def build_rate_limits_line(ctx):
         parts.append(f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sds_time}{RST}")
 
     offloop = _check_offloop_drain(ctx, usage_data)
-    separator = f" {DIM}\u00b7{RST} "
-    return f"{separator.join(parts)}{offloop} {DIM}\u2502{RST}"
+    return render_dashboard_line(parts, ctx.get("render_width", 0), trailing=offloop)
 
 
 # Off-loop drain state must survive across renders (each render is a fresh
@@ -1384,7 +1498,7 @@ def build_metrics_line(ctx):
 
     burn = seg_burn_rate(ctx)
     if burn:
-        parts.append(f"{GREEN}\u25b8{RST} {burn}")
+        parts.append(burn)
 
     cache = seg_cache_hit(ctx)
     if cache:
@@ -1397,8 +1511,7 @@ def build_metrics_line(ctx):
     if not parts:
         return ""
 
-    inner = f" {DIM}\u00b7{RST} ".join(parts)
-    return f"{DIM}\u2502{RST} {inner} {DIM}\u2502{RST}"
+    return render_dashboard_line(parts, ctx.get("render_width", 0))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1490,6 +1603,9 @@ def main():
         "schedule": schedule,
         "is_peak": False,
         "is_offpeak": True,
+        # Responsive render width (COLUMNS-aware); used by line 1 reflow and the
+        # bordered dashboard lines so nothing overflows a narrow terminal.
+        "render_width": resolve_render_width(config),
     }
 
     enabled = get_enabled_segments(config, schedule)
@@ -1528,7 +1644,14 @@ def main():
     # Flow design: colored arrows (green=off-peak, yellow=peak)
     arrow_color = YELLOW if ctx.get("is_peak") else GREEN
     arrow = f" {arrow_color}\u25b8{RST} "
-    line1 = arrow.join(parts)
+    # Responsive width: reflow the segment line across multiple rows to fit the
+    # terminal (COLUMNS) instead of one very wide line that the terminal wraps
+    # mid-segment. Falls back to a single line when width is unknown/disabled.
+    render_width = ctx["render_width"]
+    if render_width > 0 and parts:
+        line1 = "\n".join(reflow_parts(parts, arrow, render_width))
+    else:
+        line1 = arrow.join(parts)
     print(line1, end="")
 
     # Standard tier: line 2 = rate limits only
