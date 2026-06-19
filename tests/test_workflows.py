@@ -121,7 +121,7 @@ def test_completed_workflow_summary(tmp_path):
 
     result = engine.seg_workflows(_ctx(session_dir))
 
-    assert "wf:" in result
+    assert "wf idle" in result
     assert "287K" in result
     assert "1 runs" in result
 
