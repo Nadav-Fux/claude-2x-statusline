@@ -63,6 +63,10 @@ function resolveCtxWindowSize(stdinData) {
 
   try {
     const p = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
+    // Freshness guard (see Python _load_statusline_context): the file is global,
+    // so ignore a stale one (>5 min) from a finished/other session rather than
+    // scale live tokens by a dead session's window.
+    if (Date.now() / 1000 - fs.statSync(p).mtimeMs / 1000 > 300) throw new Error('stale');
     const cfile = JSON.parse(fs.readFileSync(p, 'utf8'));
     const csize = Number(cfile.context_window_size || 0);
     if (csize > 0) return csize;
@@ -140,6 +144,21 @@ function buildObservation(memory) {
     obs.burn_10m = rs.rollingRate(10);
     obs.cache_delta_5m = rs.cacheDelta(5);
   } catch {}
+
+  // If stdin didn't carry token data (the hook case), fall back to the latest
+  // session-scoped rolling sample — mirrors the Python path so the ctx_pct-gated
+  // advice below actually works in Node-only installs.
+  if (obs.total_input_tokens === 0) {
+    try {
+      const s = rs.latestSample();
+      if (s) {
+        obs.total_input_tokens = Number(s.tokens_in || 0);
+        obs.total_output_tokens = Number(s.tokens_out || 0);
+        obs.cache_read_tokens = Number(s.cache_read || 0);
+        obs.cache_creation_tokens = Number(s.cache_creation || 0);
+      }
+    } catch {}
+  }
 
   // Session burn
   if (obs.session_duration_min >= 1 && obs.cost_usd > 0) {
@@ -606,4 +625,4 @@ async function run(mode) {
   } catch { return null; }
 }
 
-module.exports = { run, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak };
+module.exports = { run, buildObservation, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak };

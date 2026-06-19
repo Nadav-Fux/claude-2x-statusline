@@ -172,6 +172,14 @@ def _load_statusline_context() -> dict:
         import tempfile
 
         path = Path(tempfile.gettempdir()) / "claude" / "statusline-context.json"
+        # Freshness guard: this file is global (a single path, overwritten by
+        # whichever session rendered last). A stale file most likely belongs to
+        # a finished or different session, so ignore anything older than 5 min
+        # rather than scale a live session's tokens by a dead session's window.
+        # (Concurrent same-tier sessions share the correct window anyway; a
+        # concurrent *different*-window session remains a rare residual edge.)
+        if time.time() - path.stat().st_mtime > 300:
+            return {}
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
