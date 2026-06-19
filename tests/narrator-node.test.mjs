@@ -477,9 +477,9 @@ test('score formula: urgency*3 + novelty*2 + actionability*2 + uniqueness', () =
 
 // ── Session-management templates ──────────────────────────────────────────────
 
-test('long_session fires after 2h', () => {
+test('long_session fires after 2h with high context', () => {
   const mem = emptyMem();
-  const obs = makeObs({ session_duration_min: 130 });
+  const obs = makeObs({ session_duration_min: 130, ctx_pct: 70 });
   const insights = buildInsights(obs, mem);
   const ls = insights.filter(i => i.template_key === 'long_session');
   assert.ok(ls.length >= 1, `Expected long_session insight, got: ${insights.map(i => i.template_key)}`);
@@ -489,10 +489,18 @@ test('long_session fires after 2h', () => {
 
 test('long_session does NOT fire under 2h', () => {
   const mem = emptyMem();
-  const obs = makeObs({ session_duration_min: 90 });
+  const obs = makeObs({ session_duration_min: 90, ctx_pct: 70 });
   const insights = buildInsights(obs, mem);
   const ls = insights.filter(i => i.template_key === 'long_session');
   assert.equal(ls.length, 0, 'long_session should not fire for 90 min session');
+});
+
+test('long_session does NOT nag when context is low (200k-bug fix)', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ session_duration_min: 216, ctx_pct: 19 });
+  const insights = buildInsights(obs, mem);
+  const ls = insights.filter(i => i.template_key === 'long_session');
+  assert.equal(ls.length, 0, 'Duration alone must not trigger a context nag');
 });
 
 test('ctx_high_long_session fires at ctx_pct=75 + session > 60min', () => {
@@ -529,9 +537,9 @@ test('ctx_very_high fires at ctx_pct=95 with urgency=9', () => {
   );
 });
 
-test('many_prompts fires above 30 prompts', () => {
+test('many_prompts fires above 30 prompts with high context', () => {
   const mem = emptyMem();
-  const obs = makeObs({ prompt_count: 35 });
+  const obs = makeObs({ prompt_count: 35, ctx_pct: 70 });
   const insights = buildInsights(obs, mem);
   const mp = insights.filter(i => i.template_key === 'many_prompts');
   assert.ok(mp.length >= 1, `Expected many_prompts insight, got: ${insights.map(i => i.template_key)}`);
@@ -542,10 +550,37 @@ test('many_prompts fires above 30 prompts', () => {
 
 test('many_prompts does NOT fire at 25 prompts', () => {
   const mem = emptyMem();
-  const obs = makeObs({ prompt_count: 25 });
+  const obs = makeObs({ prompt_count: 25, ctx_pct: 70 });
   const insights = buildInsights(obs, mem);
   const mp = insights.filter(i => i.template_key === 'many_prompts');
   assert.equal(mp.length, 0, 'many_prompts should not fire at prompt_count=25');
+});
+
+test('many_prompts does NOT nag when context is low', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ prompt_count: 35, ctx_pct: 12 });
+  const insights = buildInsights(obs, mem);
+  const mp = insights.filter(i => i.template_key === 'many_prompts');
+  assert.equal(mp.length, 0, 'Prompt count alone must not trigger a context nag');
+});
+
+test('claude_md_oversized fires above 200 lines', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ claude_md_lines: 340 });
+  const insights = buildInsights(obs, mem);
+  const md = insights.filter(i => i.template_key === 'claude_md_oversized');
+  assert.ok(md.length >= 1, `Expected claude_md_oversized, got: ${insights.map(i => i.template_key)}`);
+  assert.ok(md[0].text.includes('340'), `Expected '340' in text: ${md[0].text}`);
+  assert.ok(md[0].text_he, 'Should have Hebrew text');
+  assert.equal(md[0].urgency, 2);
+});
+
+test('claude_md_oversized does NOT fire when small', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ claude_md_lines: 60 });
+  const insights = buildInsights(obs, mem);
+  const md = insights.filter(i => i.template_key === 'claude_md_oversized');
+  assert.equal(md.length, 0, 'A 60-line CLAUDE.md is optimal — no tip');
 });
 
 test('pivot_suggestion fires when deep in session with no fresh milestone', () => {

@@ -377,9 +377,9 @@ class TestScoreFormula:
 class TestSessionManagementTemplates:
 
     def test_long_session_advice_fires_after_2h(self):
-        """session_duration_min=130 → long_session template fires."""
+        """session_duration_min=130 + high context → long_session template fires."""
         mem = _empty_memory()
-        obs = _obs(session_duration_min=130.0)
+        obs = _obs(session_duration_min=130.0, ctx_pct=70.0)
         insights = _build_insights(obs, mem)
         long_sess = [i for i in insights if i.template_key == "long_session"]
         assert long_sess, f"Expected long_session insight, got: {[i.template_key for i in insights]}"
@@ -389,10 +389,18 @@ class TestSessionManagementTemplates:
     def test_long_session_does_not_fire_under_2h(self):
         """session_duration_min=90 → long_session should NOT fire."""
         mem = _empty_memory()
-        obs = _obs(session_duration_min=90.0)
+        obs = _obs(session_duration_min=90.0, ctx_pct=70.0)
         insights = _build_insights(obs, mem)
         long_sess = [i for i in insights if i.template_key == "long_session"]
         assert not long_sess
+
+    def test_long_session_does_not_nag_when_context_low(self):
+        """3h+ session but only 19% of a 1M window → no /clear nag (the 200k-bug fix)."""
+        mem = _empty_memory()
+        obs = _obs(session_duration_min=216.0, ctx_pct=19.0)
+        insights = _build_insights(obs, mem)
+        long_sess = [i for i in insights if i.template_key == "long_session"]
+        assert not long_sess, "Duration alone must not trigger a context nag"
 
     def test_high_context_compact_directive_fires(self):
         """ctx_pct=75, session_duration_min=80 → ctx_high_long_session fires."""
@@ -425,15 +433,42 @@ class TestSessionManagementTemplates:
         assert "auto-compact" in very_high[0].text.lower() or "/compact" in very_high[0].text
 
     def test_many_prompts_fires_above_30(self):
-        """prompt_count=35 → many_prompts template fires."""
+        """prompt_count=35 + high context → many_prompts template fires."""
         mem = _empty_memory()
-        obs = _obs(prompt_count=35)
+        obs = _obs(prompt_count=35, ctx_pct=70.0)
         insights = _build_insights(obs, mem)
         many = [i for i in insights if i.template_key == "many_prompts"]
         assert many, f"Expected many_prompts insight, got: {[i.template_key for i in insights]}"
         assert "35" in many[0].text
         assert many[0].urgency == 3
         assert many[0].actionability == 8
+
+    def test_many_prompts_does_not_nag_when_context_low(self):
+        """31 prompts but low context → no nag (prompt count is a poor proxy)."""
+        mem = _empty_memory()
+        obs = _obs(prompt_count=35, ctx_pct=12.0)
+        insights = _build_insights(obs, mem)
+        many = [i for i in insights if i.template_key == "many_prompts"]
+        assert not many, "Prompt count alone must not trigger a context nag"
+
+    def test_claude_md_oversized_fires_above_200_lines(self):
+        """CLAUDE.md > 200 lines → hygiene tip fires (Boris Cherny 60/200 guidance)."""
+        mem = _empty_memory()
+        obs = _obs(claude_md_lines=340)
+        insights = _build_insights(obs, mem)
+        md = [i for i in insights if i.template_key == "claude_md_oversized"]
+        assert md, f"Expected claude_md_oversized insight, got: {[i.template_key for i in insights]}"
+        assert "340" in md[0].text
+        assert md[0].text_he
+        assert md[0].urgency == 2
+
+    def test_claude_md_oversized_does_not_fire_when_small(self):
+        """A 60-line CLAUDE.md is optimal → no tip."""
+        mem = _empty_memory()
+        obs = _obs(claude_md_lines=60)
+        insights = _build_insights(obs, mem)
+        md = [i for i in insights if i.template_key == "claude_md_oversized"]
+        assert not md
 
     def test_many_prompts_does_not_fire_under_30(self):
         """prompt_count=25 → many_prompts should NOT fire."""
@@ -508,7 +543,7 @@ class TestBilingualOutput:
             "prior_sessions": [],
         }
 
-        obs = _obs(session_duration_min=130.0)
+        obs = _obs(session_duration_min=130.0, ctx_pct=70.0)
 
         from narrator.scoring import pick as _pick
         insights = _pick(obs, data)
@@ -534,7 +569,7 @@ class TestBilingualOutput:
     def test_insight_has_text_he_field(self):
         """New session-management insights carry a non-empty text_he."""
         mem = _empty_memory()
-        obs = _obs(session_duration_min=130.0)
+        obs = _obs(session_duration_min=130.0, ctx_pct=70.0)
         insights = _build_insights(obs, mem)
         long_sess = [i for i in insights if i.template_key == "long_session"]
         assert long_sess

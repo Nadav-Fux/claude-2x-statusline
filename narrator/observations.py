@@ -72,7 +72,7 @@ class Observation:
     total_output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
-    ctx_window_size: int = 200000
+    ctx_window_size: int = 200000  # placeholder; build() resolves the true window (1M-aware)
 
     # Cost milestones crossed this session (for scoring freshness)
     cost_milestones_hit: list = field(default_factory=list)
@@ -81,6 +81,10 @@ class Observation:
     subagent_tokens_live: int = 0
     subagent_runs_session: int = 0
     active_workflow_agents: int = 0
+
+    # Project hygiene: line count of the nearest CLAUDE.md (Boris Cherny:
+    # ~60 optimal, 200 ceiling — rules past it get deprioritized).
+    claude_md_lines: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +156,82 @@ def _load_statusline_state() -> dict:
         return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
         return {"samples": []}
+
+
+def _load_statusline_context() -> dict:
+    """Load the bar's statusline-context.json (authoritative window + model).
+
+    The narrator runs from hooks (SessionStart / UserPromptSubmit) whose stdin
+    payload does NOT include a context_window block, so the narrator never sees
+    the true window size directly. The statusline bar, by contrast, receives the
+    full payload and writes the real context_window_size (e.g. 1,000,000 for a
+    1M model) plus the model display name to this temp file. We read it as the
+    fallback source of truth for window resolution.
+    """
+    try:
+        import tempfile
+
+        path = Path(tempfile.gettempdir()) / "claude" / "statusline-context.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _resolve_ctx_window_size(stdin_data: Optional[dict]) -> int:
+    """Resolve the TRUE context window size for ctx_pct.
+
+    Defaulting to 200k mis-scales the percentage on 1M-context models: ~160k
+    tokens reads as 80% of 200k (and fires the pressure templates) when it is
+    really 16% of a 1,000,000 window. Resolution order, highest priority first:
+
+    1. ``STATUSLINE_CTX_WINDOW`` env override (explicit token count).
+    2. A real size reported on stdin (the bar's path; >0).
+    3. The bar's statusline-context.json — its context_window_size, else a 1M
+       reading from its model name ("Opus 4.8 (1M context)").
+    4. 1M detection from the stdin model block (display_name / id contains 1m).
+    5. 200,000 default.
+    """
+    env = os.environ.get("STATUSLINE_CTX_WINDOW", "").strip()
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+
+    ctx_block = (stdin_data or {}).get("context_window", {}) or {}
+    size = int(ctx_block.get("context_window_size", 0) or 0)
+    if size > 0:
+        return size
+
+    cfile = _load_statusline_context()
+    if cfile:
+        csize = int(cfile.get("context_window_size", 0) or 0)
+        if csize > 0:
+            return csize
+        if "1m" in str(cfile.get("model", "")).lower():
+            return 1_000_000
+
+    model = (stdin_data or {}).get("model", {}) or {}
+    name = (str(model.get("display_name", "")) + " " + str(model.get("id", ""))).lower()
+    if "1m" in name:
+        return 1_000_000
+
+    return 200000
+
+
+def _count_claude_md_lines(stdin_data: Optional[dict]) -> int:
+    """Line count of the project CLAUDE.md (cwd/CLAUDE.md), 0 if none.
+
+    Best-practice guidance (Boris Cherny / Anthropic): ~60 lines is optimal,
+    200 is the ceiling — rules past it get quietly deprioritized. We surface a
+    gentle hint when a project's file is oversized.
+    """
+    try:
+        cwd = (stdin_data or {}).get("cwd") or os.getcwd()
+        path = Path(cwd) / "CLAUDE.md"
+        if path.is_file():
+            with path.open(encoding="utf-8", errors="replace") as fh:
+                return sum(1 for _ in fh)
+    except Exception:
+        pass
+    return 0
 
 
 def _load_usage_cache() -> dict:
@@ -287,6 +367,12 @@ def build(memory: dict) -> Observation:
         candidate = obs.cost_usd / (obs.session_duration_min / 60.0)
         obs.burn_session = candidate if candidate <= 200.0 else None
 
+    # ── true context window size (1M-aware; not the bare 200k default) ───────
+    obs.ctx_window_size = _resolve_ctx_window_size(stdin_data)
+
+    # ── project CLAUDE.md size (best-practice hygiene hint) ──────────────────
+    obs.claude_md_lines = _count_claude_md_lines(stdin_data)
+
     # ── context % and minutes left ───────────────────────────────────────────
     if obs.ctx_window_size > 0 and obs.total_input_tokens > 0:
         used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens
@@ -346,7 +432,9 @@ def _apply_stdin(obs: Observation, data: dict) -> None:
         obs.session_duration_min = duration_ms / 60000.0
 
     ctx_block = data.get("context_window", {})
-    obs.ctx_window_size = int(ctx_block.get("context_window_size", 200000))
+    # Raw stdin value only (0 if absent). build() finalizes the true window via
+    # _resolve_ctx_window_size — do NOT bake the 200k default in here.
+    obs.ctx_window_size = int(ctx_block.get("context_window_size", 0) or 0)
     usage = ctx_block.get("current_usage", {})
     obs.total_input_tokens = int(usage.get("input_tokens", 0))
     obs.total_output_tokens = int(usage.get("output_tokens", 0))

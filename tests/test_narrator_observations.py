@@ -93,3 +93,80 @@ def test_is_peak_hours_uses_engine_schedule_logic(monkeypatch):
 
     assert observations._is_peak_hours() is True
     assert calls["seg_peak_hours"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Context window resolution (1M-aware) — guards the 200k-vs-1M false-alarm bug
+# ---------------------------------------------------------------------------
+
+def test_resolve_ctx_window_env_override(monkeypatch):
+    monkeypatch.setenv("STATUSLINE_CTX_WINDOW", "777000")
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {})
+    assert observations._resolve_ctx_window_size({"context_window": {"context_window_size": 200000}}) == 777000
+
+
+def test_resolve_ctx_window_trusts_real_stdin_size(monkeypatch):
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    # A real 200k model must stay 200k even if the bar file says otherwise.
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {"context_window_size": 1000000})
+    assert observations._resolve_ctx_window_size({"context_window": {"context_window_size": 200000}}) == 200000
+
+
+def test_resolve_ctx_window_from_bar_context_file(monkeypatch):
+    """The narrator's hook stdin has no context_window — fall back to the bar file."""
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(
+        observations, "_load_statusline_context",
+        lambda: {"context_window_size": 1000000, "model": "Opus 4.8 (1M context)"},
+    )
+    assert observations._resolve_ctx_window_size({}) == 1000000
+    assert observations._resolve_ctx_window_size({"context_window": {}}) == 1000000
+
+
+def test_resolve_ctx_window_from_model_name_when_size_missing(monkeypatch):
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {"model": "Opus 4.8 (1M context)"})
+    assert observations._resolve_ctx_window_size({}) == 1000000
+
+
+def test_resolve_ctx_window_from_stdin_model_id(monkeypatch):
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {})
+    assert observations._resolve_ctx_window_size({"model": {"id": "claude-opus-4-8[1m]"}}) == 1000000
+
+
+def test_resolve_ctx_window_defaults_to_200k(monkeypatch):
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {})
+    assert observations._resolve_ctx_window_size({}) == 200000
+    assert observations._resolve_ctx_window_size({"model": {"display_name": "Sonnet 4.5"}}) == 200000
+
+
+def test_build_ctx_pct_uses_true_1m_window_not_200k(monkeypatch):
+    """Regression: ~160k tokens on a 1M model must read ~16%, not ~80%.
+
+    Reproduces the real narrator path: hook stdin carries NO context_window, so
+    tokens come from the rolling sample and the window must be resolved from the
+    bar's context file (1,000,000). Before the fix this was 160k/200k = 80% and
+    fired the pressure templates.
+    """
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(observations, "_read_stdin_json", lambda: {
+        "session_id": "s1",
+        "cost": {"total_cost_usd": 50.0, "total_duration_ms": 7_200_000},
+    })
+    monkeypatch.setattr(observations, "_is_peak_hours", lambda: False)
+    monkeypatch.setattr(observations, "_load_statusline_state", lambda: {
+        "samples": [{"t": 1000.0, "cost": 50.0, "tokens_in": 2000, "tokens_out": 10,
+                     "cache_read": 158000, "cache_creation": 0}],
+    })
+    monkeypatch.setattr(
+        observations, "_load_statusline_context",
+        lambda: {"context_window_size": 1000000, "model": "Opus 4.8 (1M context)"},
+    )
+
+    obs = observations.build({"current": {}})
+
+    assert obs.ctx_window_size == 1_000_000
+    assert 15.0 < obs.ctx_pct < 17.0  # ~16%, NOT ~80%
+    assert obs.ctx_pct < 70.0  # below every pressure-template threshold
