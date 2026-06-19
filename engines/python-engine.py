@@ -9,9 +9,11 @@ v2.2 — Peak hours awareness with auto-timezone and remote schedule.
 import sys
 import json
 import os
+import re
 import subprocess
 import hashlib
 import time
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -483,6 +485,82 @@ def build_usage_bar(pct, width=10):
     filled_chars = "\u25b0" * filled
     empty_chars = "\u25b1" * empty
     return f"{color}{filled_chars}{DIM}{empty_chars}{RST}"
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def visible_width(s):
+    """Display columns of a string: strips ANSI SGR codes, counts wide chars as 2."""
+    plain = _ANSI_RE.sub("", s)
+    w = 0
+    for ch in plain:
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def resolve_render_width(config):
+    """Target line width for reflow, or 0 to disable wrapping.
+
+    Claude Code exports COLUMNS = the terminal width before running the
+    statusline (v2.1.153+); that makes the bar responsive to the window. An
+    explicit config "max_width" caps it (useful for keeping lines short on wide
+    terminals); config "reflow": false turns wrapping off entirely.
+    """
+    if config.get("reflow") is False:
+        return 0
+    try:
+        cols = int(os.environ.get("COLUMNS", "0") or 0)
+    except (TypeError, ValueError):
+        cols = 0
+    try:
+        cap = int(config.get("max_width", 0) or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    if cols > 0 and cap > 0:
+        return min(cols, cap)
+    return cols or cap
+
+
+def reflow_parts(parts, sep, width):
+    """Pack parts onto lines, wrapping to a new line when the next part would
+    exceed width. Keeps at least one part per line (never truncates content)."""
+    lines, cur, cur_w = [], [], 0
+    sep_w = visible_width(sep)
+    for p in parts:
+        pw = visible_width(p)
+        add = pw if not cur else pw + sep_w
+        if cur and cur_w + add > width:
+            lines.append(sep.join(cur))
+            cur, cur_w = [p], pw
+        else:
+            cur.append(p)
+            cur_w += add
+    if cur:
+        lines.append(sep.join(cur))
+    return lines
+
+
+def render_dashboard_line(parts, width, trailing=""):
+    """Render bordered dashboard parts (│ ▸ a · b · c │) on one row, or wrap to
+    several bordered rows (one group of parts each) when they would exceed width.
+    The single-row look is preserved on wide terminals; narrow terminals wrap
+    cleanly instead of overflowing."""
+    if not parts:
+        return ""
+    border = f"{DIM}│{RST}"
+    head = f"{border} {GREEN}▸{RST} "
+    cont = f"{border}   "
+    sep = f" {DIM}·{RST} "
+    one_line = f"{head}{sep.join(parts)}{trailing} {border}"
+    if width <= 0 or visible_width(one_line) <= width:
+        return one_line
+    avail = max(12, width - visible_width(head))
+    rows = reflow_parts(parts, sep, avail)
+    out = [(head if i == 0 else cont) + row for i, row in enumerate(rows)]
+    if trailing:
+        out[-1] += trailing
+    return "\n".join(out)
 
 
 def git_cmd(*args, timeout=2):
@@ -1305,7 +1383,7 @@ def build_rate_limits_line(ctx):
     fh_label = labels.get("five_hour", "5h")
     wk_label = labels.get("weekly", "weekly")
 
-    current = f"{DIM}\u2502{RST} {GREEN}\u25b8{RST} {WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
+    current = f"{WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
     parts = [current, weekly]
     if sds_pct > 0:
@@ -1315,8 +1393,7 @@ def build_rate_limits_line(ctx):
         parts.append(f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sds_time}{RST}")
 
     offloop = _check_offloop_drain(ctx, usage_data)
-    separator = f" {DIM}\u00b7{RST} "
-    return f"{separator.join(parts)}{offloop} {DIM}\u2502{RST}"
+    return render_dashboard_line(parts, ctx.get("render_width", 0), trailing=offloop)
 
 
 # Off-loop drain state must survive across renders (each render is a fresh
@@ -1417,7 +1494,7 @@ def build_metrics_line(ctx):
 
     burn = seg_burn_rate(ctx)
     if burn:
-        parts.append(f"{GREEN}\u25b8{RST} {burn}")
+        parts.append(burn)
 
     cache = seg_cache_hit(ctx)
     if cache:
@@ -1430,8 +1507,7 @@ def build_metrics_line(ctx):
     if not parts:
         return ""
 
-    inner = f" {DIM}\u00b7{RST} ".join(parts)
-    return f"{DIM}\u2502{RST} {inner} {DIM}\u2502{RST}"
+    return render_dashboard_line(parts, ctx.get("render_width", 0))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1523,6 +1599,9 @@ def main():
         "schedule": schedule,
         "is_peak": False,
         "is_offpeak": True,
+        # Responsive render width (COLUMNS-aware); used by line 1 reflow and the
+        # bordered dashboard lines so nothing overflows a narrow terminal.
+        "render_width": resolve_render_width(config),
     }
 
     enabled = get_enabled_segments(config, schedule)
@@ -1561,7 +1640,14 @@ def main():
     # Flow design: colored arrows (green=off-peak, yellow=peak)
     arrow_color = YELLOW if ctx.get("is_peak") else GREEN
     arrow = f" {arrow_color}\u25b8{RST} "
-    line1 = arrow.join(parts)
+    # Responsive width: reflow the segment line across multiple rows to fit the
+    # terminal (COLUMNS) instead of one very wide line that the terminal wraps
+    # mid-segment. Falls back to a single line when width is unknown/disabled.
+    render_width = ctx["render_width"]
+    if render_width > 0 and parts:
+        line1 = "\n".join(reflow_parts(parts, arrow, render_width))
+    else:
+        line1 = arrow.join(parts)
     print(line1, end="")
 
     # Standard tier: line 2 = rate limits only
