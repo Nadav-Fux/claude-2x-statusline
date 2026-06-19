@@ -48,6 +48,52 @@ function rotateSession(data, newId) {
 
 // ── Observations ──
 
+// Resolve the TRUE context window size (1M-aware). Mirrors the Python
+// _resolve_ctx_window_size: env override > stdin size > bar's context file
+// (size, else 1M from model name) > stdin model 1m detection > 200k default.
+// Without this, ~160k tokens reads as 80% of 200k and fires pressure templates
+// when it is really 16% of a 1,000,000 window.
+function resolveCtxWindowSize(stdinData) {
+  const env = (process.env.STATUSLINE_CTX_WINDOW || '').trim();
+  if (/^\d+$/.test(env) && Number(env) > 0) return Number(env);
+
+  const cw = (stdinData && stdinData.context_window) || {};
+  const size = Number(cw.context_window_size || 0);
+  if (size > 0) return size;
+
+  try {
+    const p = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
+    // Freshness guard (see Python _load_statusline_context): the file is global,
+    // so ignore a stale one (>5 min) from a finished/other session rather than
+    // scale live tokens by a dead session's window.
+    if (Date.now() / 1000 - fs.statSync(p).mtimeMs / 1000 > 300) throw new Error('stale');
+    const cfile = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const csize = Number(cfile.context_window_size || 0);
+    if (csize > 0) return csize;
+    if (String(cfile.model || '').toLowerCase().includes('1m')) return 1000000;
+  } catch {}
+
+  const model = (stdinData && stdinData.model) || {};
+  const name = `${model.display_name || ''} ${model.id || ''}`.toLowerCase();
+  if (name.includes('1m')) return 1000000;
+
+  return 200000;
+}
+
+// Line count of the project CLAUDE.md (cwd/CLAUDE.md), 0 if none. Boris Cherny /
+// Anthropic guidance: ~60 optimal, 200 ceiling — rules past it get deprioritized.
+function countClaudeMdLines(stdinData) {
+  try {
+    const cwd = (stdinData && stdinData.cwd) || process.cwd();
+    const p = path.join(cwd, 'CLAUDE.md');
+    const txt = fs.readFileSync(p, 'utf8');
+    if (!txt) return 0;
+    return txt.split('\n').length - (txt.endsWith('\n') ? 1 : 0);
+  } catch {
+    return 0;
+  }
+}
+
 function buildObservation(memory) {
   const obs = {
     cost_usd: 0, burn_10m: null, burn_session: null,
@@ -61,6 +107,7 @@ function buildObservation(memory) {
     cache_read_tokens: 0, cache_creation_tokens: 0,
     ctx_window_size: 200000, cost_milestones_hit: [],
     subagent_tokens_live: 0, subagent_runs_session: 0, active_workflow_agents: 0,
+    claude_md_lines: 0,
   };
 
   // Stdin (piped from hook)
@@ -72,7 +119,8 @@ function buildObservation(memory) {
     obs.cost_usd = Number(c.total_cost_usd || 0);
     if (c.total_duration_ms) obs.session_duration_min = c.total_duration_ms / 60000;
     const cw = stdinData.context_window || {};
-    obs.ctx_window_size = Number(cw.context_window_size || 200000);
+    // Raw stdin value only (0 if absent); resolveCtxWindowSize() finalizes below.
+    obs.ctx_window_size = Number(cw.context_window_size || 0);
     const u = cw.current_usage || {};
     obs.total_input_tokens = Number(u.input_tokens || 0);
     obs.total_output_tokens = Number(u.output_tokens || 0);
@@ -97,11 +145,32 @@ function buildObservation(memory) {
     obs.cache_delta_5m = rs.cacheDelta(5);
   } catch {}
 
+  // If stdin didn't carry token data (the hook case), fall back to the latest
+  // session-scoped rolling sample — mirrors the Python path so the ctx_pct-gated
+  // advice below actually works in Node-only installs.
+  if (obs.total_input_tokens === 0) {
+    try {
+      const s = rs.latestSample();
+      if (s) {
+        obs.total_input_tokens = Number(s.tokens_in || 0);
+        obs.total_output_tokens = Number(s.tokens_out || 0);
+        obs.cache_read_tokens = Number(s.cache_read || 0);
+        obs.cache_creation_tokens = Number(s.cache_creation || 0);
+      }
+    } catch {}
+  }
+
   // Session burn
   if (obs.session_duration_min >= 1 && obs.cost_usd > 0) {
     const candidate = obs.cost_usd / (obs.session_duration_min / 60);
     if (candidate <= 200) obs.burn_session = candidate;
   }
+
+  // True context window size (1M-aware; not the bare 200k default)
+  obs.ctx_window_size = resolveCtxWindowSize(stdinData);
+
+  // Project CLAUDE.md size (best-practice hygiene hint)
+  obs.claude_md_lines = countClaudeMdLines(stdinData);
 
   // Context %
   if (obs.ctx_window_size > 0 && obs.total_input_tokens > 0) {
@@ -353,9 +422,10 @@ function buildInsights(obs, memory) {
     results.push({ text: `Historical peak schedule is active in your custom tier. Budget: ${maxRl.toFixed(0)}% used. Use this as a local schedule cue, not a faster-drain warning.`, text_he: `לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: ${maxRl.toFixed(0)}% בשימוש. תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   }
 
-  if (obs.session_duration_min > 120) {
+  // Duration alone is a poor proxy — gate on real context fill (1M-aware).
+  if (obs.session_duration_min > 120 && obs.ctx_pct > 60) {
     const dh = Math.floor(obs.session_duration_min / 60), dm = Math.floor(obs.session_duration_min % 60), k = 'long_session';
-    results.push({ text: `Long session (${dh}h ${dm}m) — older context is starting to crowd out what matters now. Consider /clear for a clean restart if you've moved past the original task.`, text_he: `סשן ארוך (${dh} שעות ${dm} דקות) — מצטבר יותר מדי הקשר ישן. כדאי /clear לפתיחה נקייה אם כבר עברת מהמשימה המקורית.`, urgency: 4, novelty: novelty(k, memory), actionability: 8, uniqueness: 10, template_key: k });
+    results.push({ text: `Long session (${dh}h ${dm}m) and context ${obs.ctx_pct.toFixed(0)}% full — older context is starting to crowd out what matters now. Consider /clear for a clean restart if you've moved past the original task.`, text_he: `סשן ארוך (${dh} שעות ${dm} דקות) וה-context ב-${obs.ctx_pct.toFixed(0)}% — מצטבר יותר מדי הקשר ישן. כדאי /clear לפתיחה נקייה אם כבר עברת מהמשימה המקורית.`, urgency: 4, novelty: novelty(k, memory), actionability: 8, uniqueness: 10, template_key: k });
   }
 
   if (obs.ctx_pct > 70 && obs.session_duration_min > 60) {
@@ -365,10 +435,11 @@ function buildInsights(obs, memory) {
 
   if (obs.ctx_pct > 90) {
     const k = 'ctx_very_high';
-    results.push({ text: `Context nearly full (${obs.ctx_pct.toFixed(0)}%). Auto-compact will probably drop what's currently relevant. Manual /compact with 'focus on current task' is safer.`, text_he: `Context כמעט מלא (${obs.ctx_pct.toFixed(0)}%). Auto-compact יכול לאבד את מה שחשוב עכשיו. עדיף /compact ידני עם 'תתמקד במשימה הנוכחית'.`, urgency: 9, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
+    results.push({ text: `Context nearly full (${obs.ctx_pct.toFixed(0)}%). Enable auto-compact as a safety net so you never hit the limit mid-task — or run /compact now with 'focus on current task' to keep more control over what survives.`, text_he: `Context כמעט מלא (${obs.ctx_pct.toFixed(0)}%). הפעל auto-compact כרשת ביטחון כדי לא להיתקע באמצע משימה — או הרץ /compact עכשיו עם 'תתמקד במשימה הנוכחית' לשליטה טובה יותר על מה שנשמר.`, urgency: 9, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
   }
 
-  if (obs.prompt_count > 30) {
+  // Prompt count alone is a poor proxy — gate on real context fill.
+  if (obs.prompt_count > 30 && obs.ctx_pct > 60) {
     const k = 'many_prompts';
     results.push({ text: `${obs.prompt_count} prompts in this session. If you're shifting to a new task, a fresh session is usually faster than compacting.`, text_he: `${obs.prompt_count} פרומפטים בסשן הזה. אם אתה עובר למשימה חדשה, סשן חדש בדרך כלל מהיר יותר מcompact.`, urgency: 3, novelty: novelty(k, memory), actionability: 8, uniqueness: 8, template_key: k });
   }
@@ -385,6 +456,12 @@ function buildInsights(obs, memory) {
   if (obs.session_duration_min > 15 && obs.burn_10m != null && obs.burn_10m > 8) {
     const k = 'subagent_suggestion';
     results.push({ text: `Heavy work? Subagents keep the main session clean — spawn one for anything that generates lots of intermediate output you won't need back.`, text_he: `עבודה כבדה? Subagents שומרים את הסשן הראשי נקי — שלח סוכן נפרד לכל משימה שמייצרת הרבה פלט ביניים שלא תצטרך בחזרה.`, urgency: 2, novelty: novelty(k, memory), actionability: 6, uniqueness: 7, template_key: k });
+  }
+
+  // CLAUDE.md hygiene (Boris Cherny: ~60 optimal, 200 ceiling)
+  if (obs.claude_md_lines > 200) {
+    const k = 'claude_md_oversized';
+    results.push({ text: `CLAUDE.md is ${obs.claude_md_lines} lines — past the ~200 ceiling, so rules near the bottom get quietly deprioritized. Trim toward ~60 lines and move the rest into .claude/rules/ with paths: scoping (Boris Cherny / Anthropic guidance).`, text_he: `CLAUDE.md הוא ${obs.claude_md_lines} שורות — מעבר לתקרת ~200, וחוקים בתחתית מודחקים בשקט. כדאי לקצר ל~60 שורות ולהעביר את השאר ל-.claude/rules/ עם paths: (לפי Boris Cherny / Anthropic).`, urgency: 2, novelty: novelty(k, memory), actionability: 7, uniqueness: 9, template_key: k });
   }
 
   if (obs.active_workflow_agents > 0 && obs.subagent_tokens_live > 100000) {
@@ -548,4 +625,4 @@ async function run(mode) {
   } catch { return null; }
 }
 
-module.exports = { run, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak };
+module.exports = { run, buildObservation, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak };

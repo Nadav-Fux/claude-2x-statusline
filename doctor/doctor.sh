@@ -1090,6 +1090,44 @@ except Exception:
         0 ""
 }
 
+# ── Check 10: CLAUDE.md length (Boris Cherny / Anthropic best practice) ───
+# A CLAUDE.md much longer than ~60 lines (200 is the hard ceiling) causes the
+# model to deprioritize rules near the bottom. Warn only when a file is over
+# the 200-line ceiling; stay silent otherwise. Robust to missing/unreadable
+# files: all reads are guarded and counts default to 0.
+check_claude_md_size() {
+    local ceiling=200
+    local f lines
+
+    # Project CLAUDE.md (the dir doctor was invoked from).
+    f="$PWD/CLAUDE.md"
+    if [ -f "$f" ] && [ -r "$f" ]; then
+        lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
+        [ -n "$lines" ] || lines=0
+        case "$lines" in *[!0-9]*) lines=0 ;; esac
+        if [ "$lines" -gt "$ceiling" ]; then
+            add_result warn claude_md_size \
+                "Project CLAUDE.md is $lines lines (over the 200 ceiling)" \
+                "$f — per Anthropic / Boris Cherny best practices, rules near the bottom get deprioritized by the model. Keep it ~60 lines (optimal) and split the rest into .claude/rules/ files (load via @path/to/rule.md references or frontmatter)." \
+                0 ""
+        fi
+    fi
+
+    # Global CLAUDE.md ($HOME/.claude/CLAUDE.md), if present and distinct.
+    f="$HOME/.claude/CLAUDE.md"
+    if [ "$f" != "$PWD/CLAUDE.md" ] && [ -f "$f" ] && [ -r "$f" ]; then
+        lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
+        [ -n "$lines" ] || lines=0
+        case "$lines" in *[!0-9]*) lines=0 ;; esac
+        if [ "$lines" -gt "$ceiling" ]; then
+            add_result warn claude_md_size_global \
+                "Global CLAUDE.md is $lines lines (over the 200 ceiling)" \
+                "$f — per Anthropic / Boris Cherny best practices, rules near the bottom get deprioritized by the model. Keep it ~60 lines (optimal) and split the rest into .claude/rules/ files (load via @path/to/rule.md references or frontmatter)." \
+                0 ""
+        fi
+    fi
+}
+
 # ── Run all checks ───────────────────────────────────────────────────────
 check_settings
 check_hijack
@@ -1100,6 +1138,7 @@ check_execution
 check_origin
 check_redundant_commands
 check_narrator_hook
+check_claude_md_size
 
 # ── Output ───────────────────────────────────────────────────────────────
 count_ok=0; count_warn=0; count_fail=0; count_fixable=0
