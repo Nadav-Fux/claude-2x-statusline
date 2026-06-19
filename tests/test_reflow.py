@@ -79,9 +79,11 @@ def test_dashboard_line_wraps_into_bordered_rows_when_narrow():
     out = engine.render_dashboard_line(parts, 24)
     rows = out.split("\n")
     assert len(rows) >= 2, "narrow width should wrap to multiple rows"
-    # every wrapped row keeps the │ border
+    # every wrapped row keeps the │ border on BOTH sides (matches single-row form)
     for row in rows:
-        assert "│" in engine._ANSI_RE.sub("", row)
+        plain = engine._ANSI_RE.sub("", row)
+        assert plain.startswith("│"), f"row missing leading border: {plain!r}"
+        assert plain.rstrip().endswith("│"), f"row missing closing border: {plain!r}"
 
 
 def test_dashboard_line_keeps_trailing_on_last_row():

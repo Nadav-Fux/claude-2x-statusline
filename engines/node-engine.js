@@ -220,10 +220,11 @@ function renderDashboardLine(parts, width, trailing = '') {
   const sep = ` ${DIM}·${RST} `;
   const oneLine = `${head}${parts.join(sep)}${trailing} ${border}`;
   if (width <= 0 || visibleWidth(oneLine) <= width) return oneLine;
-  const avail = Math.max(12, width - visibleWidth(head));
+  // Reserve columns for the prefix and the closing " │" so rows stay <= width.
+  const avail = Math.max(1, width - visibleWidth(head) - 2);
   const rows = reflowParts(parts, sep, avail);
-  const out = rows.map((row, i) => (i === 0 ? head : cont) + row);
-  if (trailing) out[out.length - 1] += trailing;
+  const last = rows.length - 1;
+  const out = rows.map((row, i) => `${i === 0 ? head : cont}${row}${i === last ? trailing : ''} ${border}`);
   return out.join('\n');
 }
 
@@ -576,7 +577,7 @@ const SEGMENTS = {
 
     // Update the session high-water-mark (cumulative = completed + current live).
     const sessionTokens = completed.total_tokens + liveTokens;
-    const sessionRuns = completed.run_count + (live.length ? 1 : 0);
+    const sessionRuns = completed.run_count + live.length;
     const peak = loadWfPeak(sessionDir);
     const peakTokens = Math.max(peak.peak_tokens, sessionTokens);
     const peakRuns = Math.max(peak.peak_runs, sessionRuns);

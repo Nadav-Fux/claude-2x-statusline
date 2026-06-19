@@ -542,10 +542,10 @@ def reflow_parts(parts, sep, width):
 
 
 def render_dashboard_line(parts, width, trailing=""):
-    """Render bordered dashboard parts (│ ▸ a · b · c │) on one row, or wrap to
-    several bordered rows (one group of parts each) when they would exceed width.
-    The single-row look is preserved on wide terminals; narrow terminals wrap
-    cleanly instead of overflowing."""
+    """Render bordered dashboard parts as one row (│ ▸ a · b · c │) on wide
+    terminals, or wrap to several rows when narrow. Every row carries the │
+    border on both sides (leading row keeps the ▸ marker; trailing goes on the
+    last row before the closing border), matching the single-row form."""
     if not parts:
         return ""
     border = f"{DIM}│{RST}"
@@ -555,11 +555,15 @@ def render_dashboard_line(parts, width, trailing=""):
     one_line = f"{head}{sep.join(parts)}{trailing} {border}"
     if width <= 0 or visible_width(one_line) <= width:
         return one_line
-    avail = max(12, width - visible_width(head))
+    # Reserve columns for the prefix and the closing " │" so rows stay <= width.
+    avail = max(1, width - visible_width(head) - 2)
     rows = reflow_parts(parts, sep, avail)
-    out = [(head if i == 0 else cont) + row for i, row in enumerate(rows)]
-    if trailing:
-        out[-1] += trailing
+    last = len(rows) - 1
+    out = []
+    for i, row in enumerate(rows):
+        prefix = head if i == 0 else cont
+        tail = trailing if i == last else ""
+        out.append(f"{prefix}{row}{tail} {border}")
     return "\n".join(out)
 
 
@@ -1072,7 +1076,7 @@ def seg_workflows(ctx):
 
     # Update the session high-water-mark (cumulative = completed + current live).
     session_tokens = completed["total_tokens"] + live_tokens
-    session_runs = completed["run_count"] + (1 if live else 0)
+    session_runs = completed["run_count"] + len(live)
     peak = _wf_load_peak(session_dir)
     peak_tokens = max(peak["peak_tokens"], session_tokens)
     peak_runs = max(peak["peak_runs"], session_runs)
