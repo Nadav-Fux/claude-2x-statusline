@@ -25,7 +25,7 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['model', 'context', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  minimal: ['model', 'context', 'workflows', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
   standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
   full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
@@ -395,6 +395,23 @@ function readCompletedWorkflows(sessionDir) {
   return completed;
 }
 
+// Session high-water-mark of workflow tokens/runs (survives idle + tier switch).
+function wfPeakPath(sessionDir) { return path.join(sessionDir, '.statusline-wf-peak.json'); }
+function loadWfPeak(sessionDir) {
+  try {
+    const d = JSON.parse(fs.readFileSync(wfPeakPath(sessionDir), 'utf8'));
+    return { peak_tokens: Number(d.peak_tokens || 0), peak_runs: Number(d.peak_runs || 0) };
+  } catch { return { peak_tokens: 0, peak_runs: 0 }; }
+}
+function saveWfPeak(sessionDir, tokens, runs) {
+  try {
+    const p = wfPeakPath(sessionDir);
+    const tmp = `${p}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ peak_tokens: tokens, peak_runs: runs }));
+    fs.renameSync(tmp, p);
+  } catch {}
+}
+
 // ── Segments ──
 const SEGMENTS = {
   banner(ctx) {
@@ -500,26 +517,30 @@ const SEGMENTS = {
     }
 
     const live = detectLiveWorkflows(sessionDir);
-    if (live.length) {
-      const agents = live.reduce((sum, item) => sum + item.agents, 0);
-      const tokens = live.reduce((sum, item) => sum + item.tokens, 0);
-      const result = `${CYAN}\u2699 ${agents} agents ctx \u03a3 ${fmtTokens(tokens)}${RST}`;
-      wfCache = { key, result, payload: { live, completed: {} } };
-      ctx._wfLive = live;
-      ctx._wfCompleted = {};
-      return result;
-    }
-
     const completed = readCompletedWorkflows(sessionDir);
-    ctx._wfLive = [];
-    ctx._wfCompleted = completed;
-    if (!completed.run_count) {
-      wfCache = { key, result: '', payload: { live: [], completed } };
-      return '';
+    const liveAgents = live.reduce((sum, item) => sum + item.agents, 0);
+    const liveTokens = live.reduce((sum, item) => sum + item.tokens, 0);
+
+    // Update the session high-water-mark (cumulative = completed + current live).
+    const sessionTokens = completed.total_tokens + liveTokens;
+    const sessionRuns = completed.run_count + (live.length ? 1 : 0);
+    const peak = loadWfPeak(sessionDir);
+    const peakTokens = Math.max(peak.peak_tokens, sessionTokens);
+    const peakRuns = Math.max(peak.peak_runs, sessionRuns);
+    if (peakTokens !== peak.peak_tokens || peakRuns !== peak.peak_runs) saveWfPeak(sessionDir, peakTokens, peakRuns);
+
+    let result;
+    if (live.length) {
+      result = `${CYAN}\u2699 ${liveAgents} agents ctx \u03a3 ${fmtTokens(liveTokens)}${RST}`;
+    } else if (peakTokens > 0) {
+      result = `${DIM}wf idle \u00b7 \u03a3 ${RST}${WHITE}${fmtTokens(peakTokens)}${RST}${DIM} \u00b7 ${peakRuns} runs${RST}`;
+    } else {
+      result = '';
     }
 
-    const result = `${DIM}wf:${RST} agents ctx \u03a3 ${WHITE}${fmtTokens(completed.total_tokens)}${RST} ${DIM}\u00b7 ${completed.run_count} runs${RST}`;
-    wfCache = { key, result, payload: { live: [], completed } };
+    ctx._wfLive = live;
+    ctx._wfCompleted = completed;
+    wfCache = { key, result, payload: { live, completed } };
     return result;
   },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },

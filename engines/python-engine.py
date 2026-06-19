@@ -72,8 +72,10 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 #   line 4 — burn/cache metrics (build_metrics_line)
 # Do NOT alter the segment lists below; behaviour diverges only at render time.
 TIER_PRESETS = {
-    # Minimal: essentials only — model, compact context, rate limit %, git
-    "minimal": ["model", "context", "git_branch", "git_dirty", "rate_limits", "env"],
+    # Minimal: essentials only — model, compact context, rate limit %, git.
+    # workflows is included so an active/idle workflow spend never vanishes on a
+    # tier switch (the segment self-hides when there's nothing to report).
+    "minimal": ["model", "context", "workflows", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
     "standard": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
@@ -942,8 +944,36 @@ def seg_agent(ctx):
     return " ".join(parts) if parts else ""
 
 
+def _wf_peak_path(session_dir):
+    return session_dir / ".statusline-wf-peak.json"
+
+
+def _wf_load_peak(session_dir):
+    """Session high-water-mark of workflow tokens/runs (survives idle + tier switch)."""
+    try:
+        data = json.loads(_wf_peak_path(session_dir).read_text(encoding="utf-8"))
+        return {"peak_tokens": int(data.get("peak_tokens", 0)), "peak_runs": int(data.get("peak_runs", 0))}
+    except Exception:
+        return {"peak_tokens": 0, "peak_runs": 0}
+
+
+def _wf_save_peak(session_dir, tokens, runs):
+    try:
+        p = _wf_peak_path(session_dir)
+        tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"peak_tokens": int(tokens), "peak_runs": int(runs)}), encoding="utf-8")
+        os.replace(str(tmp), str(p))
+    except Exception:
+        pass
+
+
 def seg_workflows(ctx):
-    """Show workflow agent context footprint: live count or session cumulative."""
+    """Workflow agent context footprint: live, or the persistent session total.
+
+    Tracks a per-session high-water-mark of cumulative workflow tokens/runs so the
+    spend never silently vanishes \u2014 not when the workflow finishes, not when a run
+    is interrupted without a completion manifest, and not on a tier switch.
+    """
     session_dir = _wf_find_session_dir(ctx.get("stdin", {}))
     if not session_dir:
         ctx["_wf_live"] = []
@@ -958,29 +988,32 @@ def seg_workflows(ctx):
         return _WF_CACHE.get("result", "")
 
     live = _wf_detect_live(session_dir)
-    if live:
-        total_agents = sum(item["agents"] for item in live)
-        total_tokens = sum(item["tokens"] for item in live)
-        result = f"{CYAN}\u2699 {total_agents} agents ctx \u03a3 {_fmt_tokens(total_tokens)}{RST}"
-        payload = {"live": live, "completed": {}}
-        _WF_CACHE.update({"key": cache_key, "result": result, "payload": payload})
-        ctx["_wf_live"] = live
-        ctx["_wf_completed"] = {}
-        return result
-
     completed = _wf_read_completed(session_dir)
-    ctx["_wf_live"] = []
-    ctx["_wf_completed"] = completed
-    if completed["run_count"] == 0:
-        _WF_CACHE.update({"key": cache_key, "result": "", "payload": {"live": [], "completed": completed}})
-        return ""
+    live_agents = sum(item["agents"] for item in live)
+    live_tokens = sum(item["tokens"] for item in live)
 
-    tok_str = _fmt_tokens(completed["total_tokens"])
-    result = (
-        f"{DIM}wf:{RST} agents ctx \u03a3 {WHITE}{tok_str}{RST} "
-        f"{DIM}\u00b7 {completed['run_count']} runs{RST}"
-    )
-    _WF_CACHE.update({"key": cache_key, "result": result, "payload": {"live": [], "completed": completed}})
+    # Update the session high-water-mark (cumulative = completed + current live).
+    session_tokens = completed["total_tokens"] + live_tokens
+    session_runs = completed["run_count"] + (1 if live else 0)
+    peak = _wf_load_peak(session_dir)
+    peak_tokens = max(peak["peak_tokens"], session_tokens)
+    peak_runs = max(peak["peak_runs"], session_runs)
+    if peak_tokens != peak["peak_tokens"] or peak_runs != peak["peak_runs"]:
+        _wf_save_peak(session_dir, peak_tokens, peak_runs)
+
+    if live:
+        result = f"{CYAN}\u2699 {live_agents} agents ctx \u03a3 {_fmt_tokens(live_tokens)}{RST}"
+    elif peak_tokens > 0:
+        result = (
+            f"{DIM}wf idle \u00b7 \u03a3 {RST}{WHITE}{_fmt_tokens(peak_tokens)}{RST}"
+            f"{DIM} \u00b7 {peak_runs} runs{RST}"
+        )
+    else:
+        result = ""
+
+    ctx["_wf_live"] = live
+    ctx["_wf_completed"] = completed
+    _WF_CACHE.update({"key": cache_key, "result": result, "payload": {"live": live, "completed": completed}})
     return result
 
 
