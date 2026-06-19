@@ -263,18 +263,22 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
 
     # ── Session management templates ──────────────────────────────────────────
 
-    # ── 1. Long session (> 2h) ────────────────────────────────────────────────
-    if obs.session_duration_min > 120:
+    # ── 1. Long session (> 2h) AND context genuinely filling ─────────────────
+    # Duration alone is a poor proxy: a 3h session at 19% of a 1M window has no
+    # pressure. Gate on real context fill (true window, 1M-aware) so this only
+    # fires when older context is actually crowding things out.
+    if obs.session_duration_min > 120 and obs.ctx_pct > 60:
         dur_h = int(obs.session_duration_min // 60)
         dur_m = int(obs.session_duration_min % 60)
         key = "long_session"
         results.append(Insight(
             text=(
-                f"Long session ({dur_h}h {dur_m}m) — older context is starting to crowd out "
-                f"what matters now. Consider /clear for a clean restart if you've moved past the original task."
+                f"Long session ({dur_h}h {dur_m}m) and context {obs.ctx_pct:.0f}% full — older "
+                f"context is starting to crowd out what matters now. Consider /clear for a clean "
+                f"restart if you've moved past the original task."
             ),
             text_he=(
-                f"סשן ארוך ({dur_h} שעות {dur_m} דקות) — "
+                f"סשן ארוך ({dur_h} שעות {dur_m} דקות) וה-context ב-{obs.ctx_pct:.0f}% — "
                 f"מצטבר יותר מדי הקשר ישן. "
                 f"כדאי /clear לפתיחה נקייה אם כבר עברת מהמשימה המקורית."
             ),
@@ -311,16 +315,14 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         key = "ctx_very_high"
         results.append(Insight(
             text=(
-                f"Context nearly full ({obs.ctx_pct:.0f}%). "
-                f"Auto-compact will probably drop what's currently relevant — "
-                f"it summarizes the main thread, not the latest pivot. "
-                f"Manual /compact with 'focus on current task' is safer."
+                f"Context nearly full ({obs.ctx_pct:.0f}%). Enable auto-compact as a safety net so "
+                f"you never hit the limit mid-task — or run /compact now with 'focus on current task' "
+                f"to keep more control over what survives (manual preserves the latest pivot better)."
             ),
             text_he=(
-                f"Context כמעט מלא ({obs.ctx_pct:.0f}%). "
-                f"Auto-compact יכול לאבד את מה שחשוב עכשיו — "
-                f"הוא מסכם לפי הקו המרכזי, לא לפי הכיוון האחרון. "
-                f"עדיף /compact ידני עם 'תתמקד במשימה הנוכחית'."
+                f"Context כמעט מלא ({obs.ctx_pct:.0f}%). הפעל auto-compact כרשת ביטחון כדי לא "
+                f"להיתקע באמצע משימה — או הרץ /compact עכשיו עם 'תתמקד במשימה הנוכחית' לשליטה טובה "
+                f"יותר על מה שנשמר (ידני שומר טוב יותר את הכיוון האחרון)."
             ),
             urgency=9,
             novelty=_novelty(key, memory),
@@ -329,8 +331,10 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             template_key=key,
         ))
 
-    # ── 4. Many prompts in session (> 30) ────────────────────────────────────
-    if obs.prompt_count > 30:
+    # ── 4. Many prompts in session (> 30) AND context genuinely filling ──────
+    # Prompt count alone is a poor proxy (30 small edits can sit at 10%). Gate
+    # on real context fill so this fires only under actual pressure.
+    if obs.prompt_count > 30 and obs.ctx_pct > 60:
         key = "many_prompts"
         results.append(Insight(
             text=(
@@ -389,6 +393,27 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             novelty=_novelty(key, memory),
             actionability=6,
             uniqueness=7,
+            template_key=key,
+        ))
+
+    # ── 7. CLAUDE.md hygiene (Boris Cherny: ~60 optimal, 200 ceiling) ────────
+    if obs.claude_md_lines > 200:
+        key = "claude_md_oversized"
+        results.append(Insight(
+            text=(
+                f"CLAUDE.md is {obs.claude_md_lines} lines — past the ~200 ceiling, so rules near "
+                f"the bottom get quietly deprioritized. Trim toward ~60 lines and move the rest into "
+                f".claude/rules/ with paths: scoping (Boris Cherny / Anthropic guidance)."
+            ),
+            text_he=(
+                f"CLAUDE.md הוא {obs.claude_md_lines} שורות — מעבר לתקרת ~200, וחוקים בתחתית מודחקים "
+                f"בשקט. כדאי לקצר ל~60 שורות ולהעביר את השאר ל-.claude/rules/ עם paths: "
+                f"(לפי Boris Cherny / Anthropic)."
+            ),
+            urgency=2,
+            novelty=_novelty(key, memory),
+            actionability=7,
+            uniqueness=9,
             template_key=key,
         ))
 
