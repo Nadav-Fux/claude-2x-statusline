@@ -25,9 +25,9 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['model', 'context', 'workflows', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
-  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
+  minimal: ['model', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -597,6 +597,30 @@ const SEGMENTS = {
     wfCache = { key, result, payload: { live, completed } };
     return result;
   },
+  tasks(ctx) {
+    // Show task progress from ~/.claude/tasks/<session_id>/<N>.json.
+    // Counts numeric task files (^\d+\.json$) and reports done/total.
+    // Self-hides when there is no session_id, no tasks dir, or no task files.
+    const sessionId = (ctx.stdin || {}).session_id || '';
+    if (!sessionId) return '';
+    const tasksDir = path.join(HOME, '.claude', 'tasks', sessionId);
+    try { if (!fs.statSync(tasksDir).isDirectory()) return ''; } catch { return ''; }
+    const TASK_NAME_RE = /^\d+\.json$/;
+    let total = 0, done = 0;
+    try {
+      for (const entry of fs.readdirSync(tasksDir)) {
+        if (!TASK_NAME_RE.test(entry)) continue;
+        total += 1;
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(tasksDir, entry), 'utf8'));
+          if (data.status === 'completed') done += 1;
+        } catch {} // unreadable/corrupt task file — ignore
+      }
+    } catch { return ''; }
+    if (total === 0) return '';
+    if (done === total) return `${GREEN}✓ ${done}/${total} tasks${RST}`;
+    return `${CYAN}◔ ${done}/${total} tasks${RST}`;
+  },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
   git_dirty(ctx) {
     const p = git('status','--porcelain');
@@ -771,8 +795,18 @@ function buildTimeline(ctx) {
       bar += inPeak ? `${YELLOW}\u2501${RST}` : `${GREEN}\u2501${RST}`;
     }
   }
-  if (!isPeakDay) return `${DIM}\u2502${RST} ${bar} ${DIM}\u2502${RST}  ${GREEN}\u2501 Off-Peak all day \u2714${RST}`;
-  return `${DIM}\u2502${RST} ${bar} ${DIM}\u2502${RST}  ${GREEN}\u2501${RST}${DIM} off-peak${RST} ${YELLOW}\u2501${RST}${DIM} peak (${fmtHour(peakStart)}-${fmtHour(peakEnd)})${RST}`;
+  let timeline;
+  if (!isPeakDay) {
+    timeline = `${DIM}\u2502${RST} ${bar} ${DIM}\u2502${RST}  ${GREEN}\u2501 Off-Peak all day \u2714${RST}`;
+  } else {
+    timeline = `${DIM}\u2502${RST} ${bar} ${DIM}\u2502${RST}  ${GREEN}\u2501${RST}${DIM} off-peak${RST} ${YELLOW}\u2501${RST}${DIM} peak (${fmtHour(peakStart)}-${fmtHour(peakEnd)})${RST}`;
+  }
+  // Responsive guard: a 48-slot bar is ~48 visible columns plus legend text.
+  // On narrow terminals it overflows and wraps mid-bar, which is worse than
+  // no timeline at all.  Hide when the rendered string won't fit.
+  const renderWidth = ctx.renderWidth || 0;
+  if (renderWidth > 0 && visibleWidth(timeline) > renderWidth) return '';
+  return timeline;
 }
 
 function buildRateLimitsLine(ctx) {

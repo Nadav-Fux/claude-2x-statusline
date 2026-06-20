@@ -77,11 +77,11 @@ TIER_PRESETS = {
     # Minimal: essentials only — model, compact context, rate limit %, git.
     # workflows is included so an active/idle workflow spend never vanishes on a
     # tier switch (the segment self-hides when there's nothing to report).
-    "minimal": ["model", "context", "workflows", "git_branch", "git_dirty", "rate_limits", "env"],
+    "minimal": ["model", "context", "workflows", "tasks", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
-    "standard": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "standard": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["model", "context", "vim_mode", "agent", "workflows", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
+    "full": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -1346,14 +1346,22 @@ def build_timeline(ctx):
             bar += f"{YELLOW}\u2501{RST}" if in_peak else f"{GREEN}\u2501{RST}"
 
     if not is_peak_day:
-        return f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501 Off-Peak all day \u2714{RST}"
+        timeline = f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  {GREEN}\u2501 Off-Peak all day \u2714{RST}"
+    else:
+        # Show local peak hours range
+        timeline = (
+            f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  "
+            f"{GREEN}\u2501{RST}{DIM} off-peak{RST} "
+            f"{YELLOW}\u2501{RST}{DIM} peak ({fmt_hour(peak_start)}-{fmt_hour(peak_end)}){RST}"
+        )
 
-    # Show local peak hours range
-    return (
-        f"{DIM}\u2502{RST} {bar} {DIM}\u2502{RST}  "
-        f"{GREEN}\u2501{RST}{DIM} off-peak{RST} "
-        f"{YELLOW}\u2501{RST}{DIM} peak ({fmt_hour(peak_start)}-{fmt_hour(peak_end)}){RST}"
-    )
+    # Responsive guard: a 48-slot bar is ~48 visible columns plus legend text.
+    # On narrow terminals it overflows and wraps mid-bar, which is worse than
+    # no timeline at all.  Hide when the rendered string won't fit.
+    render_width = ctx.get("render_width", 0)
+    if render_width > 0 and visible_width(timeline) > render_width:
+        return ""
+    return timeline
 
 
 def build_rate_limits_line(ctx):
@@ -1514,6 +1522,47 @@ def build_metrics_line(ctx):
     return render_dashboard_line(parts, ctx.get("render_width", 0))
 
 
+def seg_tasks(ctx):
+    r"""Show task progress from ~/.claude/tasks/<session_id>/<N>.json.
+
+    Counts numeric task files (^\d+\.json$) and reports done/total.
+    Self-hides when there is no session_id, no tasks dir, or no task files.
+    """
+    session_id = ctx.get("stdin", {}).get("session_id", "")
+    if not session_id:
+        return ""
+
+    tasks_dir = Path.home() / ".claude" / "tasks" / session_id
+    if not tasks_dir.is_dir():
+        return ""
+
+    import re as _re
+    _TASK_NAME_RE = _re.compile(r"^\d+\.json$")
+
+    total = 0
+    done = 0
+    try:
+        for entry in tasks_dir.iterdir():
+            if not _TASK_NAME_RE.match(entry.name):
+                continue
+            total += 1
+            try:
+                data = json.loads(entry.read_text(encoding="utf-8"))
+                if data.get("status") == "completed":
+                    done += 1
+            except Exception:
+                pass  # unreadable/corrupt task file — ignore
+    except Exception:
+        return ""
+
+    if total == 0:
+        return ""
+
+    if done == total:
+        return f"{GREEN}✓ {done}/{total} tasks{RST}"
+    return f"{CYAN}◔ {done}/{total} tasks{RST}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SEGMENT REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1529,6 +1578,7 @@ SEGMENTS = {
     "vim_mode": seg_vim_mode,
     "agent": seg_agent,
     "workflows": seg_workflows,
+    "tasks": seg_tasks,
     "git_branch": seg_git_branch,
     "git_dirty": seg_git_dirty,
     "git_ahead_behind": seg_git_ahead_behind,
