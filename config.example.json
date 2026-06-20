@@ -6,6 +6,7 @@
     "model": true,
     "context": true,
     "workflows": true,
+    "tasks": true,
     "git_branch": true,
     "git_dirty": true,
     "cost": true,
