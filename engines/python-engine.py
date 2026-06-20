@@ -488,6 +488,7 @@ def build_usage_bar(pct, width=10):
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_TASK_NAME_RE = re.compile(r"^\d+\.json$")  # numeric task files in ~/.claude/tasks/<sid>/
 
 
 def visible_width(s):
@@ -1535,9 +1536,6 @@ def seg_tasks(ctx):
     tasks_dir = Path.home() / ".claude" / "tasks" / session_id
     if not tasks_dir.is_dir():
         return ""
-
-    import re as _re
-    _TASK_NAME_RE = _re.compile(r"^\d+\.json$")
 
     total = 0
     done = 0
