@@ -819,11 +819,14 @@ function buildRateLimitsLine(ctx) {
   const fhLabel = labels.five_hour || '5h', wkLabel = labels.weekly || 'weekly';
   const cur = `${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
   const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct)} ${colorPct(sdPct)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
-  const parts = [cur, wk];
+  let line = renderDashboardLine([cur, wk], ctx.renderWidth || 0, checkOffloopDrain(ctx, ud));
+  // sonnet weekly resets with the weekly window \u2014 drop the redundant \u27f3 stamp and
+  // put it on its own continuation row below instead of off to the right.
   if (sdsPct > 0) {
-    parts.push(`${DIM}sonnet${RST} ${buildUsageBar(sdsPct)} ${colorPct(sdsPct)}${String(sdsPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sds.resets_at, 'datetime')}${RST}`);
+    const sonnet = `${DIM}sonnet${RST} ${buildUsageBar(sdsPct)} ${colorPct(sdsPct)}${String(sdsPct).padStart(3)}%${RST}`;
+    line += `\n${DIM}\u2502${RST}   ${sonnet} ${DIM}\u2502${RST}`;
   }
-  return renderDashboardLine(parts, ctx.renderWidth || 0, checkOffloopDrain(ctx, ud));
+  return line;
 }
 
 const OFFLOOP_STATE_PATH = path.join(CLAUDE_DIR, 'statusline-offloop-state.json');

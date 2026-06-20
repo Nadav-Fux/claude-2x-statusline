@@ -1398,15 +1398,19 @@ def build_rate_limits_line(ctx):
 
     current = f"{WHITE}{fh_label}{RST} {fh_bar} {fh_color}{fh_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{fh_time}{RST}"
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
-    parts = [current, weekly]
+
+    offloop = _check_offloop_drain(ctx, usage_data)
+    line = render_dashboard_line([current, weekly], ctx.get("render_width", 0), trailing=offloop)
+
+    # The sonnet weekly window resets on the same clock as the weekly window, so
+    # drop the redundant \u27f3 stamp and give it its own continuation row below
+    # instead of pushing it off to the right of the 5h/weekly row.
     if sds_pct > 0:
         sds_bar = build_usage_bar(sds_pct, bw)
         sds_color = color_for_pct(sds_pct)
-        sds_time = _format_reset(sds.get("resets_at", ""), "datetime")
-        parts.append(f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sds_time}{RST}")
-
-    offloop = _check_offloop_drain(ctx, usage_data)
-    return render_dashboard_line(parts, ctx.get("render_width", 0), trailing=offloop)
+        sonnet = f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST}"
+        line += f"\n{DIM}\u2502{RST}   {sonnet} {DIM}\u2502{RST}"
+    return line
 
 
 # Off-loop drain state must survive across renders (each render is a fresh
