@@ -80,6 +80,17 @@ function resolveCtxWindowSize(stdinData) {
   return 200000;
 }
 
+// loadStatuslineContext: the bar's global context file (authoritative window +
+// current_usage + session_id), or {} when absent/stale (>5 min). Mirrors the
+// Python _load_statusline_context freshness guard.
+function loadStatuslineContext() {
+  try {
+    const p = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
+    if (Date.now() / 1000 - fs.statSync(p).mtimeMs / 1000 > 300) return {};
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch { return {}; }
+}
+
 // Line count of the project CLAUDE.md (cwd/CLAUDE.md), 0 if none. Boris Cherny /
 // Anthropic guidance: ~60 optimal, 200 ceiling — rules past it get deprioritized.
 function countClaudeMdLines(stdinData) {
@@ -172,14 +183,27 @@ function buildObservation(memory) {
   // Project CLAUDE.md size (best-practice hygiene hint)
   obs.claude_md_lines = countClaudeMdLines(stdinData);
 
-  // Context %
-  if (obs.ctx_window_size > 0 && obs.total_input_tokens > 0) {
+  // Context %. Prefer the bar's authoritative current_usage from the context
+  // file (the live occupancy Claude Code reports); the rolling token sum
+  // (input+cache_read+cache_creation) over-counts and clamps to 100% in long
+  // sessions. The file is global (last render wins) and current_usage is
+  // session-specific, so only trust it when its session_id matches ours
+  // (lenient when either is absent). A legit 0 (fresh empty window) IS
+  // authoritative — don't fall back to the rolling sum for it.
+  const barCtx = loadStatuslineContext();
+  const barUsage = barCtx.current_usage;
+  const barSid = barCtx.session_id;
+  const ourSid = (stdinData || {}).session_id;
+  const usageTrusted = !barSid || !ourSid || barSid === ourSid;
+  if (obs.ctx_window_size > 0 && usageTrusted && typeof barUsage === 'number' && barUsage >= 0) {
+    obs.ctx_pct = Math.min(100, barUsage / obs.ctx_window_size * 100);
+  } else if (obs.ctx_window_size > 0 && obs.total_input_tokens > 0) {
     const used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens;
     obs.ctx_pct = Math.min(100, used / obs.ctx_window_size * 100);
-    if (obs.session_duration_min > 1 && obs.ctx_pct > 0) {
-      const rate = obs.ctx_pct / obs.session_duration_min;
-      if (rate > 0) obs.ctx_mins_left = (100 - obs.ctx_pct) / rate;
-    }
+  }
+  if (obs.ctx_pct > 0 && obs.session_duration_min > 1) {
+    const rate = obs.ctx_pct / obs.session_duration_min;
+    if (rate > 0) obs.ctx_mins_left = (100 - obs.ctx_pct) / rate;
   }
 
   // Cache %

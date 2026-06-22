@@ -912,6 +912,9 @@ function writeVscodeContext(ctx) {
     current_usage: current,
     context_window_size: size,
     pct,
+    // session_id lets the narrator confirm this session-specific current_usage
+    // is ours before trusting it (the file is global, last render wins).
+    session_id: stdin.session_id || '',
     model: (stdin.model || {}).display_name || '',
     is_peak: Boolean(ctx.isPeak),
     active_workflow_agents: wfLive.reduce((sum, item) => sum + item.agents, 0),
