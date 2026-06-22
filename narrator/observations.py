@@ -158,29 +158,33 @@ def _load_statusline_state() -> dict:
         return {"samples": []}
 
 
-def _load_statusline_context() -> dict:
-    """Load the bar's statusline-context.json (authoritative window + model).
+def _load_statusline_context(stdin_data: Optional[dict] = None) -> dict:
+    """Load the bar's statusline-context.json (authoritative window + usage + model).
 
-    The narrator runs from hooks (SessionStart / UserPromptSubmit) whose stdin
-    payload does NOT include a context_window block, so the narrator never sees
-    the true window size directly. The statusline bar, by contrast, receives the
-    full payload and writes the real context_window_size (e.g. 1,000,000 for a
-    1M model) plus the model display name to this temp file. We read it as the
-    fallback source of truth for window resolution.
+    The narrator runs from hooks whose stdin does NOT include a context_window
+    block, so this file is its only source for the true window size and the live
+    current_usage. The file is global (one path, last render wins).
+
+    Freshness: when the file's session_id matches ours it is authoritative at ANY
+    age — our own session's window/usage do not go stale just because the bar
+    hasn't re-rendered during a long turn. That time-based staleness was exactly
+    what made the narrator discard correct data and fall back to the
+    over-counting rolling-token sum, reporting 100% while the bar showed ~44%.
+    The 5-min guard now applies ONLY when the session is different/unknown, to
+    avoid scaling our tokens by another (or finished) session's data.
     """
     try:
         import tempfile
 
         path = Path(tempfile.gettempdir()) / "claude" / "statusline-context.json"
-        # Freshness guard: this file is global (a single path, overwritten by
-        # whichever session rendered last). A stale file most likely belongs to
-        # a finished or different session, so ignore anything older than 5 min
-        # rather than scale a live session's tokens by a dead session's window.
-        # (Concurrent same-tier sessions share the correct window anyway; a
-        # concurrent *different*-window session remains a rare residual edge.)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        our_sid = (stdin_data or {}).get("session_id")
+        file_sid = data.get("session_id")
+        if our_sid and file_sid and our_sid == file_sid:
+            return data  # our session — authoritative regardless of age
         if time.time() - path.stat().st_mtime > 300:
             return {}
-        return json.loads(path.read_text(encoding="utf-8"))
+        return data
     except Exception:
         return {}
 
@@ -208,7 +212,7 @@ def _resolve_ctx_window_size(stdin_data: Optional[dict]) -> int:
     if size > 0:
         return size
 
-    cfile = _load_statusline_context()
+    cfile = _load_statusline_context(stdin_data)
     if cfile:
         csize = int(cfile.get("context_window_size", 0) or 0)
         if csize > 0:
@@ -390,7 +394,7 @@ def build(memory: dict) -> Observation:
     # (which also makes the ctx_pct>60 insight gates misfire). _load_statusline_context()
     # already applies a 5-min freshness guard; on a stale/absent file we fall
     # back to the rolling estimate.
-    _bar_ctx = _load_statusline_context()
+    _bar_ctx = _load_statusline_context(stdin_data)
     _bar_usage = _bar_ctx.get("current_usage")
     # The context file is global (last render wins). current_usage is
     # session-specific, so when the file records a session_id only trust it if it

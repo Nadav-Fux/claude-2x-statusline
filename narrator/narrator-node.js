@@ -61,17 +61,12 @@ function resolveCtxWindowSize(stdinData) {
   const size = Number(cw.context_window_size || 0);
   if (size > 0) return size;
 
-  try {
-    const p = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
-    // Freshness guard (see Python _load_statusline_context): the file is global,
-    // so ignore a stale one (>5 min) from a finished/other session rather than
-    // scale live tokens by a dead session's window.
-    if (Date.now() / 1000 - fs.statSync(p).mtimeMs / 1000 > 300) throw new Error('stale');
-    const cfile = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const cfile = loadStatuslineContext(stdinData);
+  if (cfile && Object.keys(cfile).length) {
     const csize = Number(cfile.context_window_size || 0);
     if (csize > 0) return csize;
     if (String(cfile.model || '').toLowerCase().includes('1m')) return 1000000;
-  } catch {}
+  }
 
   const model = (stdinData && stdinData.model) || {};
   const name = `${model.display_name || ''} ${model.id || ''}`.toLowerCase();
@@ -83,11 +78,17 @@ function resolveCtxWindowSize(stdinData) {
 // loadStatuslineContext: the bar's global context file (authoritative window +
 // current_usage + session_id), or {} when absent/stale (>5 min). Mirrors the
 // Python _load_statusline_context freshness guard.
-function loadStatuslineContext() {
+function loadStatuslineContext(stdinData) {
   try {
     const p = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    // Our own session's file is authoritative at any age; the 5-min guard only
+    // applies to a different/unknown session (avoids the stale-file fallback to
+    // the over-counting rolling sum that reported 100%).
+    const ourSid = (stdinData || {}).session_id, fileSid = data.session_id;
+    if (ourSid && fileSid && ourSid === fileSid) return data;
     if (Date.now() / 1000 - fs.statSync(p).mtimeMs / 1000 > 300) return {};
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    return data;
   } catch { return {}; }
 }
 
@@ -190,7 +191,7 @@ function buildObservation(memory) {
   // session-specific, so only trust it when its session_id matches ours
   // (lenient when either is absent). A legit 0 (fresh empty window) IS
   // authoritative — don't fall back to the rolling sum for it.
-  const barCtx = loadStatuslineContext();
+  const barCtx = loadStatuslineContext(stdinData);
   const barUsage = barCtx.current_usage;
   const barSid = barCtx.session_id;
   const ourSid = (stdinData || {}).session_id;

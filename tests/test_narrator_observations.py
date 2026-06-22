@@ -101,14 +101,14 @@ def test_is_peak_hours_uses_engine_schedule_logic(monkeypatch):
 
 def test_resolve_ctx_window_env_override(monkeypatch):
     monkeypatch.setenv("STATUSLINE_CTX_WINDOW", "777000")
-    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {})
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {})
     assert observations._resolve_ctx_window_size({"context_window": {"context_window_size": 200000}}) == 777000
 
 
 def test_resolve_ctx_window_trusts_real_stdin_size(monkeypatch):
     monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
     # A real 200k model must stay 200k even if the bar file says otherwise.
-    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {"context_window_size": 1000000})
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {"context_window_size": 1000000})
     assert observations._resolve_ctx_window_size({"context_window": {"context_window_size": 200000}}) == 200000
 
 
@@ -117,7 +117,7 @@ def test_resolve_ctx_window_from_bar_context_file(monkeypatch):
     monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
     monkeypatch.setattr(
         observations, "_load_statusline_context",
-        lambda: {"context_window_size": 1000000, "model": "Opus 4.8 (1M context)"},
+        lambda *a, **k: {"context_window_size": 1000000, "model": "Opus 4.8 (1M context)"},
     )
     assert observations._resolve_ctx_window_size({}) == 1000000
     assert observations._resolve_ctx_window_size({"context_window": {}}) == 1000000
@@ -125,19 +125,19 @@ def test_resolve_ctx_window_from_bar_context_file(monkeypatch):
 
 def test_resolve_ctx_window_from_model_name_when_size_missing(monkeypatch):
     monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
-    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {"model": "Opus 4.8 (1M context)"})
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {"model": "Opus 4.8 (1M context)"})
     assert observations._resolve_ctx_window_size({}) == 1000000
 
 
 def test_resolve_ctx_window_from_stdin_model_id(monkeypatch):
     monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
-    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {})
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {})
     assert observations._resolve_ctx_window_size({"model": {"id": "claude-opus-4-8[1m]"}}) == 1000000
 
 
 def test_resolve_ctx_window_defaults_to_200k(monkeypatch):
     monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
-    monkeypatch.setattr(observations, "_load_statusline_context", lambda: {})
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {})
     assert observations._resolve_ctx_window_size({}) == 200000
     assert observations._resolve_ctx_window_size({"model": {"display_name": "Sonnet 4.5"}}) == 200000
 
@@ -162,7 +162,7 @@ def test_build_ctx_pct_uses_true_1m_window_not_200k(monkeypatch):
     })
     monkeypatch.setattr(
         observations, "_load_statusline_context",
-        lambda: {"context_window_size": 1000000, "model": "Opus 4.8 (1M context)"},
+        lambda *a, **k: {"context_window_size": 1000000, "model": "Opus 4.8 (1M context)"},
     )
 
     obs = observations.build({"current": {}})
