@@ -1772,6 +1772,9 @@ def _write_vscode_context(ctx):
         "current_usage": current,
         "context_window_size": size,
         "pct": pct,
+        # session_id lets the narrator confirm this session-specific current_usage
+        # is ours before trusting it (the file is global, last render wins).
+        "session_id": stdin_data.get("session_id", ""),
         "model": stdin_data.get("model", {}).get("display_name", ""),
         "is_peak": ctx.get("is_peak", False),
         "active_workflow_agents": sum(item["agents"] for item in wf_live),

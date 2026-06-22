@@ -33,7 +33,16 @@ if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
         done
         IFS="$_oifs"
     fi
-    [ -n "$_nb" ] && exec "$_nb" "$0" "$@"
+    if [ -n "$_nb" ]; then
+        exec "$_nb" "$0" "$@"
+    else
+        # No bash >= 4 anywhere — the associative arrays below would abort under
+        # `set -u`. Honor the "exit 0 always" contract with an actionable note
+        # instead of crashing the session hook.
+        echo "claude-2x-statusline doctor: requires bash >= 4 (found ${BASH_VERSION:-non-bash})." >&2
+        echo "  Install a newer bash (e.g. 'brew install bash') or set STATUSLINE_BASH=/path/to/bash." >&2
+        exit 0
+    fi
 fi
 
 set -u

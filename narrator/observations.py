@@ -392,7 +392,19 @@ def build(memory: dict) -> Observation:
     # back to the rolling estimate.
     _bar_ctx = _load_statusline_context()
     _bar_usage = _bar_ctx.get("current_usage")
-    if obs.ctx_window_size > 0 and isinstance(_bar_usage, (int, float)) and _bar_usage > 0:
+    # The context file is global (last render wins). current_usage is
+    # session-specific, so when the file records a session_id only trust it if it
+    # matches ours — otherwise a concurrent session's usage leaks in. Files from
+    # older bars carry no session_id; stay lenient for them. A legit 0 (fresh
+    # empty window) IS authoritative — don't fall back to the rolling sum for it.
+    _bar_sid = _bar_ctx.get("session_id")
+    _our_sid = (stdin_data or {}).get("session_id")
+    # Lenient when either side lacks a session_id (older bars write "" / None):
+    # only a definite mismatch between two known ids blocks trust.
+    _usage_trusted = not _bar_sid or not _our_sid or _bar_sid == _our_sid
+    if (obs.ctx_window_size > 0 and _usage_trusted
+            and isinstance(_bar_usage, (int, float)) and not isinstance(_bar_usage, bool)
+            and _bar_usage >= 0):
         obs.ctx_pct = min(100.0, float(_bar_usage) / obs.ctx_window_size * 100.0)
     elif obs.ctx_window_size > 0 and obs.total_input_tokens > 0:
         used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens
