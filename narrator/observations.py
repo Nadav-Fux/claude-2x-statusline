@@ -382,14 +382,26 @@ def build(memory: dict) -> Observation:
     obs.claude_md_lines = _count_claude_md_lines(stdin_data)
 
     # ── context % and minutes left ───────────────────────────────────────────
-    if obs.ctx_window_size > 0 and obs.total_input_tokens > 0:
+    # Prefer the bar's authoritative current_usage from statusline-context.json
+    # (the live window occupancy Claude Code reports at render time and the bar
+    # displays). The narrator's own rolling-sample token sums (input + cache_read
+    # + cache_creation) do NOT equal live occupancy — they over-count and, in
+    # long/active sessions, wrongly clamp ctx_pct to 100% while the bar shows ~25%
+    # (which also makes the ctx_pct>60 insight gates misfire). _load_statusline_context()
+    # already applies a 5-min freshness guard; on a stale/absent file we fall
+    # back to the rolling estimate.
+    _bar_ctx = _load_statusline_context()
+    _bar_usage = _bar_ctx.get("current_usage")
+    if obs.ctx_window_size > 0 and isinstance(_bar_usage, (int, float)) and _bar_usage > 0:
+        obs.ctx_pct = min(100.0, float(_bar_usage) / obs.ctx_window_size * 100.0)
+    elif obs.ctx_window_size > 0 and obs.total_input_tokens > 0:
         used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens
         obs.ctx_pct = min(100.0, used / obs.ctx_window_size * 100.0)
 
-        if obs.session_duration_min > 1 and obs.ctx_pct > 0:
-            rate_pct_per_min = obs.ctx_pct / obs.session_duration_min
-            if rate_pct_per_min > 0:
-                obs.ctx_mins_left = (100.0 - obs.ctx_pct) / rate_pct_per_min
+    if obs.ctx_pct > 0 and obs.session_duration_min > 1:
+        rate_pct_per_min = obs.ctx_pct / obs.session_duration_min
+        if rate_pct_per_min > 0:
+            obs.ctx_mins_left = (100.0 - obs.ctx_pct) / rate_pct_per_min
 
     # ── cache % ──────────────────────────────────────────────────────────────
     total_in = obs.total_input_tokens
