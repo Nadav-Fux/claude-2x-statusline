@@ -22,21 +22,36 @@ def _msys_path(path: Path) -> str:
 def _write_fake_curl(bin_dir: Path) -> None:
     script = bin_dir / "curl"
     script.write_text(
+        # Append, not overwrite: --report can fire more than one background
+        # curl (e.g. /ping plus a failures rollup), which race to write this
+        # single marker; with '>' the last writer clobbers /ping and the test
+        # flakes under load. Appending keeps every call's payload.
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" > \"$STATUSLINE_TEST_CURL_MARKER\"\n"
+        "printf '%s\\n' \"$*\" >> \"$STATUSLINE_TEST_CURL_MARKER\"\n"
         "exit 0\n",
         encoding="utf-8",
     )
     script.chmod(0o755)
 
 
-def _wait_for_marker(marker: Path, timeout: float = 1.0) -> bool:
+def _wait_for_marker(marker: Path, timeout: float = 1.0, contains: str = "") -> bool:
+    """Wait until the marker is non-empty (and, if given, contains `contains`).
+
+    With `contains`, this waits for a SPECIFIC curl call to land — deterministic
+    even when the doctor fires several background curls in some order.
+    """
+    def _ok() -> bool:
+        if not marker.exists():
+            return False
+        text = marker.read_text(encoding="utf-8")
+        return bool(text.strip()) and (contains in text if contains else True)
+
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if marker.exists() and marker.read_text(encoding="utf-8").strip():
+        if _ok():
             return True
         time.sleep(0.05)
-    return marker.exists() and bool(marker.read_text(encoding="utf-8").strip())
+    return _ok()
 
 
 @pytest.fixture
@@ -93,7 +108,9 @@ def test_doctor_report_uses_curl_when_enabled(bash_exe: str, doctor_env) -> None
     result = _run_doctor_report(bash_exe, home, bin_dir, marker)
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert _wait_for_marker(marker), result.stdout
+    assert _wait_for_marker(
+        marker, contains="statusline-telemetry.nadavf.workers.dev/ping"
+    ), result.stdout
     payload = marker.read_text(encoding="utf-8")
     assert "statusline-telemetry.nadavf.workers.dev/ping" in payload
     assert '"event":"doctor"' in payload

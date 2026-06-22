@@ -16,6 +16,26 @@
 #
 # Exit: 0 always. Non-zero exit would block Claude Code session hooks.
 
+# The associative arrays below need bash >= 4, but `#!/usr/bin/env bash` can
+# resolve to macOS's stock bash 3.2 (no `declare -A`), which — combined with
+# `set -u` — makes `SEG_DETAIL[peak_hours]=...` evaluate the key as an unbound
+# arithmetic variable and abort. Re-exec under a newer bash if we're on an old
+# one (or a non-bash sh), so the doctor works whatever the shebang/PATH picks.
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+    _nb=""
+    for _b in "${STATUSLINE_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "${HOME:-}/.local/bin/bash"; do
+        if [ -n "$_b" ] && [ -x "$_b" ] && "$_b" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then _nb="$_b"; break; fi
+    done
+    if [ -z "$_nb" ]; then  # scan every PATH dir for a new-enough bash
+        _oifs="${IFS:-}"; IFS=":"
+        for _d in $PATH; do
+            if [ -n "$_d" ] && [ -x "$_d/bash" ] && "$_d/bash" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then _nb="$_d/bash"; break; fi
+        done
+        IFS="$_oifs"
+    fi
+    [ -n "$_nb" ] && exec "$_nb" "$0" "$@"
+fi
+
 set -u
 
 # ── Segment explanations ─────────────────────────────────────────────────
@@ -576,6 +596,9 @@ PY
     fi
 }
 TELEMETRY_LEVEL=$(_read_telemetry_level)
+# Documented hard kill switch: STATUSLINE_DISABLE_TELEMETRY=1 forces telemetry
+# off regardless of config (overrides the config-derived level above).
+[ "${STATUSLINE_DISABLE_TELEMETRY:-}" = "1" ] && TELEMETRY_LEVEL=off
 
 # ── Stable per-machine diagnostic code ──────────────────────────────────
 # sha256(hostname:user)[:8]  — anonymous, stable across runs.
