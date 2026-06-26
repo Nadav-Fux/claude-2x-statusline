@@ -1378,13 +1378,13 @@ def build_rate_limits_line(ctx):
     fh_bar = build_usage_bar(fh_pct, bw)
     fh_color = color_for_pct(fh_pct)
 
-    sd = usage_data.get("seven_day", {})
+    sd = usage_data.get("seven_day") or {}
     sd_pct = int(sd.get("utilization", 0))
     sd_reset = sd.get("resets_at", "")
     sd_bar = build_usage_bar(sd_pct, bw)
     sd_color = color_for_pct(sd_pct)
 
-    sds = usage_data.get("seven_day_sonnet", {})
+    sds = usage_data.get("seven_day_sonnet") or {}
     sds_pct = int(sds.get("utilization", 0))
 
     fh_time = _format_reset(fh_reset, "time")

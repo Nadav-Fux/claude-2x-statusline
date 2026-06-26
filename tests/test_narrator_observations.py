@@ -142,6 +142,17 @@ def test_resolve_ctx_window_defaults_to_200k(monkeypatch):
     assert observations._resolve_ctx_window_size({"model": {"display_name": "Sonnet 4.5"}}) == 200000
 
 
+def test_resolve_ctx_window_1m_model_overrides_wrong_stdin_200k(monkeypatch):
+    """Regression (2026-06-26): Claude Code now sends context_window_size=200000 on
+    stdin even for a [1m] session. The 1M model detection MUST win over that wrong
+    size, else 306k reads ~150% and fires false 'context full' pressure every prompt."""
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {})
+    stdin = {"model": {"id": "claude-opus-4-8[1m]"},
+             "context_window": {"context_window_size": 200000}}
+    assert observations._resolve_ctx_window_size(stdin) == 1_000_000
+
+
 def test_build_ctx_pct_uses_true_1m_window_not_200k(monkeypatch):
     """Regression: ~160k tokens on a 1M model must read ~16%, not ~80%.
 

@@ -57,20 +57,24 @@ function resolveCtxWindowSize(stdinData) {
   const env = (process.env.STATUSLINE_CTX_WINDOW || '').trim();
   if (/^\d+$/.test(env) && Number(env) > 0) return Number(env);
 
+  const cfile = loadStatuslineContext(stdinData);
+
+  // 1M-context models FIRST. Claude Code can still report context_window_size=200000
+  // on stdin for a [1m] session; trusting it mis-scales the % ~5x and fires false
+  // "context full" pressure at ~16% real usage. Detect the 1M model and override.
+  const model = (stdinData && stdinData.model) || {};
+  const name = `${model.display_name || ''} ${model.id || ''}`.toLowerCase();
+  const cfileModel = String((cfile && cfile.model) || '').toLowerCase();
+  if (name.includes('1m') || cfileModel.includes('1m')) return 1000000;
+
   const cw = (stdinData && stdinData.context_window) || {};
   const size = Number(cw.context_window_size || 0);
   if (size > 0) return size;
 
-  const cfile = loadStatuslineContext(stdinData);
   if (cfile && Object.keys(cfile).length) {
     const csize = Number(cfile.context_window_size || 0);
     if (csize > 0) return csize;
-    if (String(cfile.model || '').toLowerCase().includes('1m')) return 1000000;
   }
-
-  const model = (stdinData && stdinData.model) || {};
-  const name = `${model.display_name || ''} ${model.id || ''}`.toLowerCase();
-  if (name.includes('1m')) return 1000000;
 
   return 200000;
 }

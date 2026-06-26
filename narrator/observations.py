@@ -207,23 +207,27 @@ def _resolve_ctx_window_size(stdin_data: Optional[dict]) -> int:
     if env.isdigit() and int(env) > 0:
         return int(env)
 
+    cfile = _load_statusline_context(stdin_data)
+
+    # 1M-context models FIRST. Claude Code can still report context_window_size=200000
+    # on stdin for a [1m] session; trusting that size mis-scales the % ~5x and fires
+    # false "context full" pressure at ~16% real usage. Detect the 1M model and override
+    # the (wrong) stdin size before we ever trust it.
+    model = (stdin_data or {}).get("model", {}) or {}
+    name = (str(model.get("display_name", "")) + " " + str(model.get("id", ""))).lower()
+    cfile_model = str((cfile or {}).get("model", "")).lower()
+    if "1m" in name or "1m" in cfile_model:
+        return 1_000_000
+
     ctx_block = (stdin_data or {}).get("context_window", {}) or {}
     size = int(ctx_block.get("context_window_size", 0) or 0)
     if size > 0:
         return size
 
-    cfile = _load_statusline_context(stdin_data)
     if cfile:
         csize = int(cfile.get("context_window_size", 0) or 0)
         if csize > 0:
             return csize
-        if "1m" in str(cfile.get("model", "")).lower():
-            return 1_000_000
-
-    model = (stdin_data or {}).get("model", {}) or {}
-    name = (str(model.get("display_name", "")) + " " + str(model.get("id", ""))).lower()
-    if "1m" in name:
-        return 1_000_000
 
     return 200000
 
