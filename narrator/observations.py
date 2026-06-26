@@ -189,6 +189,26 @@ def _load_statusline_context(stdin_data: Optional[dict] = None) -> dict:
         return {}
 
 
+def _window_from_name(name: str) -> Optional[int]:
+    """Extract a context-window size encoded in a model name, dynamically:
+    '[1m]' -> 1_000_000, '(500k context)' -> 500_000, 'Opus 4.8 (1M context)' -> 1_000_000.
+    Only matches a number+unit inside brackets/parens OR adjacent to a context/token/
+    window word, so version numbers ('4-8') and param counts ('31b') never false-match.
+    Returns token count, or None when the name encodes no window."""
+    import re
+    if not name:
+        return None
+    for rx in (
+        re.compile(r"[\[(]\s*(\d+(?:\.\d+)?)\s*([mk])\b", re.I),
+        re.compile(r"(\d+(?:\.\d+)?)\s*([mk])\s*(?:context|tokens?|ctx|window)", re.I),
+    ):
+        m = rx.search(name)
+        if m:
+            n = float(m.group(1))
+            return int(n * (1_000_000 if m.group(2).lower() == "m" else 1_000))
+    return None
+
+
 def _resolve_ctx_window_size(stdin_data: Optional[dict]) -> int:
     """Resolve the TRUE context window size for ctx_pct.
 
@@ -214,10 +234,11 @@ def _resolve_ctx_window_size(stdin_data: Optional[dict]) -> int:
     # false "context full" pressure at ~16% real usage. Detect the 1M model and override
     # the (wrong) stdin size before we ever trust it.
     model = (stdin_data or {}).get("model", {}) or {}
-    name = (str(model.get("display_name", "")) + " " + str(model.get("id", ""))).lower()
-    cfile_model = str((cfile or {}).get("model", "")).lower()
-    if "1m" in name or "1m" in cfile_model:
-        return 1_000_000
+    name = str(model.get("display_name", "")) + " " + str(model.get("id", ""))
+    cfile_model = str((cfile or {}).get("model", ""))
+    win = _window_from_name(name) or _window_from_name(cfile_model)
+    if win:
+        return win
 
     ctx_block = (stdin_data or {}).get("context_window", {}) or {}
     size = int(ctx_block.get("context_window_size", 0) or 0)

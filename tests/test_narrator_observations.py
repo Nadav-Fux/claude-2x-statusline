@@ -153,6 +153,28 @@ def test_resolve_ctx_window_1m_model_overrides_wrong_stdin_200k(monkeypatch):
     assert observations._resolve_ctx_window_size(stdin) == 1_000_000
 
 
+def test_window_from_name_dynamic_units():
+    """Window size is EXTRACTED from the name (not hard-coded to 1M), so future
+    windows work automatically; param counts / versions never false-match."""
+    f = observations._window_from_name
+    assert f("claude-opus-4-8[1m]") == 1_000_000
+    assert f("Future Model [2m]") == 2_000_000
+    assert f("something (500k context)") == 500_000
+    assert f("Opus 4.8 (1M context)") == 1_000_000
+    # must NOT match param counts ('31b'), versions ('4-8'), or bare numbers
+    assert f("gemma-4-31b") is None
+    assert f("claude-sonnet-4-5") is None
+    assert f("qwen3.6-35b-a3b") is None
+
+
+def test_resolve_ctx_window_2m_model_overrides_wrong_stdin(monkeypatch):
+    monkeypatch.delenv("STATUSLINE_CTX_WINDOW", raising=False)
+    monkeypatch.setattr(observations, "_load_statusline_context", lambda *a, **k: {})
+    stdin = {"model": {"id": "future-model[2m]"},
+             "context_window": {"context_window_size": 200000}}
+    assert observations._resolve_ctx_window_size(stdin) == 2_000_000
+
+
 def test_build_ctx_pct_uses_true_1m_window_not_200k(monkeypatch):
     """Regression: ~160k tokens on a 1M model must read ~16%, not ~80%.
 

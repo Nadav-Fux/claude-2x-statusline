@@ -53,6 +53,22 @@ function rotateSession(data, newId) {
 // (size, else 1M from model name) > stdin model 1m detection > 200k default.
 // Without this, ~160k tokens reads as 80% of 200k and fires pressure templates
 // when it is really 16% of a 1,000,000 window.
+function windowFromName(name) {
+  // Extract a window size encoded in a model name: '[1m]'->1e6, '(500k context)'->5e5.
+  // Only matches number+unit in brackets/parens or next to a context/token/window word,
+  // so version numbers ('4-8') and param counts ('31b') never false-match.
+  if (!name) return null;
+  const res = [
+    /[[(]\s*(\d+(?:\.\d+)?)\s*([mk])\b/i,
+    /(\d+(?:\.\d+)?)\s*([mk])\s*(?:context|tokens?|ctx|window)/i,
+  ];
+  for (const rx of res) {
+    const m = name.match(rx);
+    if (m) return Math.round(parseFloat(m[1]) * (m[2].toLowerCase() === 'm' ? 1000000 : 1000));
+  }
+  return null;
+}
+
 function resolveCtxWindowSize(stdinData) {
   const env = (process.env.STATUSLINE_CTX_WINDOW || '').trim();
   if (/^\d+$/.test(env) && Number(env) > 0) return Number(env);
@@ -63,9 +79,10 @@ function resolveCtxWindowSize(stdinData) {
   // on stdin for a [1m] session; trusting it mis-scales the % ~5x and fires false
   // "context full" pressure at ~16% real usage. Detect the 1M model and override.
   const model = (stdinData && stdinData.model) || {};
-  const name = `${model.display_name || ''} ${model.id || ''}`.toLowerCase();
-  const cfileModel = String((cfile && cfile.model) || '').toLowerCase();
-  if (name.includes('1m') || cfileModel.includes('1m')) return 1000000;
+  const name = `${model.display_name || ''} ${model.id || ''}`;
+  const cfileModel = String((cfile && cfile.model) || '');
+  const win = windowFromName(name) || windowFromName(cfileModel);
+  if (win) return win;
 
   const cw = (stdinData && stdinData.context_window) || {};
   const size = Number(cw.context_window_size || 0);
