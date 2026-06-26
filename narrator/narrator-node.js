@@ -69,6 +69,18 @@ function windowFromName(name) {
   return null;
 }
 
+// parseResetAt: parse a usage-cache window block's `resets_at` ISO string into a
+// Date (or null when missing/malformed). Mirrors the Python _parse_reset_at /
+// the engine's _format_reset parsing; never throws.
+function parseResetAt(block) {
+  if (!block || typeof block !== 'object') return null;
+  const iso = block.resets_at;
+  if (!iso || typeof iso !== 'string' || iso === 'null') return null;
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
 function resolveCtxWindowSize(stdinData) {
   const env = (process.env.STATUSLINE_CTX_WINDOW || '').trim();
   if (/^\d+$/.test(env) && Number(env) > 0) return Number(env);
@@ -135,6 +147,10 @@ function buildObservation(memory) {
     is_peak: false, schedule_mode: 'normal',
     session_duration_min: 0, prompt_count: 0,
     rate_limit_5h_pct: 0, rate_limit_7d_pct: 0,
+    // Rate-limit reset times (Date|null) + derived hours-until-weekly-reset; let
+    // the rate-limit insight reason about WHERE we are in the 7-day reset cycle.
+    rate_limit_5h_resets_at: null, rate_limit_7d_resets_at: null,
+    rate_limit_7d_hours_left: null,
     cost_delta_5m: 0, cost_delta_20m: 0, ctx_delta_5m: 0,
     total_input_tokens: 0, total_output_tokens: 0,
     cache_read_tokens: 0, cache_creation_tokens: 0,
@@ -166,8 +182,18 @@ function buildObservation(memory) {
     const st = fs.statSync(usagePath);
     if (Date.now() / 1000 - st.mtimeMs / 1000 <= 300) {
       const usage = JSON.parse(fs.readFileSync(usagePath, 'utf8'));
-      obs.rate_limit_5h_pct = Number((usage.five_hour || {}).utilization || 0);
-      obs.rate_limit_7d_pct = Number((usage.seven_day || {}).utilization || 0);
+      const fiveHour = usage.five_hour || {};
+      const sevenDay = usage.seven_day || {};
+      obs.rate_limit_5h_pct = Number(fiveHour.utilization || 0);
+      obs.rate_limit_7d_pct = Number(sevenDay.utilization || 0);
+      // Reset times → cycle-awareness. Use the same now source (Date.now()) the
+      // rest of buildObservation uses, so the hours-left math stays consistent.
+      obs.rate_limit_5h_resets_at = parseResetAt(usage.five_hour);
+      obs.rate_limit_7d_resets_at = parseResetAt(usage.seven_day);
+      if (obs.rate_limit_7d_resets_at) {
+        const secsLeft = obs.rate_limit_7d_resets_at.getTime() / 1000 - Date.now() / 1000;
+        obs.rate_limit_7d_hours_left = Math.max(0, secsLeft / 3600);
+      }
     }
   } catch {}
 
@@ -459,11 +485,66 @@ function buildInsights(obs, memory) {
     }
   }
 
-  const maxRl = Math.max(obs.rate_limit_5h_pct, obs.rate_limit_7d_pct);
-  if (maxRl > 80) {
+  // Rate limit (cycle-aware tiers). The 7-day weekly window has a "day in the
+  // cycle" concept — 30% on day 1 differs from 30% on day 6 — so we position the
+  // utilisation against the even pace expected by now. The 5-hour window is a
+  // rolling window (no day concept) and only gets the blunt near-cap tier.
+  // Tiers are mutually exclusive, evaluated in precedence. Mirrors scoring.py.
+  const pct5 = obs.rate_limit_5h_pct;
+  const pct7 = obs.rate_limit_7d_pct;
+  const maxRl = Math.max(pct5, pct7);
+  const hoursLeft = obs.rate_limit_7d_hours_left; // null when no reset data
+  let daysLeft = null, pace = null;
+  if (hoursLeft != null) {
+    daysLeft = hoursLeft / 24;
+    const elapsedFrac = Math.max(0, Math.min(1, 1 - daysLeft / 7));
+    pace = elapsedFrac * 100;
+  }
+  let rateLimitFired = false;
+
+  // Tier 1 — NEAR CAP: safety net regardless of cycle position. >=90% either
+  // window, OR (no reset data to reason about the cycle) the old >80% behaviour.
+  if (maxRl >= 90 || (hoursLeft == null && maxRl > 80)) {
     const k = 'rate_limit_high';
     results.push({ text: `Rate limit at ${maxRl.toFixed(0)}% — close to cap. Plan break before compact.`, text_he: `ה-rate limit הגיע ל-${maxRl.toFixed(0)}% — קרוב לתקרה. תכנן הפסקה לפני /compact.`, urgency: 10, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
-  } else if (obs.is_peak && maxRl < 80) {
+    rateLimitFired = true;
+  } else if (hoursLeft != null && pct7 >= 40 && daysLeft >= 1.0 && (pct7 - pace) >= 15) {
+    // Tier 2 — AHEAD OF PACE (firm, not alarmist): hot weekly usage, still >=1d
+    // out, running notably hotter than the even pace line. Generalised to ANY day.
+    const k = 'rate_limit_ahead_of_pace';
+    results.push({ text: `Weekly cap ${pct7.toFixed(0)}% used with ~${daysLeft.toFixed(0)}d to reset — ahead of an even ${pace.toFixed(0)}% pace. Ease off or you'll cap out before reset.`, text_he: `מכסת השבוע ב-${pct7.toFixed(0)}% ונשארו ~${daysLeft.toFixed(0)} ימים לאיפוס — אתה לפני הקצב (${pace.toFixed(0)}%). תוריד הילוך, אחרת תיגמר לפני האיפוס.`, urgency: 7, novelty: novelty(k, memory), actionability: 8, uniqueness: 10, template_key: k });
+    rateLimitFired = true;
+  } else if (hoursLeft != null && Math.abs(pct7 - pace) < 12 && pct7 >= 20) {
+    // ON-PACE (neutral, lowest urgency): tracking along the even line. Rare cue
+    // (low urgency + novelty cooldown) so it never nags. Between AHEAD and BEHIND.
+    const headroom = 100 - pct7;
+    const k = 'rate_limit_on_pace';
+    results.push({ text: `Tracking right on an even weekly pace — ~${daysLeft.toFixed(0)}d and ~${headroom.toFixed(0)}% left.`, text_he: `אתה בדיוק על הקצב השבועי האחיד — נשארו ~${daysLeft.toFixed(0)} ימים ו-~${headroom.toFixed(0)}% מהמכסה.`, urgency: 2, novelty: novelty(k, memory), actionability: 2, uniqueness: 5, template_key: k });
+    rateLimitFired = true;
+  } else if (hoursLeft != null && (pace - pct7) >= 12 && (100 - pct7) >= 12) {
+    // BEHIND / HEADROOM (gentle, encouraging): under the even pace on ANY day.
+    // Low urgency + novelty cooldown so it speaks occasionally, never nags. Two
+    // phrasings: a calm general one, and a punchier last-day "use it" variant.
+    const headroom = 100 - pct7;
+    const k = 'rate_limit_headroom_near_reset';
+    let text, textHe;
+    if (daysLeft <= 1.0) {
+      text = `Weekly cap resets in ~${hoursLeft.toFixed(0)}h and you're only at ${pct7.toFixed(0)}% — ~${headroom.toFixed(0)}% headroom left; put it to use before it resets.`;
+      textHe = `מכסת השבוע מתאפסת בעוד ~${hoursLeft.toFixed(0)} שעות ואתה רק ב-${pct7.toFixed(0)}% — נשאר ~${headroom.toFixed(0)}% מרווח, נצל אותו עד הסוף לפני האיפוס. :)`;
+    } else {
+      text = `You're under an even weekly pace — ~${pace.toFixed(0)}% expected by now, you're at ${pct7.toFixed(0)}%. ~${daysLeft.toFixed(0)}d to reset, plenty of headroom.`;
+      textHe = `אתה מתחת לקצב השבועי האחיד — היו אמורים ~${pace.toFixed(0)}% עד עכשיו ואתה ב-${pct7.toFixed(0)}%. נשארו ~${daysLeft.toFixed(0)} ימים לאיפוס, יש לך מרווח בנוח.`;
+    }
+    results.push({ text, text_he: textHe, urgency: 3, novelty: novelty(k, memory), actionability: 2, uniqueness: 5, template_key: k });
+    rateLimitFired = true;
+  } else if (pct5 > 85) {
+    // Tier 4 — 5-HOUR ROLLING NEAR CAP: short rolling window hot, no weekly tier spoke.
+    const k = 'rate_limit_5h_rolling';
+    results.push({ text: `5-hour rolling window at ${pct5.toFixed(0)}% — close to the short-window cap; a short pause refills it.`, text_he: `חלון 5 השעות המתגלגל ב-${pct5.toFixed(0)}% — קרוב לתקרת החלון הקצר; הפסקה קצרה ממלאת אותו מחדש.`, urgency: 9, novelty: novelty(k, memory), actionability: 8, uniqueness: 10, template_key: k });
+    rateLimitFired = true;
+  }
+
+  if (!rateLimitFired && obs.is_peak && maxRl < 80) {
     const k = 'peak_rate_ok';
     results.push({ text: `Historical peak schedule is active in your custom tier. Budget: ${maxRl.toFixed(0)}% used. Use this as a local schedule cue, not a faster-drain warning.`, text_he: `לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: ${maxRl.toFixed(0)}% בשימוש. תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   }
@@ -671,4 +752,4 @@ async function run(mode) {
   } catch { return null; }
 }
 
-module.exports = { run, buildObservation, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak };
+module.exports = { run, buildObservation, buildInsights, pick, nextMilestone, novelty, computeTrendFields, detectIsPeak, parseResetAt };

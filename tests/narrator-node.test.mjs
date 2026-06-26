@@ -19,7 +19,7 @@ const narratorPath = path.join(repoRoot, 'narrator', 'narrator-node.js');
 const narratorCliPath = path.join(repoRoot, 'narrator', 'cli.js');
 
 // ── Import the pure functions exported from narrator-node.js ─────────────────
-const { buildObservation, buildInsights, pick, nextMilestone, novelty, computeTrendFields } =
+const { buildObservation, buildInsights, pick, nextMilestone, novelty, computeTrendFields, parseResetAt } =
   await import(narratorPath);
 
 import { createRequire } from 'node:module';
@@ -62,6 +62,9 @@ function makeObs(overrides = {}) {
       prompt_count: 0,
       rate_limit_5h_pct: 0,
       rate_limit_7d_pct: 0,
+      rate_limit_5h_resets_at: null,
+      rate_limit_7d_resets_at: null,
+      rate_limit_7d_hours_left: null,
       cost_delta_5m: 0,
       cost_delta_20m: 0,
       ctx_delta_5m: 0,
@@ -719,4 +722,143 @@ test('computeTrendFields: ignores observations outside tolerance window', () => 
   ];
   const result = computeTrendFields(rollingObs, now);
   assert.equal(result.cost_5m_ago, null, 'Should not match when > 180s from 5m target');
+});
+
+// ── Cycle-aware rate-limit tiers (parity with test_narrator_rate_limits.py) ──
+
+test('parseResetAt: parses Z-suffix and offset timestamps; null on bad input', () => {
+  const z = parseResetAt({ resets_at: '2026-06-11T12:00:00Z' });
+  const off = parseResetAt({ resets_at: '2026-06-11T12:00:00+00:00' });
+  assert.ok(z instanceof Date && off instanceof Date);
+  assert.equal(z.getTime(), off.getTime());
+  assert.equal(parseResetAt(null), null);
+  assert.equal(parseResetAt({}), null);
+  assert.equal(parseResetAt({ resets_at: 'null' }), null);
+  assert.equal(parseResetAt({ resets_at: 'not-a-date' }), null);
+  assert.equal(parseResetAt({ resets_at: 12345 }), null);
+});
+
+test('rate-limit tier (a): high 7d% early in cycle → ahead_of_pace (urgency 7)', () => {
+  const mem = emptyMem();
+  // 6 days left of 7 → pace ~14%; 60% used >> pace → ahead.
+  const obs = makeObs({ rate_limit_5h_pct: 20, rate_limit_7d_pct: 60, rate_limit_7d_hours_left: 6 * 24 });
+  const insights = buildInsights(obs, mem);
+  const keys = insights.map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_ahead_of_pace'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_high'));
+  const ahead = insights.find(i => i.template_key === 'rate_limit_ahead_of_pace');
+  assert.equal(ahead.urgency, 7); // firm, not alarmist
+  assert.ok(ahead.text.includes('ahead of an even'));
+  assert.ok(ahead.text_he && Array.from(ahead.text_he).some(c => c >= 'א' && c <= 'ת'));
+});
+
+test('rate-limit: AHEAD fires on any day, not just early (e.g. day 5)', () => {
+  const mem = emptyMem();
+  // 2 days left → pace ~71%. 88% used → ahead by ~17 (<90 so not near-cap).
+  const obs = makeObs({ rate_limit_5h_pct: 10, rate_limit_7d_pct: 88, rate_limit_7d_hours_left: 2 * 24 });
+  const keys = buildInsights(obs, mem).map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_ahead_of_pace'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_high'));
+});
+
+test('rate-limit tier (b): lowish 7d% on last day → headroom :) variant', () => {
+  const mem = emptyMem();
+  // 12h left → days_left=0.5; 40% used; pace ~93 so (pace-pct7)>=12.
+  const obs = makeObs({ rate_limit_5h_pct: 10, rate_limit_7d_pct: 40, rate_limit_7d_hours_left: 12 });
+  const insights = buildInsights(obs, mem);
+  const keys = insights.map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_headroom_near_reset'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_ahead_of_pace'));
+  const head = insights.find(i => i.template_key === 'rate_limit_headroom_near_reset');
+  assert.equal(head.urgency, 3); // gentle
+  assert.ok(head.text.includes('resets in') && head.text.includes('before it resets'));
+  assert.ok(head.text_he.includes(':)'));
+});
+
+test('rate-limit: BEHIND on a general day → calm phrasing (not :) variant)', () => {
+  const mem = emptyMem();
+  // 5 days left → pace ~29%. 10% used → behind by ~19.
+  const obs = makeObs({ rate_limit_5h_pct: 10, rate_limit_7d_pct: 10, rate_limit_7d_hours_left: 5 * 24 });
+  const insights = buildInsights(obs, mem);
+  const head = insights.find(i => i.template_key === 'rate_limit_headroom_near_reset');
+  assert.ok(head, `expected headroom insight, got: ${insights.map(i => i.template_key)}`);
+  assert.equal(head.urgency, 3);
+  assert.ok(head.text.includes('under an even weekly pace'));
+  assert.ok(!head.text.includes('before it resets'));
+});
+
+test('rate-limit: ON-PACE fires near the line (urgency 2)', () => {
+  const mem = emptyMem();
+  // 3.5 days left → pace 50%. 45% used → abs(45-50)=5<12, pct7>=20.
+  const obs = makeObs({ rate_limit_5h_pct: 10, rate_limit_7d_pct: 45, rate_limit_7d_hours_left: 3.5 * 24 });
+  const insights = buildInsights(obs, mem);
+  const keys = insights.map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_on_pace'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_ahead_of_pace'));
+  assert.ok(!keys.includes('rate_limit_headroom_near_reset'));
+  const onp = insights.find(i => i.template_key === 'rate_limit_on_pace');
+  assert.equal(onp.urgency, 2);
+  assert.ok(onp.text.includes('on an even weekly pace'));
+  assert.ok(onp.text_he);
+});
+
+test('rate-limit: ON-PACE stays silent when too early and pct7<20', () => {
+  const mem = emptyMem();
+  // 6 days left → pace ~14. 10% used: abs<12 but pct7<20 → no on-pace, no behind.
+  const obs = makeObs({ rate_limit_5h_pct: 10, rate_limit_7d_pct: 10, rate_limit_7d_hours_left: 6 * 24 });
+  const rl = buildInsights(obs, mem).map(i => i.template_key).filter(k => k.startsWith('rate_limit'));
+  assert.deepEqual(rl, []);
+});
+
+test('rate-limit tier (c): >=90% fires near-cap regardless of cycle', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ rate_limit_5h_pct: 30, rate_limit_7d_pct: 92, rate_limit_7d_hours_left: 3 * 24 });
+  const insights = buildInsights(obs, mem);
+  const keys = insights.map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_high'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_ahead_of_pace'));
+  assert.equal(insights.find(i => i.template_key === 'rate_limit_high').urgency, 10);
+});
+
+test('rate-limit tier (d): missing reset data → graceful old >80% fallback', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ rate_limit_5h_pct: 85, rate_limit_7d_pct: 10, rate_limit_7d_hours_left: null });
+  const insights = buildInsights(obs, mem);
+  const keys = insights.map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_high'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_ahead_of_pace'));
+  assert.ok(!keys.includes('rate_limit_headroom_near_reset'));
+  assert.ok(!keys.includes('rate_limit_on_pace'));
+});
+
+test('rate-limit 5h rolling tier fires in the weekly dead-band', () => {
+  const mem = emptyMem();
+  // 3 days left → pace ~57. pct7=70 → ahead by ~13: not on-pace (>=12), not
+  // AHEAD (<15), not behind. pct5=88 (>85, <90) → 5h rolling surfaces.
+  const obs = makeObs({ rate_limit_5h_pct: 88, rate_limit_7d_pct: 70, rate_limit_7d_hours_left: 3 * 24 });
+  const insights = buildInsights(obs, mem);
+  const keys = insights.map(i => i.template_key);
+  assert.ok(keys.includes('rate_limit_5h_rolling'), `got: ${keys}`);
+  assert.ok(!keys.includes('rate_limit_high'));
+  assert.ok(!keys.includes('rate_limit_ahead_of_pace'));
+  assert.ok(!keys.includes('rate_limit_on_pace'));
+  assert.ok(!keys.includes('rate_limit_headroom_near_reset'));
+  assert.equal(insights.find(i => i.template_key === 'rate_limit_5h_rolling').urgency, 9);
+});
+
+test('rate-limit tiers are mutually exclusive (near-cap wins precedence)', () => {
+  const mem = emptyMem();
+  const obs = makeObs({ rate_limit_5h_pct: 95, rate_limit_7d_pct: 92, rate_limit_7d_hours_left: 12 });
+  const insights = buildInsights(obs, mem);
+  const rl = insights.map(i => i.template_key).filter(k => k.startsWith('rate_limit'));
+  assert.equal(rl.length, 1);
+  assert.equal(rl[0], 'rate_limit_high');
+});
+
+test('rate-limit: 12–15 slightly-ahead dead-band emits no tier', () => {
+  const mem = emptyMem();
+  // 3 days left → pace ~57. pct7=70 → ahead by ~13: between on-pace and AHEAD.
+  const obs = makeObs({ rate_limit_5h_pct: 30, rate_limit_7d_pct: 70, rate_limit_7d_hours_left: 3 * 24 });
+  const rl = buildInsights(obs, mem).map(i => i.template_key).filter(k => k.startsWith('rate_limit'));
+  assert.deepEqual(rl, []);
 });

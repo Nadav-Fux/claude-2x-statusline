@@ -232,9 +232,30 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
                 template_key=key,
             ))
 
-    # ── Rate limit > 80 % ─────────────────────────────────────────────────────
-    max_rl = max(obs.rate_limit_5h_pct, obs.rate_limit_7d_pct)
-    if max_rl > 80:
+    # ── Rate limit (cycle-aware tiers) ────────────────────────────────────────
+    # The 7-day weekly window has a "day in the cycle" concept: 30% used on day 1
+    # is very different from 30% on day 6. We position the current utilisation
+    # against the EVEN pace you'd expect by now (elapsed fraction of the 7 days).
+    # The 5-hour window is a rolling window (no day concept) — it only gets the
+    # blunt near-cap tier. Tiers are mutually exclusive, evaluated in precedence.
+    pct5 = obs.rate_limit_5h_pct
+    pct7 = obs.rate_limit_7d_pct
+    max_rl = max(pct5, pct7)
+    hours_left = obs.rate_limit_7d_hours_left  # None when no reset data
+    if hours_left is not None:
+        days_left = hours_left / 24.0
+        elapsed_frac = max(0.0, min(1.0, 1.0 - days_left / 7.0))
+        pace = elapsed_frac * 100.0
+    else:
+        days_left = None
+        pace = None
+
+    rate_limit_fired = False
+
+    # Tier 1 — NEAR CAP: the safety net, regardless of where we are in the cycle.
+    # Fires at >=90% on either window, OR (when we have no reset data to reason
+    # about the cycle) the old >80% behaviour.
+    if max_rl >= 90 or (hours_left is None and max_rl > 80):
         key = "rate_limit_high"
         results.append(Insight(
             text=f"Rate limit at {max_rl:.0f}% — close to cap. Plan break before compact.",
@@ -245,9 +266,115 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             uniqueness=10,
             template_key=key,
         ))
+        rate_limit_fired = True
+
+    # Tier 2 — AHEAD OF PACE (firm, not alarmist): meaningful 7-day usage, still
+    # at least a day from reset, and running notably hotter than the even pace
+    # line (100%/7d ≈ 14.3%/day) → on track to cap out before reset. Generalised
+    # to ANY day in the cycle, not just early.
+    elif (hours_left is not None and pct7 >= 40 and days_left >= 1.0
+          and (pct7 - pace) >= 15):
+        key = "rate_limit_ahead_of_pace"
+        results.append(Insight(
+            text=(
+                f"Weekly cap {pct7:.0f}% used with ~{days_left:.0f}d to reset — ahead of an "
+                f"even {pace:.0f}% pace. Ease off or you'll cap out before reset."
+            ),
+            text_he=(
+                f"מכסת השבוע ב-{pct7:.0f}% ונשארו ~{days_left:.0f} ימים לאיפוס — "
+                f"אתה לפני הקצב ({pace:.0f}%). תוריד הילוך, אחרת תיגמר לפני האיפוס."
+            ),
+            urgency=7,
+            novelty=_novelty(key, memory),
+            actionability=8,
+            uniqueness=10,
+            template_key=key,
+        ))
+        rate_limit_fired = True
+
+    # ON-PACE (neutral, lowest urgency): tracking roughly along the even line.
+    # Just a calm "you're fine" cue — must be rare (low urgency + novelty
+    # cooldown) so it never nags. Sits between AHEAD and BEHIND in precedence.
+    elif (hours_left is not None and abs(pct7 - pace) < 12 and pct7 >= 20):
+        headroom = 100.0 - pct7
+        key = "rate_limit_on_pace"
+        results.append(Insight(
+            text=(
+                f"Tracking right on an even weekly pace — ~{days_left:.0f}d and "
+                f"~{headroom:.0f}% left."
+            ),
+            text_he=(
+                f"אתה בדיוק על הקצב השבועי האחיד — נשארו ~{days_left:.0f} ימים "
+                f"ו-~{headroom:.0f}% מהמכסה."
+            ),
+            urgency=2,
+            novelty=_novelty(key, memory),
+            actionability=2,
+            uniqueness=5,
+            template_key=key,
+        ))
+        rate_limit_fired = True
+
+    # BEHIND / HEADROOM (gentle, encouraging): under the even pace line on ANY
+    # day → plenty of unused budget. Low urgency + novelty cooldown so it speaks
+    # occasionally, never nags. Two phrasings: a calm general one, and a punchier
+    # "use it before it resets" on the last day.
+    elif (hours_left is not None and (pace - pct7) >= 12
+          and (100.0 - pct7) >= 12):
+        headroom = 100.0 - pct7
+        key = "rate_limit_headroom_near_reset"
+        if days_left <= 1.0:
+            text = (
+                f"Weekly cap resets in ~{hours_left:.0f}h and you're only at {pct7:.0f}% — "
+                f"~{headroom:.0f}% headroom left; put it to use before it resets."
+            )
+            text_he = (
+                f"מכסת השבוע מתאפסת בעוד ~{hours_left:.0f} שעות ואתה רק ב-{pct7:.0f}% — "
+                f"נשאר ~{headroom:.0f}% מרווח, נצל אותו עד הסוף לפני האיפוס. :)"
+            )
+        else:
+            text = (
+                f"You're under an even weekly pace — ~{pace:.0f}% expected by now, you're "
+                f"at {pct7:.0f}%. ~{days_left:.0f}d to reset, plenty of headroom."
+            )
+            text_he = (
+                f"אתה מתחת לקצב השבועי האחיד — היו אמורים ~{pace:.0f}% עד עכשיו ואתה "
+                f"ב-{pct7:.0f}%. נשארו ~{days_left:.0f} ימים לאיפוס, יש לך מרווח בנוח."
+            )
+        results.append(Insight(
+            text=text,
+            text_he=text_he,
+            urgency=3,
+            novelty=_novelty(key, memory),
+            actionability=2,
+            uniqueness=5,
+            template_key=key,
+        ))
+        rate_limit_fired = True
+
+    # Tier 4 — 5-HOUR ROLLING NEAR CAP: the short rolling window is hot and none
+    # of the weekly tiers above already spoke. A short pause refills it.
+    elif pct5 > 85:
+        key = "rate_limit_5h_rolling"
+        results.append(Insight(
+            text=(
+                f"5-hour rolling window at {pct5:.0f}% — close to the short-window cap; "
+                f"a short pause refills it."
+            ),
+            text_he=(
+                f"חלון 5 השעות המתגלגל ב-{pct5:.0f}% — קרוב לתקרת החלון הקצר; "
+                f"הפסקה קצרה ממלאת אותו מחדש."
+            ),
+            urgency=9,
+            novelty=_novelty(key, memory),
+            actionability=8,
+            uniqueness=10,
+            template_key=key,
+        ))
+        rate_limit_fired = True
 
     # ── Peak hours + rate limit < 80 % ───────────────────────────────────────
-    elif obs.is_peak and max_rl < 80:
+    if not rate_limit_fired and obs.is_peak and max_rl < 80:
         key = "peak_rate_ok"
         results.append(Insight(
             text=f"Historical peak schedule is active in your custom tier. Budget: {max_rl:.0f}% used. "

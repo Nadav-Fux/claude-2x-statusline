@@ -16,6 +16,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,13 @@ class Observation:
     # Rate limits (0–100 %)
     rate_limit_5h_pct: float = 0.0
     rate_limit_7d_pct: float = 0.0
+
+    # Rate-limit reset times (parsed datetimes; None when absent/malformed) and a
+    # derived "hours until the 7-day weekly window resets". These let the rate-limit
+    # insight reason about WHERE we are in the reset cycle, not just the raw %.
+    rate_limit_5h_resets_at: Optional[datetime] = None
+    rate_limit_7d_resets_at: Optional[datetime] = None
+    rate_limit_7d_hours_left: Optional[float] = None  # hours until weekly reset
 
     # Trend fields (delta vs 5 min ago and 20 min ago from rolling_observations)
     cost_delta_5m: float = 0.0
@@ -297,6 +305,29 @@ def _safe_utilization(block) -> float:
         return 0.0
 
 
+def _parse_reset_at(block) -> Optional[datetime]:
+    """Parse a usage-cache window block's ``resets_at`` to a tz-aware datetime.
+
+    Mirrors the engine's _format_reset parsing (fromisoformat with the trailing
+    'Z' rewritten to '+00:00', since Python 3.9's fromisoformat rejects 'Z').
+    Returns None when the block is the wrong shape, the field is missing/null,
+    or the timestamp is malformed — never raises.
+    """
+    if not isinstance(block, dict):
+        return None
+    iso = block.get("resets_at")
+    if not iso or not isinstance(iso, str) or iso == "null":
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    # Normalise to tz-aware UTC so the hours-left math below is unambiguous.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _latest_sample(state: dict) -> Optional[dict]:
     samples = state.get("samples", [])
     if not samples:
@@ -363,8 +394,21 @@ def build(memory: dict) -> Observation:
 
     usage_cache = _load_usage_cache()
     if usage_cache:
-        obs.rate_limit_5h_pct = _safe_utilization(usage_cache.get("five_hour"))
-        obs.rate_limit_7d_pct = _safe_utilization(usage_cache.get("seven_day"))
+        five_hour = usage_cache.get("five_hour")
+        seven_day = usage_cache.get("seven_day")
+        obs.rate_limit_5h_pct = _safe_utilization(five_hour)
+        obs.rate_limit_7d_pct = _safe_utilization(seven_day)
+
+        # Reset times → cycle-awareness for the rate-limit insight. Use the same
+        # "now" source (time.time()) the rest of build() uses so tests can
+        # monkeypatch observations.time.time against a fixed resets_at.
+        obs.rate_limit_5h_resets_at = _parse_reset_at(five_hour)
+        obs.rate_limit_7d_resets_at = _parse_reset_at(seven_day)
+        if obs.rate_limit_7d_resets_at is not None:
+            secs_left = obs.rate_limit_7d_resets_at.timestamp() - now
+            # Clamp negatives to 0 (a reset that has just passed = 0h left), so
+            # the cycle math never produces a nonsense elapsed_frac > 1.
+            obs.rate_limit_7d_hours_left = max(0.0, secs_left / 3600.0)
 
     # ── rolling_state samples ────────────────────────────────────────────────
     try:
