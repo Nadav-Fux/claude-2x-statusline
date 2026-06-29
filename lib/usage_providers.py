@@ -40,7 +40,7 @@ def unavailable(provider):
     }
 
 
-def _usage_window(used_pct, resets_at):
+def _usage_window(used_pct, resets_at, label=None):
     try:
         pct = max(0.0, min(100.0, float(used_pct)))
     except (TypeError, ValueError):
@@ -51,7 +51,24 @@ def _usage_window(used_pct, resets_at):
             reset = int(resets_at)
         except (TypeError, ValueError):
             reset = None
-    return {"used_pct": pct, "resets_at": reset}
+    window = {"used_pct": pct, "resets_at": reset}
+    clean_label = str(label).strip() if label is not None else ""
+    if clean_label:
+        window["label"] = clean_label
+    return window
+
+
+def _codex_window_label(window_minutes, fallback):
+    try:
+        mins = float(window_minutes)
+    except (TypeError, ValueError):
+        return fallback
+    if mins <= 360:
+        return "5h"
+    if mins >= 10080:
+        return "7d"
+    hours = mins / 60.0
+    return f"{int(hours) if hours.is_integer() else round(hours, 1)}h"
 
 
 def _number_or_zero(value):
@@ -117,9 +134,10 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
         }
     ]
 
-    for window_label, window in (("5h", record.get("five_hour")), ("7d", record.get("weekly"))):
+    for fallback_label, window in (("5h", record.get("five_hour")), ("7d", record.get("weekly"))):
         if not isinstance(window, dict):
             continue
+        window_label = str(window.get("label") or "").strip() or fallback_label
         pct = max(0, min(100, int(round(_number_or_zero(window.get("used_pct"))))))
         parts.append(
             {
@@ -202,8 +220,16 @@ def normalize_codex_token_count_event(event, stale_seconds=None, now=None):
     rate_limits = payload.get("rate_limits") or {}
     primary = rate_limits.get("primary") or {}
     secondary = rate_limits.get("secondary") or {}
-    five_hour = _usage_window(primary.get("used_percent"), primary.get("resets_at"))
-    weekly = _usage_window(secondary.get("used_percent"), secondary.get("resets_at"))
+    five_hour = _usage_window(
+        primary.get("used_percent"),
+        primary.get("resets_at"),
+        _codex_window_label(primary.get("window_minutes"), "5h"),
+    )
+    weekly = _usage_window(
+        secondary.get("used_percent"),
+        secondary.get("resets_at"),
+        _codex_window_label(secondary.get("window_minutes"), "7d"),
+    )
 
     info = payload.get("info") or {}
     tokens = info.get("total_token_usage")
@@ -300,11 +326,10 @@ def parse_glm_quota_response(data, stale_seconds=None):
                 reset = int(round(float(item.get("nextResetTime")) / 1000.0))
             except (TypeError, ValueError):
                 reset = None
-        window = _usage_window(item.get("percentage"), reset)
         if item.get("type") == "TIME_LIMIT":
-            five_hour = window
+            five_hour = _usage_window(item.get("percentage"), reset, "5h")
         elif item.get("type") == "TOKENS_LIMIT":
-            weekly = window
+            weekly = _usage_window(item.get("percentage"), reset, "tok")
 
     record = unavailable("glm")
     record.update(
@@ -537,6 +562,160 @@ def get_droid_usage(config=None):
         return unavailable("droid")
 
 
+def _finite_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _decode_antigravity_value(value):
+    try:
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            return json.loads(text)
+        if isinstance(value, (dict, list)):
+            return value
+    except Exception:
+        pass
+    return None
+
+
+def _normalize_antigravity_reset(value):
+    if value is None or value == "":
+        return None
+    number = _finite_number(value)
+    if number is not None:
+        seconds = number / 1000.0 if number > 100_000_000_000 else number
+        return int(seconds)
+    try:
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except Exception:
+        return None
+
+
+def _find_antigravity_reset(obj):
+    if not isinstance(obj, dict):
+        return None
+    for key in ("resetsAt", "resets_at", "resetAt", "nextResetTime", "nextResetAt", "nextReset", "resetTime"):
+        reset = _normalize_antigravity_reset(obj.get(key))
+        if reset is not None:
+            return reset
+    return None
+
+
+def _antigravity_pct(obj):
+    if not isinstance(obj, dict):
+        return None
+    for key in ("usedPercent", "used_percent", "percentage", "percent", "pct", "usedPercentage", "usedPct"):
+        pct = _finite_number(obj.get(key))
+        if pct is not None:
+            return pct
+    used = _finite_number(obj.get("used"))
+    remaining = _finite_number(obj.get("remaining"))
+    limit = _finite_number(obj.get("limit"))
+    if used is not None and limit is not None and limit > 0:
+        return (used / limit) * 100.0
+    if remaining is not None and limit is not None and limit > 0:
+        return ((limit - remaining) / limit) * 100.0
+    if used is not None and 0 <= used <= 100:
+        return used
+    return None
+
+
+def _classify_antigravity_window(path_parts, obj):
+    hints = [str(part or "") for part in path_parts]
+    if isinstance(obj, dict):
+        for key in ("type", "window", "period", "scope", "name", "limitType"):
+            if obj.get(key) is not None:
+                hints.append(str(obj.get(key)))
+    text = " ".join(hints).lower()
+    if "weekly" in text or re.search(r"\b(week|seven|7d|wk)\b", text):
+        return "weekly"
+    if (
+        "sprint" in text
+        or "five_hour" in text
+        or "five-hour" in text
+        or "five hour" in text
+        or "fivehour" in text
+        or "time_limit" in text
+        or "time-limit" in text
+        or "time limit" in text
+        or re.search(r"\b5h\b", text)
+    ):
+        return "five_hour"
+    return None
+
+
+def _find_antigravity_windows(value, path_parts=None):
+    if path_parts is None:
+        path_parts = []
+    found = {"five_hour": None, "weekly": None}
+    if isinstance(value, list):
+        for item in value:
+            child = _find_antigravity_windows(item, path_parts)
+            if found["five_hour"] is None and child.get("five_hour"):
+                found["five_hour"] = child["five_hour"]
+            if found["weekly"] is None and child.get("weekly"):
+                found["weekly"] = child["weekly"]
+        return found
+    if not isinstance(value, dict):
+        return found
+
+    pct = _antigravity_pct(value)
+    kind = _classify_antigravity_window(path_parts, value) if pct is not None else None
+    if kind:
+        found[kind] = _usage_window(pct, _find_antigravity_reset(value), "wk" if kind == "weekly" else "5h")
+
+    for key, child_value in value.items():
+        if not isinstance(child_value, (dict, list)):
+            continue
+        child = _find_antigravity_windows(child_value, [*path_parts, key])
+        if found["five_hour"] is None and child.get("five_hour"):
+            found["five_hour"] = child["five_hour"]
+        if found["weekly"] is None and child.get("weekly"):
+            found["weekly"] = child["weekly"]
+    return found
+
+
+def parse_antigravity_item_table(rows):
+    try:
+        if not isinstance(rows, (list, tuple)):
+            return unavailable("antigravity")
+        five_hour = None
+        weekly = None
+        for row in rows:
+            if isinstance(row, dict):
+                key = row.get("key")
+                raw_value = row.get("value")
+            elif isinstance(row, (list, tuple)) and len(row) >= 2:
+                key, raw_value = row[0], row[1]
+            else:
+                continue
+            value = _decode_antigravity_value(raw_value)
+            if value is None:
+                continue
+            found = _find_antigravity_windows(value, [key])
+            if five_hour is None and found.get("five_hour"):
+                five_hour = found["five_hour"]
+            if weekly is None and found.get("weekly"):
+                weekly = found["weekly"]
+        if five_hour is None and weekly is None:
+            return unavailable("antigravity")
+        record = unavailable("antigravity")
+        record.update({"available": True, "five_hour": five_hour, "weekly": weekly})
+        return record
+    except Exception:
+        return unavailable("antigravity")
+
+
 def _antigravity_db_path():
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
@@ -549,15 +728,22 @@ def _antigravity_db_path():
 
 def get_antigravity_usage(config=None):
     try:
-        db_path = _antigravity_db_path()
+        if isinstance(config, dict) and (config.get("db_path") or config.get("path")):
+            db_path = Path(config.get("db_path") or config.get("path"))
+        else:
+            db_path = _antigravity_db_path()
         if not db_path.exists():
             return unavailable("antigravity")
-        try:
-            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.5) as conn:
-                conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
-        except Exception:
-            pass
-        return unavailable("antigravity")
+        patterns = ("%antigravity%", "%usage%", "%quota%", "%limit%", "%credit%", "%ratelimit%")
+        where = " OR ".join("LOWER(key) LIKE ?" for _ in patterns)
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.5) as conn:
+            rows = [
+                {"key": key, "value": value}
+                for key, value in conn.execute(
+                    f"SELECT key, value FROM ItemTable WHERE {where}", [pattern.lower() for pattern in patterns]
+                ).fetchall()
+            ]
+        return parse_antigravity_item_table(rows)
     except Exception:
         return unavailable("antigravity")
 

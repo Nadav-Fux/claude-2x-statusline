@@ -19,8 +19,10 @@ test('codex fixture maps rate limits', () => {
   assert.equal(record.available, true);
   assert.equal(record.five_hour.used_pct, 47);
   assert.equal(record.five_hour.resets_at, 1782536836);
+  assert.equal(record.five_hour.label, '5h');
   assert.equal(record.weekly.used_pct, 10);
   assert.equal(record.weekly.resets_at, 1783029435);
+  assert.equal(record.weekly.label, '7d');
   assert.equal(record.plan, 'team');
 });
 
@@ -32,9 +34,14 @@ test('glm fixture maps quota limits', () => {
   assert.equal(record.available, true);
   assert.equal(record.five_hour.used_pct, 0);
   assert.ok(Math.abs(record.five_hour.resets_at - 1783532012) <= 1);
+  assert.equal(record.five_hour.label, '5h');
   assert.equal(record.weekly.used_pct, 99);
   assert.ok(Math.abs(record.weekly.resets_at - 1782782126) <= 1);
+  assert.equal(record.weekly.label, 'tok');
   assert.equal(record.plan, 'lite');
+
+  const row = providers.formatProviderRowParts(record, 1_000);
+  assert.equal(row.parts.find(part => part.kind === 'window' && part.pct === 99).label, 'tok');
 });
 
 test('provider row parts include reset countdown and stale marker', () => {
@@ -52,6 +59,49 @@ test('provider row parts include reset countdown and stale marker', () => {
   assert.equal(row.parts[0].label, 'Codex  ');
   assert.equal(row.parts[1].resetText, '\u27f3 2h 13m');
   assert.equal(row.staleText, ' \u00b7stale');
+});
+
+test('provider row parts prefer per-window labels', () => {
+  const row = providers.formatProviderRowParts({
+    provider: 'antigravity',
+    label: 'Antigravity',
+    available: true,
+    five_hour: { used_pct: 40, resets_at: null, label: '5h' },
+    weekly: { used_pct: 12, resets_at: null, label: 'wk' },
+    plan: null,
+    tokens: null,
+    stale_seconds: 0,
+  }, 1_000);
+
+  assert.equal(row.parts[1].label, '5h');
+  assert.equal(row.parts[2].label, 'wk');
+});
+
+test('antigravity parser maps sprint and weekly windows', () => {
+  const record = providers.parseAntigravityItemTable([
+    {
+      key: 'antigravity.usage',
+      value: '{"sprint":{"usedPercent":40,"resetsAt":1790000000},"weekly":{"usedPercent":12}}',
+    },
+  ]);
+
+  assert.equal(record.available, true);
+  assert.equal(record.five_hour.used_pct, 40);
+  assert.equal(record.five_hour.resets_at, 1790000000);
+  assert.equal(record.five_hour.label, '5h');
+  assert.equal(record.weekly.used_pct, 12);
+  assert.equal(record.weekly.resets_at, null);
+  assert.equal(record.weekly.label, 'wk');
+});
+
+test('antigravity parser returns unavailable for junk rows', () => {
+  const record = providers.parseAntigravityItemTable([
+    { key: 'antigravity.usage', value: 'not json' },
+    { key: 'other', value: '{"hello":"world"}' },
+  ]);
+
+  assert.equal(record.provider, 'antigravity');
+  assert.equal(record.available, false);
 });
 
 test('provider row parts omit past reset countdown', () => {
