@@ -69,14 +69,13 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 # ══════════════════════════════════════════════════════════════════════════════
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
-# "standard" and "full" share an identical segment list — this is intentional.
-# Both tiers render the same line 1 segments. The difference is that "full" mode
+# "standard" and "full" mostly share line 1 segments; full also includes churn.
+# Full mode
 # triggers 3 additional output lines in the render loop (see main(), ~lines 1110-1122):
 #   line 2 — timeline bar       (build_timeline, guarded by show_timeline feature flag
 #                                 and off-peak-day check)
 #   line 3 — rate_limits bars   (build_rate_limits_line)
 #   line 4 — burn/cache metrics (build_metrics_line)
-# Do NOT alter the segment lists below; behaviour diverges only at render time.
 TIER_PRESETS = {
     # Minimal: essentials only — model, compact context, rate limit %, git.
     # workflows is included so an active/idle workflow spend never vanishes on a
@@ -85,7 +84,7 @@ TIER_PRESETS = {
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
     "standard": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
+    "full": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "churn", "cost", "usage_credits", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -600,6 +599,26 @@ def git_cmd(*args, timeout=2):
         return ""
 
 
+def parse_git_shortstat(text):
+    text = str(text or "")
+
+    def read(pattern):
+        match = re.search(pattern, text)
+        return int(match.group(1)) if match else 0
+
+    return {
+        "insertions": read(r"(\d+)\s+insertions?\(\+\)"),
+        "deletions": read(r"(\d+)\s+deletions?\(-\)"),
+        "files": read(r"(\d+)\s+files?\s+changed"),
+    }
+
+
+def _repo_cwd(ctx):
+    stdin = (ctx or {}).get("stdin") or {}
+    workspace = stdin.get("workspace") if isinstance(stdin.get("workspace"), dict) else {}
+    return str(stdin.get("cwd") or workspace.get("current_dir") or os.getcwd())
+
+
 def fmt_hour(h):
     """Format a float hour (e.g. 15.0) as '3:00pm'."""
     h = h % 24
@@ -850,6 +869,13 @@ def seg_git_dirty(ctx):
         return f"{YELLOW}{uncommitted} unsaved{RST}"
     else:
         return f"{YELLOW}{unpushed} unpushed{RST}"
+
+
+def seg_churn(ctx):
+    stats = parse_git_shortstat(git_cmd("-C", _repo_cwd(ctx), "diff", "--shortstat", "HEAD"))
+    if not stats["files"] and not stats["insertions"] and not stats["deletions"]:
+        return ""
+    return f"{DIM}{BLUE}\u0394 +{stats['insertions']} \u2212{stats['deletions']} \u00b7 {stats['files']}f{RST}"
 
 
 def seg_git_ahead_behind(ctx):
@@ -1447,31 +1473,21 @@ def build_rate_limits_line(ctx):
     return line
 
 
-def _external_token_total(tokens):
-    if not isinstance(tokens, dict):
-        return 0
-    for key in ("total", "total_tokens", "totalTokens"):
-        value = _as_float(tokens.get(key))
-        if value > 0:
-            return value
-    return (
-        _as_float(tokens.get("input"))
-        + _as_float(tokens.get("output"))
-        + _as_float(tokens.get("input_tokens"))
-        + _as_float(tokens.get("output_tokens"))
-        + _as_float(tokens.get("cache_read"))
-        + _as_float(tokens.get("cache_creation"))
-        + _as_float(tokens.get("cached_input_tokens"))
-        + _as_float(tokens.get("reasoning_output_tokens"))
-        + _as_float(tokens.get("thinking"))
-    )
-
-
-def _external_window_part(label, window):
-    if not isinstance(window, dict):
-        return ""
-    pct = int(round(_as_float(window.get("used_pct"))))
-    return f"{WHITE}{label}{RST} {build_usage_bar(pct)} {color_for_pct(pct)}{pct:3d}%{RST}"
+def _render_external_provider_parts(row):
+    chunks = []
+    for part in row.get("parts") or []:
+        kind = part.get("kind")
+        if kind == "label":
+            plan = f"{DIM} {part.get('plan')}{RST}" if part.get("plan") else ""
+            chunks.append(f"{WHITE}{part.get('label', '')}{RST}{plan}")
+        elif kind == "window":
+            pct = int(part.get("pct") or 0)
+            reset = f" {DIM}{part.get('reset_text')}{RST}" if part.get("reset_text") else ""
+            chunks.append(f"{WHITE}{part.get('label')}{RST} {build_usage_bar(pct)} {color_for_pct(pct)}{pct:3d}%{RST}{reset}")
+        elif kind == "tokens":
+            chunks.append(f"{DIM}tokens{RST} {WHITE}{_fmt_tokens(int(part.get('total') or 0))}{RST}")
+    stale = f"{DIM}{row.get('stale_text')}{RST}" if row.get("stale_text") else ""
+    return f"{'  '.join(chunks)}{stale}"
 
 
 def build_external_usage_lines(ctx):
@@ -1483,26 +1499,24 @@ def build_external_usage_lines(ctx):
     except Exception:
         return ""
 
-    lines = []
+    now_sec = time.time()
+    candidates = []
     for record in records:
         try:
-            if not isinstance(record, dict) or not record.get("available"):
-                continue
-            parts = [
-                f"{WHITE}{record.get('label') or record.get('provider')}{RST}"
-                f"{DIM + ' ' + str(record.get('plan')) + RST if record.get('plan') else ''}"
-            ]
-            five_hour = _external_window_part("5h", record.get("five_hour"))
-            weekly = _external_window_part("7d", record.get("weekly"))
-            if five_hour:
-                parts.append(five_hour)
-            if weekly:
-                parts.append(weekly)
-            total = _external_token_total(record.get("tokens"))
-            if not five_hour and not weekly and total > 0:
-                parts.append(f"{DIM}tokens{RST} {WHITE}{_fmt_tokens(int(total))}{RST}")
-            if len(parts) > 1:
-                lines.append(render_dashboard_line(["  ".join(parts)], ctx.get("render_width", 0)))
+            row = _usage_providers.format_provider_row_parts(record, now_sec)
+            if row:
+                candidates.append((record, row.get("label") or ""))
+        except Exception:
+            pass
+    label_width = max((len(label) for _, label in candidates), default=0)
+    lines = []
+    for record, _ in candidates:
+        try:
+            row = _usage_providers.format_provider_row_parts(
+                record, now_sec, label_width=label_width, format_duration=fmt_duration
+            )
+            if row:
+                lines.append(render_dashboard_line([_render_external_provider_parts(row)], ctx.get("render_width", 0)))
         except Exception:
             pass
     return "\n".join(lines)
@@ -1691,6 +1705,7 @@ SEGMENTS = {
     "tasks": seg_tasks,
     "git_branch": seg_git_branch,
     "git_dirty": seg_git_dirty,
+    "churn": seg_churn,
     "git_ahead_behind": seg_git_ahead_behind,
     "cost": seg_cost,
     "duration": seg_duration,
@@ -1797,7 +1812,7 @@ def main():
             continue
         r = _run_segment(name, fn, ctx)
         if r:
-            if name in ("git_branch", "git_dirty", "git_ahead_behind"):
+            if name in ("git_branch", "git_dirty", "git_ahead_behind", "churn"):
                 git_parts.append(r)
             else:
                 parts.append(r)

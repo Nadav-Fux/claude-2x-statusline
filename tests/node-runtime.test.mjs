@@ -4,12 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
+const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const nodeEnginePath = path.join(repoRoot, 'engines', 'node-engine.js');
 const narratorHookPath = path.join(repoRoot, 'hooks', 'narrator-session-start.sh');
 const narratorCliPath = path.join(repoRoot, 'narrator', 'cli.js');
+const { parseGitShortstat } = require(nodeEnginePath);
 
 function makeHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-node-'));
@@ -130,6 +133,22 @@ test('node engine skips heartbeat when STATUSLINE_DISABLE_TELEMETRY is set', () 
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('parseGitShortstat parses empty and partial shortstat output', () => {
+  assert.deepEqual(parseGitShortstat(''), { insertions: 0, deletions: 0, files: 0 });
+  assert.deepEqual(
+    parseGitShortstat(' 7 files changed, 420 insertions(+), 110 deletions(-)'),
+    { insertions: 420, deletions: 110, files: 7 },
+  );
+  assert.deepEqual(
+    parseGitShortstat(' 1 file changed, 3 insertions(+)'),
+    { insertions: 3, deletions: 0, files: 1 },
+  );
+  assert.deepEqual(
+    parseGitShortstat(' 2 files changed, 9 deletions(-)'),
+    { insertions: 0, deletions: 9, files: 2 },
+  );
 });
 
 test('node narrator output is framed as statusline text', () => {

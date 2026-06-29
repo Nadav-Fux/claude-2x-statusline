@@ -37,6 +37,39 @@ test('glm fixture maps quota limits', () => {
   assert.equal(record.plan, 'lite');
 });
 
+test('provider row parts include reset countdown and stale marker', () => {
+  const row = providers.formatProviderRowParts({
+    provider: 'codex',
+    label: 'Codex',
+    available: true,
+    five_hour: { used_pct: 60, resets_at: 1_000 + 133 * 60 },
+    weekly: null,
+    plan: 'team',
+    tokens: null,
+    stale_seconds: 1_200,
+  }, 1_000, { labelWidth: 7 });
+
+  assert.equal(row.parts[0].label, 'Codex  ');
+  assert.equal(row.parts[1].resetText, '\u27f3 2h 13m');
+  assert.equal(row.staleText, ' \u00b7stale');
+});
+
+test('provider row parts omit past reset countdown', () => {
+  const row = providers.formatProviderRowParts({
+    provider: 'glm',
+    label: 'GLM',
+    available: true,
+    five_hour: { used_pct: 0, resets_at: 999 },
+    weekly: null,
+    plan: 'lite',
+    tokens: null,
+    stale_seconds: 0,
+  }, 1_000);
+
+  assert.equal(row.parts[1].resetText, '');
+  assert.equal(row.staleText, '');
+});
+
 test('providers gracefully return unavailable without home data', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-providers-'));
   const oldHome = process.env.HOME;

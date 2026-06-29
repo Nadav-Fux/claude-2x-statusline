@@ -54,6 +54,94 @@ def _usage_window(used_pct, resets_at):
     return {"used_pct": pct, "resets_at": reset}
 
 
+def _number_or_zero(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if number == number and number not in (float("inf"), float("-inf")) else 0.0
+
+
+def _default_format_duration(total_mins):
+    total_mins = max(0, int(_number_or_zero(total_mins)))
+    h, m = divmod(total_mins, 60)
+    return f"{h}h {m:02d}m" if h > 0 else f"{m}m"
+
+
+def _provider_token_total(tokens):
+    if not isinstance(tokens, dict):
+        return 0
+    for key in ("total", "total_tokens", "totalTokens"):
+        value = _number_or_zero(tokens.get(key))
+        if value > 0:
+            return value
+    return (
+        _number_or_zero(tokens.get("input"))
+        + _number_or_zero(tokens.get("output"))
+        + _number_or_zero(tokens.get("input_tokens"))
+        + _number_or_zero(tokens.get("output_tokens"))
+        + _number_or_zero(tokens.get("cache_read"))
+        + _number_or_zero(tokens.get("cache_creation"))
+        + _number_or_zero(tokens.get("cached_input_tokens"))
+        + _number_or_zero(tokens.get("reasoning_output_tokens"))
+        + _number_or_zero(tokens.get("thinking"))
+    )
+
+
+def _reset_countdown(resets_at, now_sec, format_duration):
+    reset = _number_or_zero(resets_at)
+    now = _number_or_zero(now_sec)
+    if reset <= now:
+        return ""
+    mins = int((reset - now) // 60)
+    return f"\u27f3 {format_duration(mins)}"
+
+
+def format_provider_row_parts(record, now_sec=None, label_width=0, format_duration=None):
+    if not isinstance(record, dict) or not record.get("available"):
+        return None
+    if now_sec is None:
+        now_sec = time.time()
+    if format_duration is None:
+        format_duration = _default_format_duration
+
+    label = str(record.get("label") or record.get("provider") or "").strip() or "provider"
+    width = max(0, int(_number_or_zero(label_width)))
+    padded_label = label + (" " * max(0, width - len(label)))
+    parts = [
+        {
+            "kind": "label",
+            "label": padded_label,
+            "raw_label": label,
+            "plan": str(record.get("plan")) if record.get("plan") else "",
+        }
+    ]
+
+    for window_label, window in (("5h", record.get("five_hour")), ("7d", record.get("weekly"))):
+        if not isinstance(window, dict):
+            continue
+        pct = max(0, min(100, int(round(_number_or_zero(window.get("used_pct"))))))
+        parts.append(
+            {
+                "kind": "window",
+                "label": window_label,
+                "pct": pct,
+                "reset_text": _reset_countdown(window.get("resets_at"), now_sec, format_duration),
+            }
+        )
+
+    has_window = any(part.get("kind") == "window" for part in parts)
+    token_total = _provider_token_total(record.get("tokens"))
+    if not has_window and token_total > 0:
+        parts.append({"kind": "tokens", "total": token_total})
+    if len(parts) <= 1:
+        return None
+
+    stale_seconds = record.get("stale_seconds")
+    stale = stale_seconds is not None and _number_or_zero(stale_seconds) > 600
+    return {"label": label, "parts": parts, "stale": stale, "stale_text": " \u00b7stale" if stale else ""}
+
+
 def _parse_iso_seconds(value):
     if not value:
         return None

@@ -31,7 +31,7 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 const TIER_PRESETS = {
   minimal: ['model', 'gateway', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
   standard: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
+  full: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'churn', 'cost', 'usage_credits', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -179,6 +179,25 @@ function git(...args) { try { return execFileSync('git', args, { timeout: 2000, 
 function fmtTokens(n) { return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.floor(n/1e3)}K` : String(n); }
 function toNum(value, fallback = 0) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }
 function localDateStr(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+
+function parseGitShortstat(text) {
+  const s = String(text || '');
+  const read = re => {
+    const match = s.match(re);
+    return match ? parseInt(match[1], 10) || 0 : 0;
+  };
+  return {
+    insertions: read(/(\d+)\s+insertions?\(\+\)/),
+    deletions: read(/(\d+)\s+deletions?\(-\)/),
+    files: read(/(\d+)\s+files?\s+changed/),
+  };
+}
+
+function repoCwd(ctx) {
+  const stdin = (ctx || {}).stdin || {};
+  const workspace = stdin.workspace && typeof stdin.workspace === 'object' ? stdin.workspace : {};
+  return String(stdin.cwd || workspace.current_dir || process.cwd() || '');
+}
 
 function fmtHour(h) {
   h = ((h % 24) + 24) % 24;
@@ -663,6 +682,12 @@ const SEGMENTS = {
     if (uncommitted) return `${YELLOW}${uncommitted} unsaved${RST}`;
     return `${YELLOW}${unpushed} unpushed${RST}`;
   },
+  churn(ctx) {
+    const cwd = repoCwd(ctx);
+    const stats = parseGitShortstat(git('-C', cwd, 'diff', '--shortstat', 'HEAD'));
+    if (!stats.files && !stats.insertions && !stats.deletions) return '';
+    return `${DIM}${BLUE}\u0394 +${stats.insertions} \u2212${stats.deletions} \u00b7 ${stats.files}f${RST}`;
+  },
   cost(ctx) {
     if ((ctx.gateway || {}).foreign) return '';
     const c = (ctx.stdin.cost || {}).total_cost_usd;
@@ -870,19 +895,19 @@ function buildRateLimitsLine(ctx) {
   return line;
 }
 
-function externalTokenTotal(tokens) {
-  if (!tokens || typeof tokens !== 'object') return 0;
-  const direct = toNum(tokens.total ?? tokens.total_tokens ?? tokens.totalTokens, 0);
-  if (direct > 0) return direct;
-  return toNum(tokens.input, 0) + toNum(tokens.output, 0) + toNum(tokens.input_tokens, 0) +
-    toNum(tokens.output_tokens, 0) + toNum(tokens.cache_read, 0) + toNum(tokens.cache_creation, 0) +
-    toNum(tokens.cached_input_tokens, 0) + toNum(tokens.reasoning_output_tokens, 0) + toNum(tokens.thinking, 0);
-}
-
-function externalWindowPart(label, window) {
-  if (!window) return '';
-  const pct = Math.round(toNum(window.used_pct, 0));
-  return `${WHITE}${label}${RST} ${buildUsageBar(pct)} ${colorPct(pct)}${String(pct).padStart(3)}%${RST}`;
+function renderExternalProviderParts(row) {
+  const chunks = [];
+  for (const part of row.parts || []) {
+    if (part.kind === 'label') {
+      chunks.push(`${WHITE}${part.label}${RST}${part.plan ? `${DIM} ${part.plan}${RST}` : ''}`);
+    } else if (part.kind === 'window') {
+      const reset = part.resetText ? ` ${DIM}${part.resetText}${RST}` : '';
+      chunks.push(`${WHITE}${part.label}${RST} ${buildUsageBar(part.pct)} ${colorPct(part.pct)}${String(part.pct).padStart(3)}%${RST}${reset}`);
+    } else if (part.kind === 'tokens') {
+      chunks.push(`${DIM}tokens${RST} ${WHITE}${fmtTokens(part.total)}${RST}`);
+    }
+  }
+  return `${chunks.join('  ')}${row.staleText ? `${DIM}${row.staleText}${RST}` : ''}`;
 }
 
 async function buildExternalUsageLines(ctx) {
@@ -890,18 +915,20 @@ async function buildExternalUsageLines(ctx) {
   if (!external || external.enabled !== true || !ctx.isFull) return '';
   let records = [];
   try { records = await usageProviders.collectExternalUsage(ctx.config || {}); } catch { return ''; }
-  const lines = [];
+  const nowSec = Date.now() / 1000;
+  const candidates = [];
   for (const record of records) {
     try {
-      if (!record || !record.available) continue;
-      const parts = [`${WHITE}${record.label || record.provider}${RST}${record.plan ? `${DIM} ${record.plan}${RST}` : ''}`];
-      const fiveHour = externalWindowPart('5h', record.five_hour);
-      const weekly = externalWindowPart('7d', record.weekly);
-      if (fiveHour) parts.push(fiveHour);
-      if (weekly) parts.push(weekly);
-      const total = externalTokenTotal(record.tokens);
-      if (!fiveHour && !weekly && total > 0) parts.push(`${DIM}tokens${RST} ${WHITE}${fmtTokens(total)}${RST}`);
-      if (parts.length > 1) lines.push(renderDashboardLine([parts.join('  ')], ctx.renderWidth || 0));
+      const row = usageProviders.formatProviderRowParts(record, nowSec);
+      if (row) candidates.push({ record, label: row.label });
+    } catch {}
+  }
+  const labelWidth = candidates.reduce((max, item) => Math.max(max, item.label.length), 0);
+  const lines = [];
+  for (const { record } of candidates) {
+    try {
+      const row = usageProviders.formatProviderRowParts(record, nowSec, { labelWidth, formatDuration: fmtDur });
+      if (row) lines.push(renderDashboardLine([renderExternalProviderParts(row)], ctx.renderWidth || 0));
     } catch {}
   }
   return lines.join('\n');
@@ -1085,7 +1112,7 @@ async function main() {
     if (!fn) continue;
     const r = runSegment(name, ctx);
     if (!r) continue;
-    if (['git_branch', 'git_dirty'].includes(name)) gitParts.push(r);
+    if (['git_branch', 'git_dirty', 'git_ahead_behind', 'churn'].includes(name)) gitParts.push(r);
     else parts.push(r);
   }
   if (gitParts.length) parts.push(gitParts.join(' '));
@@ -1119,4 +1146,8 @@ async function main() {
   try { writeVscodeContext(ctx); } catch {}
 }
 
-main().catch(() => {});
+module.exports = { parseGitShortstat };
+
+if (require.main === module) {
+  main().catch(() => {});
+}

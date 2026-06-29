@@ -33,6 +33,46 @@ def test_glm_fixture_maps_quota_limits():
     assert record["plan"] == "lite"
 
 
+def test_provider_row_parts_include_reset_countdown_and_stale_marker():
+    row = providers.format_provider_row_parts(
+        {
+            "provider": "codex",
+            "label": "Codex",
+            "available": True,
+            "five_hour": {"used_pct": 60, "resets_at": 1_000 + 133 * 60},
+            "weekly": None,
+            "plan": "team",
+            "tokens": None,
+            "stale_seconds": 1_200,
+        },
+        1_000,
+        label_width=7,
+    )
+
+    assert row["parts"][0]["label"] == "Codex  "
+    assert row["parts"][1]["reset_text"] == "\u27f3 2h 13m"
+    assert row["stale_text"] == " \u00b7stale"
+
+
+def test_provider_row_parts_omit_past_reset_countdown():
+    row = providers.format_provider_row_parts(
+        {
+            "provider": "glm",
+            "label": "GLM",
+            "available": True,
+            "five_hour": {"used_pct": 0, "resets_at": 999},
+            "weekly": None,
+            "plan": "lite",
+            "tokens": None,
+            "stale_seconds": 0,
+        },
+        1_000,
+    )
+
+    assert row["parts"][1]["reset_text"] == ""
+    assert row["stale_text"] == ""
+
+
 def test_providers_gracefully_unavailable_without_home_data(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
