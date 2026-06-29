@@ -11,6 +11,10 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const rs = require(path.join(__dirname, '..', 'lib', 'rolling_state'));
+const usageProviders = require(path.join(__dirname, '..', 'lib', 'usage_providers'));
+const gatewayUtil = require(path.join(__dirname, '..', 'lib', 'gateway'));
+const sessionCockpit = require(path.join(__dirname, '..', 'lib', 'session_cockpit'));
+const jobMonitor = require(path.join(__dirname, '..', 'lib', 'job_monitor'));
 
 // ── ANSI ──
 const RST = '\x1b[0m', BOLD = '\x1b[1m', DIM = '\x1b[2m';
@@ -25,16 +29,24 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['model', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
-  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
+  minimal: ['model', 'gateway', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  standard: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
   tier: 'standard',
   mode: 'minimal',
+  gateway_awareness: true,
   schedule_url: 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json',
   schedule_cache_hours: 3,
+  external_providers: {
+    enabled: false,
+    codex: { enabled: true },
+    glm: { enabled: true, base_url: 'https://api.z.ai', api_key: '' },
+    droid: { enabled: false },
+    antigravity: { enabled: false },
+  },
 };
 
 const DEFAULT_SCHEDULE = {
@@ -107,6 +119,13 @@ const CLAUDE_DIR = path.join(HOME, '.claude');
 function loadConfig() {
   try { return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'statusline-config.json'), 'utf8')) }; }
   catch { return { ...DEFAULT_CONFIG }; }
+}
+
+function loadClaudeSettings() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'settings.json'), 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch { return {}; }
 }
 
 function getEnabled(config, schedule) {
@@ -524,6 +543,10 @@ const SEGMENTS = {
     return minsUntil > 0 ? `${BG_GREEN} ${lo} ${RST} ${DIM}peak in ${fmtDur(minsUntil)}${RST}` : `${BG_GREEN} ${lo} ${RST}`;
   },
   model(ctx) { const n = (ctx.stdin.model || {}).display_name || ''; return n ? `${BLUE}${n.split('(')[0].trim()}${RST}` : ''; },
+  gateway(ctx) {
+    const text = gatewayUtil.gatewayBadgeText(ctx.gateway);
+    return text ? `${DIM}${CYAN}${text}${RST}` : '';
+  },
   context(ctx) {
     const cw = ctx.stdin.context_window || {}, size = cw.context_window_size || 0;
     if (!size) return '';
@@ -621,6 +644,14 @@ const SEGMENTS = {
     if (done === total) return `${GREEN}✓ ${done}/${total} tasks${RST}`;
     return `${CYAN}◔ ${done}/${total} tasks${RST}`;
   },
+  sessions() {
+    const text = sessionCockpit.renderSessionSummary(sessionCockpit.collectSessionCounts());
+    return text ? `${CYAN}${text}${RST}` : '';
+  },
+  jobs() {
+    const text = jobMonitor.renderJobsSummary(jobMonitor.collectActiveJobs());
+    return text ? `${CYAN}${text}${RST}` : '';
+  },
   git_branch(ctx) { const b = git('branch','--show-current'); ctx.gitBranch=b; return b ? `${DIM}${b}${RST}` : ''; },
   git_dirty(ctx) {
     const p = git('status','--porcelain');
@@ -632,11 +663,15 @@ const SEGMENTS = {
     if (uncommitted) return `${YELLOW}${uncommitted} unsaved${RST}`;
     return `${YELLOW}${unpushed} unpushed${RST}`;
   },
-  cost(ctx) { const c = (ctx.stdin.cost || {}).total_cost_usd; return c != null ? `${MAGENTA}$${c.toFixed(2)}${RST}` : ''; },
+  cost(ctx) {
+    if ((ctx.gateway || {}).foreign) return '';
+    const c = (ctx.stdin.cost || {}).total_cost_usd;
+    return c != null ? `${MAGENTA}$${c.toFixed(2)}${RST}` : '';
+  },
   duration(ctx) { const ms = (ctx.stdin.cost || {}).total_duration_ms; return ms ? `${BLUE}${fmtSecs(Math.floor(ms/1000))}${RST}` : ''; },
   effort(ctx) {
     try {
-      const s = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'settings.json'), 'utf8'));
+      const s = ctx.settings || JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'settings.json'), 'utf8'));
       const level = s.effortLevel || '';
       if (!level) return '';
       const labels = { low: 'e:LO', medium: 'e:MED', high: 'e:HI' };
@@ -648,6 +683,7 @@ const SEGMENTS = {
     return (process.env.SSH_CLIENT || process.env.SSH_TTY || process.env.SSH_CONNECTION) ? `${MAGENTA}REMOTE${RST}` : `${CYAN}LOCAL${RST}`;
   },
   rate_limits(ctx) {
+    if ((ctx.gateway || {}).foreign) return '';
     const cacheFile = path.join(CLAUDE_DIR, 'statusline-usage-cache.json');
     let usageData = null, now = Date.now() / 1000;
     try { const st = fs.statSync(cacheFile); if (now - st.mtimeMs / 1000 < 60) usageData = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch {}
@@ -731,6 +767,7 @@ const SEGMENTS = {
     return `${DIM}sdk${RST} ${buildUsageBar(pct, 8)} ${colorPct(pct)}$${consumed.toFixed(2)}/$${ceiling.toFixed(0)}${RST}${DIM} ~per-machine approx${RST}${suffix}`;
   },
   burn_rate(ctx) {
+    if ((ctx.gateway || {}).foreign) return '';
     const costData = ctx.stdin.cost || {}, cost = costData.total_cost_usd, durMs = costData.total_duration_ms;
     if (!cost || !durMs || durMs < 60000) return `${DIM}$?/hr${RST}`;
     const cw = ctx.stdin.context_window || {}, u = cw.current_usage || {};
@@ -810,6 +847,10 @@ function buildTimeline(ctx) {
 }
 
 function buildRateLimitsLine(ctx) {
+  if ((ctx.gateway || {}).foreign) {
+    const label = gatewayUtil.gatewayNoteLabel(ctx.gateway);
+    return renderDashboardLine([`${DIM}rate limits n/a on gateway (via ${label})${RST}`], ctx.renderWidth || 0);
+  }
   const ud = ctx.usageData;
   if (!ud) return '';
   const fh = ud.five_hour || {}, fhPct = Math.round(fh.utilization || 0);
@@ -827,6 +868,43 @@ function buildRateLimitsLine(ctx) {
     line += `\n${DIM}\u2502${RST}   ${sonnet} ${DIM}\u2502${RST}`;
   }
   return line;
+}
+
+function externalTokenTotal(tokens) {
+  if (!tokens || typeof tokens !== 'object') return 0;
+  const direct = toNum(tokens.total ?? tokens.total_tokens ?? tokens.totalTokens, 0);
+  if (direct > 0) return direct;
+  return toNum(tokens.input, 0) + toNum(tokens.output, 0) + toNum(tokens.input_tokens, 0) +
+    toNum(tokens.output_tokens, 0) + toNum(tokens.cache_read, 0) + toNum(tokens.cache_creation, 0) +
+    toNum(tokens.cached_input_tokens, 0) + toNum(tokens.reasoning_output_tokens, 0) + toNum(tokens.thinking, 0);
+}
+
+function externalWindowPart(label, window) {
+  if (!window) return '';
+  const pct = Math.round(toNum(window.used_pct, 0));
+  return `${WHITE}${label}${RST} ${buildUsageBar(pct)} ${colorPct(pct)}${String(pct).padStart(3)}%${RST}`;
+}
+
+async function buildExternalUsageLines(ctx) {
+  const external = (ctx.config || {}).external_providers;
+  if (!external || external.enabled !== true || !ctx.isFull) return '';
+  let records = [];
+  try { records = await usageProviders.collectExternalUsage(ctx.config || {}); } catch { return ''; }
+  const lines = [];
+  for (const record of records) {
+    try {
+      if (!record || !record.available) continue;
+      const parts = [`${WHITE}${record.label || record.provider}${RST}${record.plan ? `${DIM} ${record.plan}${RST}` : ''}`];
+      const fiveHour = externalWindowPart('5h', record.five_hour);
+      const weekly = externalWindowPart('7d', record.weekly);
+      if (fiveHour) parts.push(fiveHour);
+      if (weekly) parts.push(weekly);
+      const total = externalTokenTotal(record.tokens);
+      if (!fiveHour && !weekly && total > 0) parts.push(`${DIM}tokens${RST} ${WHITE}${fmtTokens(total)}${RST}`);
+      if (parts.length > 1) lines.push(renderDashboardLine([parts.join('  ')], ctx.renderWidth || 0));
+    } catch {}
+  }
+  return lines.join('\n');
 }
 
 const OFFLOOP_STATE_PATH = path.join(CLAUDE_DIR, 'statusline-offloop-state.json');
@@ -965,9 +1043,10 @@ function maybeHeartbeat(config) {
 }
 
 // ── Main ──
-function main() {
+async function main() {
   const config = loadConfig();
   maybeHeartbeat(config);
+  const settings = loadClaudeSettings();
   let stdin = {};
   try { if (!process.stdin.isTTY) { const raw = fs.readFileSync(0, 'utf8').trim(); if (raw) stdin = JSON.parse(raw); } } catch {}
 
@@ -983,7 +1062,11 @@ function main() {
 
   const { now, tzName, offsetHours } = getLocalTime();
   const schedule = loadSchedule(config);
-  const ctx = { config, stdin, now, tzName, offsetHours, schedule, isPeak: false, renderWidth: resolveRenderWidth(config) };
+  const ctx = {
+    config, stdin, settings, now, tzName, offsetHours, schedule,
+    gateway: gatewayUtil.gatewayInfo({ config, settings }),
+    isPeak: false, renderWidth: resolveRenderWidth(config),
+  };
   const enabled = getEnabled(config, schedule);
   if (!enabled.includes('banner')) enabled.unshift('banner');
   if (process.env.ANTHROPIC_API_KEY && !enabled.includes('auth_mode')) {
@@ -993,6 +1076,7 @@ function main() {
   const tier = config.tier || 'standard';
   const isFull = tier === 'full' || effectiveMode === 'full';
   const isStandard = tier === 'standard' && !isFull;
+  ctx.isFull = isFull;
   if (isFull || isStandard) runSegment('rate_limits', ctx);
 
   const parts = [], gitParts = [];
@@ -1026,6 +1110,8 @@ function main() {
     }
     const rl = buildRateLimitsLine(ctx);
     if (rl) process.stdout.write(`\n${rl}`);
+    const ext = await buildExternalUsageLines(ctx);
+    if (ext) process.stdout.write(`\n${ext}`);
     const ml = buildMetricsLine(ctx);
     if (ml) process.stdout.write(`\n${ml}`);
   }
@@ -1033,4 +1119,4 @@ function main() {
   try { writeVscodeContext(ctx); } catch {}
 }
 
-main();
+main().catch(() => {});

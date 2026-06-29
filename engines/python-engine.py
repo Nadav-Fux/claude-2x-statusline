@@ -35,6 +35,10 @@ from workflows import (
     read_completed_workflows as _wf_read_completed,
     workflow_cache_key as _wf_cache_key,
 )
+import usage_providers as _usage_providers
+import gateway as _gateway
+import session_cockpit as _session_cockpit
+import job_monitor as _job_monitor
 
 DEBUG = os.environ.get("STATUSLINE_DEBUG") == "1"
 _WF_CACHE = {}
@@ -77,11 +81,11 @@ TIER_PRESETS = {
     # Minimal: essentials only — model, compact context, rate limit %, git.
     # workflows is included so an active/idle workflow spend never vanishes on a
     # tier switch (the segment self-hides when there's nothing to report).
-    "minimal": ["model", "context", "workflows", "tasks", "git_branch", "git_dirty", "rate_limits", "env"],
+    "minimal": ["model", "gateway", "context", "workflows", "tasks", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
-    "standard": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "standard": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
+    "full": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -92,8 +96,16 @@ DEFAULT_CONFIG = {
     "mode": "minimal",
     "full_mode_rate_limits": True,
     "full_mode_timeline": True,
+    "gateway_awareness": True,
     "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
     "schedule_cache_hours": 3,
+    "external_providers": {
+        "enabled": False,
+        "codex": {"enabled": True},
+        "glm": {"enabled": True, "base_url": "https://api.z.ai", "api_key": ""},
+        "droid": {"enabled": False},
+        "antigravity": {"enabled": False},
+    },
 }
 
 
@@ -208,6 +220,15 @@ def load_config():
         except Exception:
             pass
     return config
+
+
+def load_claude_settings():
+    settings_path = Path.home() / ".claude" / "settings.json"
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def apply_remote_defaults(config, schedule):
@@ -771,6 +792,11 @@ def seg_model(ctx):
     return f"{BLUE}{short}{RST}"
 
 
+def seg_gateway(ctx):
+    text = _gateway.gateway_badge_text(ctx.get("gateway"))
+    return f"{DIM}{CYAN}{text}{RST}" if text else ""
+
+
 def _fmt_tokens(n):
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -843,6 +869,8 @@ def seg_git_ahead_behind(ctx):
 
 
 def seg_cost(ctx):
+    if ctx.get("gateway", {}).get("foreign"):
+        return ""
     cost = ctx["stdin"].get("cost", {}).get("total_cost_usd")
     if cost is None:
         return f"{DIM}$?{RST}"
@@ -889,14 +917,12 @@ def seg_ts_errors(ctx):
 def seg_effort(ctx):
     """Show thinking effort level from settings.json."""
     try:
-        settings_path = Path.home() / ".claude" / "settings.json"
-        if settings_path.exists():
-            settings = json.loads(settings_path.read_text())
-            level = settings.get("effortLevel", "")
-            if level:
-                label = {"low": "e:LO", "medium": "e:MED", "high": "e:HI"}.get(level, "e:" + level.upper())
-                color = {"low": DIM, "medium": YELLOW, "high": GREEN}.get(level, DIM)
-                return f"{color}{label}{RST}"
+        settings = ctx.get("settings") or load_claude_settings()
+        level = settings.get("effortLevel", "")
+        if level:
+            label = {"low": "e:LO", "medium": "e:MED", "high": "e:HI"}.get(level, "e:" + level.upper())
+            color = {"low": DIM, "medium": YELLOW, "high": GREEN}.get(level, DIM)
+            return f"{color}{label}{RST}"
     except Exception:
         pass
     return ""
@@ -911,6 +937,8 @@ def seg_env(ctx):
 
 def seg_burn_rate(ctx):
     """Show $/hr burn rate and context depletion estimate."""
+    if ctx.get("gateway", {}).get("foreign"):
+        return ""
     cost_data = ctx["stdin"].get("cost", {})
     cost = cost_data.get("total_cost_usd")
     duration_ms = cost_data.get("total_duration_ms")
@@ -1102,6 +1130,8 @@ def seg_workflows(ctx):
 
 def seg_rate_limits(ctx):
     """Fetch rate limits from Claude OAuth API (cached 60s)."""
+    if ctx.get("gateway", {}).get("foreign"):
+        return ""
     cache_dir = Path.home() / ".claude"
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     cache_file = cache_dir / "statusline-usage-cache.json"
@@ -1366,6 +1396,10 @@ def build_timeline(ctx):
 
 
 def build_rate_limits_line(ctx):
+    if ctx.get("gateway", {}).get("foreign"):
+        label = _gateway.gateway_note_label(ctx.get("gateway"))
+        return render_dashboard_line([f"{DIM}rate limits n/a on gateway (via {label}){RST}"], ctx.get("render_width", 0))
+
     usage_data = ctx.get("usage_data")
     if not usage_data:
         return ""
@@ -1411,6 +1445,67 @@ def build_rate_limits_line(ctx):
         sonnet = f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST}"
         line += f"\n{DIM}\u2502{RST}   {sonnet} {DIM}\u2502{RST}"
     return line
+
+
+def _external_token_total(tokens):
+    if not isinstance(tokens, dict):
+        return 0
+    for key in ("total", "total_tokens", "totalTokens"):
+        value = _as_float(tokens.get(key))
+        if value > 0:
+            return value
+    return (
+        _as_float(tokens.get("input"))
+        + _as_float(tokens.get("output"))
+        + _as_float(tokens.get("input_tokens"))
+        + _as_float(tokens.get("output_tokens"))
+        + _as_float(tokens.get("cache_read"))
+        + _as_float(tokens.get("cache_creation"))
+        + _as_float(tokens.get("cached_input_tokens"))
+        + _as_float(tokens.get("reasoning_output_tokens"))
+        + _as_float(tokens.get("thinking"))
+    )
+
+
+def _external_window_part(label, window):
+    if not isinstance(window, dict):
+        return ""
+    pct = int(round(_as_float(window.get("used_pct"))))
+    return f"{WHITE}{label}{RST} {build_usage_bar(pct)} {color_for_pct(pct)}{pct:3d}%{RST}"
+
+
+def build_external_usage_lines(ctx):
+    external = (ctx.get("config") or {}).get("external_providers")
+    if not isinstance(external, dict) or external.get("enabled") is not True or not ctx.get("is_full"):
+        return ""
+    try:
+        records = _usage_providers.collect_external_usage(ctx.get("config") or {})
+    except Exception:
+        return ""
+
+    lines = []
+    for record in records:
+        try:
+            if not isinstance(record, dict) or not record.get("available"):
+                continue
+            parts = [
+                f"{WHITE}{record.get('label') or record.get('provider')}{RST}"
+                f"{DIM + ' ' + str(record.get('plan')) + RST if record.get('plan') else ''}"
+            ]
+            five_hour = _external_window_part("5h", record.get("five_hour"))
+            weekly = _external_window_part("7d", record.get("weekly"))
+            if five_hour:
+                parts.append(five_hour)
+            if weekly:
+                parts.append(weekly)
+            total = _external_token_total(record.get("tokens"))
+            if not five_hour and not weekly and total > 0:
+                parts.append(f"{DIM}tokens{RST} {WHITE}{_fmt_tokens(int(total))}{RST}")
+            if len(parts) > 1:
+                lines.append(render_dashboard_line(["  ".join(parts)], ctx.get("render_width", 0)))
+        except Exception:
+            pass
+    return "\n".join(lines)
 
 
 # Off-loop drain state must survive across renders (each render is a fresh
@@ -1565,6 +1660,16 @@ def seg_tasks(ctx):
     return f"{CYAN}◔ {done}/{total} tasks{RST}"
 
 
+def seg_sessions(ctx):
+    text = _session_cockpit.render_session_summary(_session_cockpit.collect_session_counts())
+    return f"{CYAN}{text}{RST}" if text else ""
+
+
+def seg_jobs(ctx):
+    text = _job_monitor.render_jobs_summary(_job_monitor.collect_active_jobs())
+    return f"{CYAN}{text}{RST}" if text else ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SEGMENT REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1574,11 +1679,14 @@ SEGMENTS = {
     "peak_hours": seg_peak_hours,
     "promo_2x": seg_peak_hours,  # backward compat
     "model": seg_model,
+    "gateway": seg_gateway,
     "context": seg_context,
     "cache_hit": seg_cache_hit,
     "burn_rate": seg_burn_rate,
     "vim_mode": seg_vim_mode,
     "agent": seg_agent,
+    "sessions": seg_sessions,
+    "jobs": seg_jobs,
     "workflows": seg_workflows,
     "tasks": seg_tasks,
     "git_branch": seg_git_branch,
@@ -1613,6 +1721,7 @@ def _run_segment(name, fn, ctx):
 def main():
     config = load_config()
     maybe_heartbeat(config)
+    settings = load_claude_settings()
     debug(f"config: tier={config.get('tier')}")
     stdin_data = read_stdin()
 
@@ -1648,11 +1757,13 @@ def main():
     ctx = {
         "config": config,
         "stdin": stdin_data,
+        "settings": settings,
         "mode": mode,
         "local_time": local_time,
         "local_offset": local_offset,
         "tz_name": tz_name,
         "schedule": schedule,
+        "gateway": _gateway.gateway_info(settings=settings, config=config),
         "is_peak": False,
         "is_offpeak": True,
         # Responsive render width (COLUMNS-aware); used by line 1 reflow and the
@@ -1672,6 +1783,7 @@ def main():
     tier = config.get("tier", "standard")
     is_full_tier = tier == "full" or mode == "full"
     is_standard_tier = tier == "standard"
+    ctx["is_full"] = is_full_tier
     # Standard and Full both need rate limits data for their extra lines
     if is_full_tier or is_standard_tier:
         _run_segment("rate_limits", seg_rate_limits, ctx)  # populates ctx["usage_data"]
@@ -1729,6 +1841,10 @@ def main():
         rate_line = build_rate_limits_line(ctx)
         if rate_line:
             print(f"\n{rate_line}", end="")
+
+        external_usage = build_external_usage_lines(ctx)
+        if external_usage:
+            print(f"\n{external_usage}", end="")
 
         # full mode: line 4 — burn rate, cache hit ratio, session metrics
         metrics = build_metrics_line(ctx)
