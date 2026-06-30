@@ -12,7 +12,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const nodeEnginePath = path.join(repoRoot, 'engines', 'node-engine.js');
 const narratorHookPath = path.join(repoRoot, 'hooks', 'narrator-session-start.sh');
 const narratorCliPath = path.join(repoRoot, 'narrator', 'cli.js');
-const { parseGitShortstat } = require(nodeEnginePath);
+const { parseGitShortstat, TIER_PRESETS } = require(nodeEnginePath);
 
 function makeHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-node-'));
@@ -44,8 +44,81 @@ function writeCachedSchedule(home) {
   );
 }
 
-function runNodeEngine({ input, home, env = {} }) {
-  return spawnSync(process.execPath, [nodeEnginePath], {
+function writeConfig(home, config) {
+  fs.writeFileSync(
+    path.join(home, '.claude', 'statusline-config.json'),
+    JSON.stringify(config, null, 2),
+    'utf8',
+  );
+}
+
+function writeUsageCache(home) {
+  fs.writeFileSync(
+    path.join(home, '.claude', 'statusline-usage-cache.json'),
+    JSON.stringify({
+      five_hour: { utilization: 42, resets_at: '2099-01-01T01:00:00Z' },
+      seven_day: { utilization: 24, resets_at: '2099-01-07T01:00:00Z' },
+    }),
+    'utf8',
+  );
+}
+
+function writeExternalUsageCaches(home) {
+  const claudeDir = path.join(home, '.claude');
+  fs.writeFileSync(
+    path.join(claudeDir, 'statusline-usage-codex.json'),
+    JSON.stringify({
+      cached_at: Date.now() / 1000,
+      record: {
+        provider: 'codex',
+        label: 'Codex',
+        available: true,
+        five_hour: { used_pct: 12, resets_at: 4_071_000_000, label: '5h' },
+        weekly: { used_pct: 34, resets_at: 4_072_000_000, label: '7d' },
+        plan: 'team',
+        tokens: null,
+        stale_seconds: 0,
+      },
+    }),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(claudeDir, 'statusline-usage-glm.json'),
+    JSON.stringify({
+      cached_at: Date.now() / 1000,
+      response: {
+        data: {
+          level: 'lite',
+          limits: [
+            { type: 'TIME_LIMIT', percentage: 3, nextResetTime: 4_071_000_000_000 },
+            { type: 'TOKENS_LIMIT', percentage: 9, nextResetTime: 4_072_000_000_000 },
+          ],
+        },
+      },
+    }),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(claudeDir, 'statusline-usage-droid.json'),
+    JSON.stringify({
+      cached_at: Date.now() / 1000,
+      record: {
+        provider: 'droid',
+        label: 'Droid',
+        available: true,
+        five_hour: null,
+        weekly: null,
+        plan: null,
+        tokens: { total: 12345 },
+        stale_seconds: 0,
+      },
+    }),
+    'utf8',
+  );
+}
+
+function runNodeEngine({ input, home, env = {}, args = [] }) {
+  return spawnSync(process.execPath, [nodeEnginePath, ...args], {
     cwd: repoRoot,
     input,
     encoding: 'utf8',
@@ -57,6 +130,14 @@ function runNodeEngine({ input, home, env = {} }) {
     },
   });
 }
+
+const REGULAR_TIER_PRESETS = {
+  minimal: ['model', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
+};
+
+const MULTI_CLI_PRESET = ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'churn', 'effort', 'env'];
 
 function findGitBash() {
   const candidates = [
@@ -110,6 +191,93 @@ test('node engine renders vim and agent/worktree segments in standard preset', (
     assert.match(result.stdout, /NORMAL/);
     assert.match(result.stdout, /Explore/);
     assert.match(result.stdout, /wt:wt-demo/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node tier presets keep regular tiers clean and add multi-cli cockpit', () => {
+  assert.deepEqual(TIER_PRESETS.minimal, REGULAR_TIER_PRESETS.minimal);
+  assert.deepEqual(TIER_PRESETS.standard, REGULAR_TIER_PRESETS.standard);
+  assert.deepEqual(TIER_PRESETS.full, REGULAR_TIER_PRESETS.full);
+  assert.deepEqual(TIER_PRESETS['multi-cli'], MULTI_CLI_PRESET);
+
+  for (const tier of ['minimal', 'standard', 'full']) {
+    for (const segment of ['gateway', 'sessions', 'jobs', 'churn']) {
+      assert.equal(TIER_PRESETS[tier].includes(segment), false, `${tier} must not include ${segment}`);
+    }
+  }
+  for (const segment of ['gateway', 'sessions', 'jobs', 'churn', 'usage_credits']) {
+    assert.equal(TIER_PRESETS['multi-cli'].includes(segment), true, `multi-cli must include ${segment}`);
+  }
+});
+
+test('node full tier ignores foreign gateway and keeps Claude rate-limit bars', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, { tier: 'full', schedule_url: '', schedule_cache_hours: 999 });
+    writeCachedSchedule(home);
+    writeUsageCache(home);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: {
+        ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+        STATUSLINE_DISABLE_TELEMETRY: '1',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /via z\.ai/);
+    assert.doesNotMatch(result.stdout, /rate limits n\/a on gateway/);
+    assert.match(result.stdout, /weekly/);
+    assert.match(result.stdout, /\$1\.23/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node multi-cli tier shows gateway badge and forced external usage rows', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, {
+      tier: 'multi-cli',
+      schedule_url: '',
+      schedule_cache_hours: 999,
+      external_providers: {
+        enabled: false,
+        glm: { api_key: 'test-key' },
+      },
+    });
+    writeCachedSchedule(home);
+    writeUsageCache(home);
+    writeExternalUsageCaches(home);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: {
+        ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+        STATUSLINE_DISABLE_TELEMETRY: '1',
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /via z\.ai \(GLM\)/);
+    assert.match(result.stdout, /Codex/);
+    assert.match(result.stdout, /GLM/);
+    assert.match(result.stdout, /Droid/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

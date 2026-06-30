@@ -29,9 +29,10 @@ const BG_BLUE = '\x1b[38;5;255;48;5;27m';
 
 // ── Config ──
 const TIER_PRESETS = {
-  minimal: ['model', 'gateway', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
-  standard: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
-  full: ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'churn', 'cost', 'usage_credits', 'effort', 'env'],
+  minimal: ['model', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
+  standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
+  full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
+  'multi-cli': ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'churn', 'effort', 'env'],
 };
 
 const DEFAULT_CONFIG = {
@@ -910,11 +911,41 @@ function renderExternalProviderParts(row) {
   return `${chunks.join('  ')}${row.staleText ? `${DIM}${row.staleText}${RST}` : ''}`;
 }
 
+function effectiveExternalUsageConfig(config = {}, isMultiCli = false) {
+  if (!isMultiCli) return config || {};
+
+  const source = config && typeof config.external_providers === 'object' && !Array.isArray(config.external_providers)
+    ? config.external_providers
+    : {};
+  const external = { ...source, enabled: true };
+
+  for (const provider of ['codex', 'glm', 'droid']) {
+    const raw = source[provider];
+    const providerConfig = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    external[provider] = {
+      ...((DEFAULT_CONFIG.external_providers || {})[provider] || {}),
+      ...providerConfig,
+      enabled: !(raw === false || providerConfig.enabled === false),
+    };
+  }
+
+  const antiRaw = source.antigravity;
+  const antiConfig = antiRaw && typeof antiRaw === 'object' && !Array.isArray(antiRaw) ? antiRaw : {};
+  external.antigravity = {
+    ...((DEFAULT_CONFIG.external_providers || {}).antigravity || {}),
+    ...antiConfig,
+    enabled: antiRaw === true || antiConfig.enabled === true,
+  };
+
+  return { ...(config || {}), external_providers: external };
+}
+
 async function buildExternalUsageLines(ctx) {
-  const external = (ctx.config || {}).external_providers;
-  if (!external || external.enabled !== true || !ctx.isFull) return '';
+  const config = effectiveExternalUsageConfig(ctx.config || {}, Boolean(ctx.isMultiCli));
+  const external = (config || {}).external_providers;
+  if (!(ctx.isMultiCli || (ctx.isFull && external && external.enabled === true))) return '';
   let records = [];
-  try { records = await usageProviders.collectExternalUsage(ctx.config || {}); } catch { return ''; }
+  try { records = await usageProviders.collectExternalUsage(config || {}); } catch { return ''; }
   const nowSec = Date.now() / 1000;
   const candidates = [];
   for (const record of records) {
@@ -1089,9 +1120,13 @@ async function main() {
 
   const { now, tzName, offsetHours } = getLocalTime();
   const schedule = loadSchedule(config);
+  const tier = config.tier || 'standard';
+  const isMultiCli = tier === 'multi-cli';
+  const isFull = isMultiCli || tier === 'full' || effectiveMode === 'full';
+  const isStandard = tier === 'standard' && !isFull;
   const ctx = {
     config, stdin, settings, now, tzName, offsetHours, schedule,
-    gateway: gatewayUtil.gatewayInfo({ config, settings }),
+    gateway: isMultiCli ? gatewayUtil.gatewayInfo({ config, settings }) : { foreign: false },
     isPeak: false, renderWidth: resolveRenderWidth(config),
   };
   const enabled = getEnabled(config, schedule);
@@ -1100,10 +1135,8 @@ async function main() {
     enabled.splice(enabled[0] === 'banner' ? 1 : 0, 0, 'auth_mode');
   }
 
-  const tier = config.tier || 'standard';
-  const isFull = tier === 'full' || effectiveMode === 'full';
-  const isStandard = tier === 'standard' && !isFull;
   ctx.isFull = isFull;
+  ctx.isMultiCli = isMultiCli;
   if (isFull || isStandard) runSegment('rate_limits', ctx);
 
   const parts = [], gitParts = [];
@@ -1146,7 +1179,7 @@ async function main() {
   try { writeVscodeContext(ctx); } catch {}
 }
 
-module.exports = { parseGitShortstat };
+module.exports = { parseGitShortstat, TIER_PRESETS };
 
 if (require.main === module) {
   main().catch(() => {});

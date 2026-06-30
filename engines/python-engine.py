@@ -69,8 +69,8 @@ BG_BLUE = "\033[38;5;255;48;5;27m"
 # ══════════════════════════════════════════════════════════════════════════════
 # TIER PRESETS
 # ══════════════════════════════════════════════════════════════════════════════
-# "standard" and "full" mostly share line 1 segments; full also includes churn.
-# Full mode
+# "standard" and "full" share an identical segment list — this is intentional.
+# Both tiers render the same line 1 segments. The difference is that "full" mode
 # triggers 3 additional output lines in the render loop (see main(), ~lines 1110-1122):
 #   line 2 — timeline bar       (build_timeline, guarded by show_timeline feature flag
 #                                 and off-peak-day check)
@@ -80,11 +80,12 @@ TIER_PRESETS = {
     # Minimal: essentials only — model, compact context, rate limit %, git.
     # workflows is included so an active/idle workflow spend never vanishes on a
     # tier switch (the segment self-hides when there's nothing to report).
-    "minimal": ["model", "gateway", "context", "workflows", "tasks", "git_branch", "git_dirty", "rate_limits", "env"],
+    "minimal": ["model", "context", "workflows", "tasks", "git_branch", "git_dirty", "rate_limits", "env"],
     # Standard: clean line 1 + line 2 with rate limits (5h + weekly)
-    "standard": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
+    "standard": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
-    "full": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "churn", "cost", "usage_credits", "effort", "env"],
+    "full": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
+    "multi-cli": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "churn", "effort", "env"],
 }
 
 DEFAULT_CONFIG = {
@@ -1490,12 +1491,48 @@ def _render_external_provider_parts(row):
     return f"{'  '.join(chunks)}{stale}"
 
 
+def _effective_external_usage_config(config, is_multi_cli=False):
+    if not is_multi_cli:
+        return config or {}
+
+    source = config.get("external_providers") if isinstance(config, dict) else None
+    if not isinstance(source, dict):
+        source = {}
+
+    external = dict(source)
+    external["enabled"] = True
+
+    defaults = DEFAULT_CONFIG.get("external_providers", {})
+    for provider in ("codex", "glm", "droid"):
+        raw = source.get(provider)
+        provider_config = raw if isinstance(raw, dict) else {}
+        merged = dict(defaults.get(provider, {}))
+        merged.update(provider_config)
+        merged["enabled"] = not (raw is False or provider_config.get("enabled") is False)
+        external[provider] = merged
+
+    anti_raw = source.get("antigravity")
+    anti_config = anti_raw if isinstance(anti_raw, dict) else {}
+    antigravity = dict(defaults.get("antigravity", {}))
+    antigravity.update(anti_config)
+    antigravity["enabled"] = anti_raw is True or anti_config.get("enabled") is True
+    external["antigravity"] = antigravity
+
+    effective = dict(config or {})
+    effective["external_providers"] = external
+    return effective
+
+
 def build_external_usage_lines(ctx):
-    external = (ctx.get("config") or {}).get("external_providers")
-    if not isinstance(external, dict) or external.get("enabled") is not True or not ctx.get("is_full"):
+    config = _effective_external_usage_config(ctx.get("config") or {}, bool(ctx.get("is_multi_cli")))
+    external = config.get("external_providers")
+    if not (
+        ctx.get("is_multi_cli")
+        or (ctx.get("is_full") and isinstance(external, dict) and external.get("enabled") is True)
+    ):
         return ""
     try:
-        records = _usage_providers.collect_external_usage(ctx.get("config") or {})
+        records = _usage_providers.collect_external_usage(config)
     except Exception:
         return ""
 
@@ -1769,6 +1806,11 @@ def main():
     # Apply remote defaults (e.g., default tier) if user hasn't overridden
     apply_remote_defaults(config, schedule)
 
+    tier = config.get("tier", "standard")
+    is_multi_cli = tier == "multi-cli"
+    is_full_tier = is_multi_cli or tier == "full" or mode == "full"
+    is_standard_tier = tier == "standard"
+
     ctx = {
         "config": config,
         "stdin": stdin_data,
@@ -1778,7 +1820,7 @@ def main():
         "local_offset": local_offset,
         "tz_name": tz_name,
         "schedule": schedule,
-        "gateway": _gateway.gateway_info(settings=settings, config=config),
+        "gateway": _gateway.gateway_info(settings=settings, config=config) if is_multi_cli else {"foreign": False},
         "is_peak": False,
         "is_offpeak": True,
         # Responsive render width (COLUMNS-aware); used by line 1 reflow and the
@@ -1795,10 +1837,8 @@ def main():
         insert_at = 1 if enabled and enabled[0] == "banner" else 0
         enabled.insert(insert_at, "auth_mode")
 
-    tier = config.get("tier", "standard")
-    is_full_tier = tier == "full" or mode == "full"
-    is_standard_tier = tier == "standard"
     ctx["is_full"] = is_full_tier
+    ctx["is_multi_cli"] = is_multi_cli
     # Standard and Full both need rate limits data for their extra lines
     if is_full_tier or is_standard_tier:
         _run_segment("rate_limits", seg_rate_limits, ctx)  # populates ctx["usage_data"]
