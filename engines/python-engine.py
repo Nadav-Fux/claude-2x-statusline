@@ -1475,6 +1475,26 @@ def build_rate_limits_line(ctx):
 
 
 def _render_external_provider_parts(row):
+    if row and row.get("display") == "compact":
+        label_part = next((part for part in row.get("parts") or [] if part.get("kind") == "label"), {})
+        plan = f"{DIM} {label_part.get('plan')}{RST}" if label_part.get("plan") else ""
+        label = f"{WHITE}{label_part.get('label', '')}{RST}{plan}"
+        metrics = []
+        for part in row.get("parts") or []:
+            if part.get("kind") != "metric":
+                continue
+            try:
+                pct = max(0, min(100, int(round(float(part.get("pct") or 0)))))
+            except (TypeError, ValueError):
+                pct = 0
+            metrics.append(f"{WHITE}{part.get('label')}{RST} {color_for_pct(pct)}{pct}%{RST}")
+        if not metrics:
+            return ""
+        sep = f" {DIM}\u00b7{RST} "
+        reset = f" {DIM}{row.get('reset_text')}{RST}" if row.get("reset_text") else ""
+        stale = f"{DIM}{row.get('stale_text')}{RST}" if row.get("stale_text") else ""
+        return f"{label}  {sep.join(metrics)}{reset}{stale}"
+
     chunks = []
     for part in row.get("parts") or []:
         kind = part.get("kind")

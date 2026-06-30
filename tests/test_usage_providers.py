@@ -35,9 +35,58 @@ def test_glm_fixture_maps_quota_limits():
     assert abs(record["weekly"]["resets_at"] - 1782782126) <= 1
     assert record["weekly"]["label"] == "tok"
     assert record["plan"] == "lite"
+    assert record["display"] == "compact"
+    assert [(metric["label"], metric["used_pct"]) for metric in record["metrics"]] == [("5h", 0), ("tok", 99)]
 
     row = providers.format_provider_row_parts(record, 1_000)
-    assert next(part for part in row["parts"] if part.get("kind") == "window" and part.get("pct") == 99)["label"] == "tok"
+    assert row["display"] == "compact"
+    assert next(part for part in row["parts"] if part.get("kind") == "metric" and part.get("pct") == 99)["label"] == "tok"
+    assert "5h 0%" in row["text"]
+    assert "tok 99%" in row["text"]
+    assert "\u25b0" not in row["text"]
+    assert "\u25b1" not in row["text"]
+
+
+def test_compact_provider_row_parts_render_metrics_without_bars_while_bars_records_keep_bars():
+    compact = providers.format_provider_row_parts(
+        {
+            "provider": "glm",
+            "label": "GLM",
+            "available": True,
+            "display": "compact",
+            "metrics": [
+                {"label": "5h", "used_pct": 0, "resets_at": 1_000 + 39 * 60},
+                {"label": "tok", "used_pct": 8, "resets_at": 1_000 + 90 * 60},
+            ],
+            "five_hour": {"used_pct": 0, "resets_at": 1_000 + 39 * 60, "label": "5h"},
+            "weekly": {"used_pct": 8, "resets_at": 1_000 + 90 * 60, "label": "tok"},
+            "plan": "lite",
+            "tokens": None,
+            "stale_seconds": 0,
+        },
+        1_000,
+    )
+
+    assert "GLM lite  5h 0% \u00b7 tok 8% \u27f3 39m" in compact["text"]
+    assert "\u25b0" not in compact["text"]
+    assert "\u25b1" not in compact["text"]
+
+    bars = providers.format_provider_row_parts(
+        {
+            "provider": "codex",
+            "label": "Codex",
+            "available": True,
+            "display": "bars",
+            "five_hour": {"used_pct": 60, "resets_at": None, "label": "5h"},
+            "weekly": None,
+            "plan": None,
+            "tokens": None,
+            "stale_seconds": 0,
+        },
+        1_000,
+    )
+
+    assert "\u25b0" in bars["text"] or "\u25b1" in bars["text"]
 
 
 def test_provider_row_parts_include_reset_countdown_and_stale_marker():
@@ -97,6 +146,46 @@ def test_antigravity_parser_maps_sprint_and_weekly_windows():
     assert record["weekly"]["used_pct"] == 12
     assert record["weekly"]["resets_at"] is None
     assert record["weekly"]["label"] == "wk"
+
+
+def test_antigravity_model_parser_maps_model_group_metrics():
+    metrics = providers.parse_antigravity_models(
+        {
+            "models": {
+                "gemini-3-flash": {"usedPercent": 23},
+                "gemini-3-pro-low": {"usedPercent": 67},
+                "claude-opus": {"usedPercent": 41},
+            }
+        }
+    )
+
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Flash", 23), ("Pro", 67), ("Opus", 41)]
+    assert providers.parse_antigravity_models({"hello": "world"}) is None
+
+    record = providers.parse_antigravity_item_table(
+        [
+            {
+                "key": "antigravity.models",
+                "value": json.dumps(
+                    {
+                        "models": {
+                            "gemini-3-flash": {"usedPercent": 23},
+                            "gemini-3-pro-low": {"usedPercent": 67},
+                            "claude-opus": {"usedPercent": 41},
+                        }
+                    }
+                ),
+            }
+        ]
+    )
+    assert record["available"] is True
+    assert record["label"] == "AGY"
+    assert record["display"] == "compact"
+    assert [(metric["label"], metric["used_pct"]) for metric in record["metrics"]] == [
+        ("Flash", 23),
+        ("Pro", 67),
+        ("Opus", 41),
+    ]
 
 
 def test_antigravity_parser_returns_unavailable_for_junk_rows():

@@ -897,6 +897,21 @@ function buildRateLimitsLine(ctx) {
 }
 
 function renderExternalProviderParts(row) {
+  if (row && row.display === 'compact') {
+    const labelPart = (row.parts || []).find(part => part.kind === 'label') || {};
+    const label = `${WHITE}${labelPart.label || ''}${RST}${labelPart.plan ? `${DIM} ${labelPart.plan}${RST}` : ''}`;
+    const metrics = (row.parts || [])
+      .filter(part => part.kind === 'metric')
+      .map(part => {
+        const pct = Number.isFinite(Number(part.pct)) ? Math.max(0, Math.min(100, Math.round(Number(part.pct)))) : 0;
+        return `${WHITE}${part.label}${RST} ${colorPct(pct)}${pct}%${RST}`;
+      });
+    if (!metrics.length) return '';
+    const reset = row.resetText ? ` ${DIM}${row.resetText}${RST}` : '';
+    const stale = row.staleText ? `${DIM}${row.staleText}${RST}` : '';
+    return `${label}  ${metrics.join(` ${DIM}\u00b7${RST} `)}${reset}${stale}`;
+  }
+
   const chunks = [];
   for (const part of row.parts || []) {
     if (part.kind === 'label') {

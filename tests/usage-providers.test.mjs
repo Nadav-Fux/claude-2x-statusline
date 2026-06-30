@@ -39,9 +39,50 @@ test('glm fixture maps quota limits', () => {
   assert.ok(Math.abs(record.weekly.resets_at - 1782782126) <= 1);
   assert.equal(record.weekly.label, 'tok');
   assert.equal(record.plan, 'lite');
+  assert.equal(record.display, 'compact');
+  assert.deepEqual(record.metrics.map(metric => [metric.label, metric.used_pct]), [['5h', 0], ['tok', 99]]);
 
   const row = providers.formatProviderRowParts(record, 1_000);
-  assert.equal(row.parts.find(part => part.kind === 'window' && part.pct === 99).label, 'tok');
+  assert.equal(row.display, 'compact');
+  assert.equal(row.parts.find(part => part.kind === 'metric' && part.pct === 99).label, 'tok');
+  assert.match(row.text, /5h 0%/);
+  assert.match(row.text, /tok 99%/);
+  assert.doesNotMatch(row.text, /[\u25b0\u25b1]/);
+});
+
+test('compact provider row parts render metrics without bars while bars records keep bars', () => {
+  const compact = providers.formatProviderRowParts({
+    provider: 'glm',
+    label: 'GLM',
+    available: true,
+    display: 'compact',
+    metrics: [
+      { label: '5h', used_pct: 0, resets_at: 1_000 + 39 * 60 },
+      { label: 'tok', used_pct: 8, resets_at: 1_000 + 90 * 60 },
+    ],
+    five_hour: { used_pct: 0, resets_at: 1_000 + 39 * 60, label: '5h' },
+    weekly: { used_pct: 8, resets_at: 1_000 + 90 * 60, label: 'tok' },
+    plan: 'lite',
+    tokens: null,
+    stale_seconds: 0,
+  }, 1_000);
+
+  assert.match(compact.text, /GLM lite  5h 0% \u00b7 tok 8% \u27f3 39m/);
+  assert.doesNotMatch(compact.text, /[\u25b0\u25b1]/);
+
+  const bars = providers.formatProviderRowParts({
+    provider: 'codex',
+    label: 'Codex',
+    available: true,
+    display: 'bars',
+    five_hour: { used_pct: 60, resets_at: null, label: '5h' },
+    weekly: null,
+    plan: null,
+    tokens: null,
+    stale_seconds: 0,
+  }, 1_000);
+
+  assert.match(bars.text, /[\u25b0\u25b1]/);
 });
 
 test('provider row parts include reset countdown and stale marker', () => {
@@ -92,6 +133,36 @@ test('antigravity parser maps sprint and weekly windows', () => {
   assert.equal(record.weekly.used_pct, 12);
   assert.equal(record.weekly.resets_at, null);
   assert.equal(record.weekly.label, 'wk');
+});
+
+test('antigravity model parser maps model-group metrics', () => {
+  const metrics = providers.parseAntigravityModels({
+    models: {
+      'gemini-3-flash': { usedPercent: 23 },
+      'gemini-3-pro-low': { usedPercent: 67 },
+      'claude-opus': { usedPercent: 41 },
+    },
+  });
+
+  assert.deepEqual(metrics.map(metric => [metric.label, metric.used_pct]), [['Flash', 23], ['Pro', 67], ['Opus', 41]]);
+  assert.equal(providers.parseAntigravityModels({ hello: 'world' }), null);
+
+  const record = providers.parseAntigravityItemTable([
+    {
+      key: 'antigravity.models',
+      value: JSON.stringify({
+        models: {
+          'gemini-3-flash': { usedPercent: 23 },
+          'gemini-3-pro-low': { usedPercent: 67 },
+          'claude-opus': { usedPercent: 41 },
+        },
+      }),
+    },
+  ]);
+  assert.equal(record.available, true);
+  assert.equal(record.label, 'AGY');
+  assert.equal(record.display, 'compact');
+  assert.deepEqual(record.metrics.map(metric => [metric.label, metric.used_pct]), [['Flash', 23], ['Pro', 67], ['Opus', 41]]);
 });
 
 test('antigravity parser returns unavailable for junk rows', () => {

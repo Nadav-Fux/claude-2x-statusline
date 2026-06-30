@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -15,6 +16,13 @@ _ROOT = Path(__file__).resolve().parent.parent
 _ENGINE_PATH = _ROOT / "engines" / "python-engine.py"
 _spec = importlib.util.spec_from_file_location("engine_multi_cli", _ENGINE_PATH)
 engine = importlib.util.module_from_spec(_spec)
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text or "")
+
+
 try:
     _spec.loader.exec_module(engine)
     _IMPORT_OK = True
@@ -255,3 +263,13 @@ def test_python_multi_cli_tier_shows_gateway_badge_and_forced_external_rows(tmp_
     assert "Codex" in proc.stdout
     assert "lite" in proc.stdout
     assert "Droid" in proc.stdout
+    plain_lines = _strip_ansi(proc.stdout).splitlines()
+    glm_line = next((line for line in plain_lines if "GLM" in line and "tok" in line), "")
+    codex_line = next((line for line in plain_lines if "Codex" in line and "7d" in line), "")
+    assert glm_line
+    assert codex_line
+    assert "5h 3%" in glm_line
+    assert "tok 9%" in glm_line
+    assert "\u25b0" not in glm_line
+    assert "\u25b1" not in glm_line
+    assert "\u25b0" in codex_line or "\u25b1" in codex_line

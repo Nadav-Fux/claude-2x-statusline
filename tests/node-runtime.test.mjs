@@ -13,6 +13,11 @@ const nodeEnginePath = path.join(repoRoot, 'engines', 'node-engine.js');
 const narratorHookPath = path.join(repoRoot, 'hooks', 'narrator-session-start.sh');
 const narratorCliPath = path.join(repoRoot, 'narrator', 'cli.js');
 const { parseGitShortstat, TIER_PRESETS } = require(nodeEnginePath);
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+function stripAnsi(text) {
+  return String(text || '').replace(ANSI_RE, '');
+}
 
 function makeHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-node-'));
@@ -278,6 +283,16 @@ test('node multi-cli tier shows gateway badge and forced external usage rows', (
     assert.match(result.stdout, /Codex/);
     assert.match(result.stdout, /GLM/);
     assert.match(result.stdout, /Droid/);
+
+    const plainLines = stripAnsi(result.stdout).split(/\r?\n/);
+    const glmLine = plainLines.find(line => line.includes('GLM') && line.includes('tok'));
+    const codexLine = plainLines.find(line => line.includes('Codex') && line.includes('7d'));
+    assert.ok(glmLine, stripAnsi(result.stdout));
+    assert.ok(codexLine, stripAnsi(result.stdout));
+    assert.match(glmLine, /5h 3%/);
+    assert.match(glmLine, /tok 9%/);
+    assert.doesNotMatch(glmLine, /[\u25b0\u25b1]/);
+    assert.match(codexLine, /[\u25b0\u25b1]/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

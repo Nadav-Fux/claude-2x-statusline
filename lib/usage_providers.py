@@ -34,6 +34,8 @@ def unavailable(provider):
         "available": False,
         "five_hour": None,
         "weekly": None,
+        "display": "bars",
+        "metrics": None,
         "plan": None,
         "tokens": None,
         "source": source,
@@ -115,6 +117,99 @@ def _reset_countdown(resets_at, now_sec, format_duration):
     return f"\u27f3 {format_duration(mins)}"
 
 
+def _normalize_display_metric(metric, fallback_label=""):
+    if not isinstance(metric, dict):
+        return None
+    label = str(metric.get("label") or fallback_label or "").strip()
+    if not label:
+        return None
+    pct = max(0, min(100, int(round(_number_or_zero(metric.get("used_pct"))))))
+    reset = None
+    if metric.get("resets_at") is not None:
+        try:
+            reset = int(metric.get("resets_at"))
+        except (TypeError, ValueError):
+            reset = None
+    return {"label": label, "used_pct": pct, "resets_at": reset}
+
+
+def _compact_metrics_for_record(record):
+    if isinstance(record.get("metrics"), list) and record.get("metrics"):
+        raw_metrics = record.get("metrics")
+    else:
+        raw_metrics = []
+        if isinstance(record.get("five_hour"), dict):
+            raw_metrics.append(
+                {
+                    "label": record["five_hour"].get("label") or "5h",
+                    "used_pct": record["five_hour"].get("used_pct"),
+                    "resets_at": record["five_hour"].get("resets_at"),
+                }
+            )
+        if isinstance(record.get("weekly"), dict):
+            raw_metrics.append(
+                {
+                    "label": record["weekly"].get("label") or "7d",
+                    "used_pct": record["weekly"].get("used_pct"),
+                    "resets_at": record["weekly"].get("resets_at"),
+                }
+            )
+    return [metric for metric in (_normalize_display_metric(item) for item in raw_metrics) if metric]
+
+
+def _soonest_reset_text(metrics, now_sec, format_duration):
+    now = _number_or_zero(now_sec)
+    soonest = None
+    for metric in metrics:
+        reset = metric.get("resets_at")
+        if reset is None:
+            continue
+        reset = _number_or_zero(reset)
+        if reset <= now:
+            continue
+        if soonest is None or reset < soonest:
+            soonest = reset
+    return "" if soonest is None else _reset_countdown(soonest, now_sec, format_duration)
+
+
+def _plain_usage_bar(pct, width=10):
+    clean_pct = max(0, min(100, int(round(_number_or_zero(pct)))))
+    filled = clean_pct * width // 100
+    return "\u25b0" * filled + "\u25b1" * (width - filled)
+
+
+def _format_provider_row_text(row):
+    parts = row.get("parts") if isinstance(row.get("parts"), list) else []
+    label_part = next((part for part in parts if isinstance(part, dict) and part.get("kind") == "label"), {})
+    label_plan = str(label_part.get("plan") or "")
+    label_text = f"{label_part.get('label', '')}{' ' + label_plan if label_plan else ''}"
+    if row.get("display") == "compact":
+        sep = " \u00b7 "
+        metrics = [
+            f"{part.get('label')} {part.get('pct')}%"
+            for part in parts
+            if isinstance(part, dict) and part.get("kind") == "metric"
+        ]
+        reset = f" {row.get('reset_text')}" if row.get("reset_text") else ""
+        return f"{label_text}  {sep.join(metrics)}{reset}{row.get('stale_text') or ''}"
+
+    chunks = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("kind")
+        if kind == "label":
+            plan = str(part.get("plan") or "")
+            chunks.append(f"{part.get('label', '')}{' ' + plan if plan else ''}")
+        elif kind == "window":
+            reset = f" {part.get('reset_text')}" if part.get("reset_text") else ""
+            pct = int(part.get("pct") or 0)
+            chunks.append(f"{part.get('label')} {_plain_usage_bar(pct)} {pct:3d}%{reset}")
+        elif kind == "tokens":
+            chunks.append(f"tokens {int(part.get('total') or 0)}")
+    return f"{'  '.join(chunks)}{row.get('stale_text') or ''}"
+
+
 def format_provider_row_parts(record, now_sec=None, label_width=0, format_duration=None):
     if not isinstance(record, dict) or not record.get("available"):
         return None
@@ -134,6 +229,33 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
             "plan": str(record.get("plan")) if record.get("plan") else "",
         }
     ]
+    display = "compact" if record.get("display") == "compact" else "bars"
+    stale_seconds = record.get("stale_seconds")
+    stale = stale_seconds is not None and _number_or_zero(stale_seconds) > 600
+
+    if display == "compact":
+        metrics = _compact_metrics_for_record(record)
+        for metric in metrics:
+            parts.append(
+                {
+                    "kind": "metric",
+                    "label": metric["label"],
+                    "pct": metric["used_pct"],
+                    "resets_at": metric.get("resets_at"),
+                }
+            )
+        if len(parts) <= 1:
+            return None
+        row = {
+            "label": label,
+            "display": display,
+            "parts": parts,
+            "reset_text": _soonest_reset_text(metrics, now_sec, format_duration),
+            "stale": stale,
+            "stale_text": " \u00b7stale" if stale else "",
+        }
+        row["text"] = _format_provider_row_text(row)
+        return row
 
     for fallback_label, window in (("5h", record.get("five_hour")), ("7d", record.get("weekly"))):
         if not isinstance(window, dict):
@@ -156,9 +278,9 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
     if len(parts) <= 1:
         return None
 
-    stale_seconds = record.get("stale_seconds")
-    stale = stale_seconds is not None and _number_or_zero(stale_seconds) > 600
-    return {"label": label, "parts": parts, "stale": stale, "stale_text": " \u00b7stale" if stale else ""}
+    row = {"label": label, "display": display, "parts": parts, "stale": stale, "stale_text": " \u00b7stale" if stale else ""}
+    row["text"] = _format_provider_row_text(row)
+    return row
 
 
 def _parse_iso_seconds(value):
@@ -391,6 +513,19 @@ def parse_glm_quota_response(data, stale_seconds=None):
             "available": bool(five_hour or weekly),
             "five_hour": five_hour,
             "weekly": weekly,
+            "display": "compact",
+            "metrics": [
+                metric
+                for metric in (
+                    {"label": "5h", "used_pct": five_hour["used_pct"], "resets_at": five_hour["resets_at"]}
+                    if five_hour
+                    else None,
+                    {"label": "tok", "used_pct": weekly["used_pct"], "resets_at": weekly["resets_at"]}
+                    if weekly
+                    else None,
+                )
+                if metric
+            ],
             "plan": data_obj.get("level") or body.get("level"),
             "stale_seconds": stale_seconds,
         }
@@ -684,6 +819,54 @@ def _antigravity_pct(obj):
     return None
 
 
+def _classify_antigravity_model(path_parts, obj):
+    hints = [str(part or "") for part in path_parts]
+    if isinstance(obj, dict):
+        for key in ("key", "name", "label", "model", "modelName", "displayName", "id", "type"):
+            if obj.get(key) is not None:
+                hints.append(str(obj.get(key)))
+    text = " ".join(hints).lower()
+    if "flash" in text:
+        return "Flash"
+    if "opus" in text or "claude" in text or "sonnet" in text:
+        return "Opus"
+    if re.search(r"(^|[^a-z])pro([^a-z]|$)", text):
+        return "Pro"
+    return None
+
+
+def _collect_antigravity_model_metrics(value, path_parts, found):
+    if isinstance(value, list):
+        for idx, item in enumerate(value):
+            _collect_antigravity_model_metrics(item, [*path_parts, str(idx)], found)
+        return
+    if not isinstance(value, dict):
+        return
+
+    pct = _antigravity_pct(value)
+    label = _classify_antigravity_model(path_parts, value) if pct is not None else None
+    if label and label not in found:
+        metric = _usage_window(pct, _find_antigravity_reset(value), label)
+        if metric:
+            found[label] = metric
+
+    for key, child_value in value.items():
+        if isinstance(child_value, (dict, list)):
+            _collect_antigravity_model_metrics(child_value, [*path_parts, key], found)
+
+
+def parse_antigravity_models(raw):
+    try:
+        if not isinstance(raw, (dict, list)):
+            return None
+        found = {}
+        _collect_antigravity_model_metrics(raw, [], found)
+        metrics = [found[label] for label in ("Flash", "Pro", "Opus") if label in found]
+        return metrics or None
+    except Exception:
+        return None
+
+
 def _classify_antigravity_window(path_parts, obj):
     hints = [str(part or "") for part in path_parts]
     if isinstance(obj, dict):
@@ -745,6 +928,7 @@ def parse_antigravity_item_table(rows):
             return unavailable("antigravity")
         five_hour = None
         weekly = None
+        model_metrics = []
         for row in rows:
             if isinstance(row, dict):
                 key = row.get("key")
@@ -756,11 +940,38 @@ def parse_antigravity_item_table(rows):
             value = _decode_antigravity_value(raw_value)
             if value is None:
                 continue
+            metrics = parse_antigravity_models(value)
+            if metrics:
+                for metric in metrics:
+                    if not any(existing.get("label") == metric.get("label") for existing in model_metrics):
+                        model_metrics.append(metric)
             found = _find_antigravity_windows(value, [key])
             if five_hour is None and found.get("five_hour"):
                 five_hour = found["five_hour"]
             if weekly is None and found.get("weekly"):
                 weekly = found["weekly"]
+        if model_metrics:
+            order = {"Flash": 0, "Pro": 1, "Opus": 2}
+            model_metrics.sort(key=lambda metric: order.get(metric.get("label"), 99))
+            record = unavailable("antigravity")
+            record.update(
+                {
+                    "label": "AGY",
+                    "available": True,
+                    "five_hour": five_hour,
+                    "weekly": weekly,
+                    "display": "compact",
+                    "metrics": [
+                        {
+                            "label": metric.get("label"),
+                            "used_pct": metric.get("used_pct"),
+                            "resets_at": metric.get("resets_at") if metric.get("resets_at") is not None else None,
+                        }
+                        for metric in model_metrics
+                    ],
+                }
+            )
+            return record
         if five_hour is None and weekly is None:
             return unavailable("antigravity")
         record = unavailable("antigravity")
