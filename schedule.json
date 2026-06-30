@@ -15,8 +15,8 @@
     "note": "Peak hours removed 2026-05-06. This block retained for custom-tier timezone config only."
   },
   "labels": {
-    "five_hour": "5h interactive",
-    "weekly": "weekly interactive",
+    "five_hour": "Claude 5h",
+    "weekly": "weekly",
     "five_hour_note": "",
     "weekly_note": ""
   },

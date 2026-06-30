@@ -142,7 +142,7 @@ const REGULAR_TIER_PRESETS = {
   full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
 };
 
-const MULTI_CLI_PRESET = ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'churn', 'effort', 'env'];
+const MULTI_CLI_PRESET = ['model', 'context', 'cost', 'effort', 'env', 'git_branch', 'git_dirty'];
 
 function findGitBash() {
   const candidates = [
@@ -212,7 +212,11 @@ test('node tier presets keep regular tiers clean and add multi-cli cockpit', () 
       assert.equal(TIER_PRESETS[tier].includes(segment), false, `${tier} must not include ${segment}`);
     }
   }
-  for (const segment of ['gateway', 'sessions', 'jobs', 'churn', 'usage_credits']) {
+  // multi-cli line 1 is now clean: model, context, cost, effort, LOCAL, git.
+  for (const segment of ['gateway', 'sessions', 'jobs', 'churn', 'usage_credits', 'vim_mode', 'agent', 'workflows', 'tasks', 'banner']) {
+    assert.equal(TIER_PRESETS['multi-cli'].includes(segment), false, `multi-cli must not include ${segment}`);
+  }
+  for (const segment of ['model', 'context', 'cost', 'effort', 'env', 'git_branch', 'git_dirty']) {
     assert.equal(TIER_PRESETS['multi-cli'].includes(segment), true, `multi-cli must include ${segment}`);
   }
 });
@@ -248,7 +252,20 @@ test('node full tier ignores foreign gateway and keeps Claude rate-limit bars', 
   }
 });
 
-test('node multi-cli tier shows gateway badge and forced external usage rows', () => {
+function writeCachedScheduleWithBanner(home) {
+  const schedule = {
+    v: 2,
+    mode: 'normal',
+    peak: { enabled: true, tz: 'UTC', days: [1, 2, 3, 4, 5], start: 5, end: 11 },
+    banners: [{ text: 'PROMO ENDS SOON', expires: '2099-01-01', color: 'yellow' }],
+    release: {},
+    labels: { five_hour: 'Claude 5h', weekly: 'weekly' },
+    features: { show_peak_segment: true, show_rate_limits: true, show_timeline: false },
+  };
+  fs.writeFileSync(path.join(home, '.claude', 'statusline-schedule.json'), JSON.stringify(schedule, null, 2), 'utf8');
+}
+
+test('node multi-cli tier has a clean line 1, Codex+GLM rows (no Droid) and a bottom banner', () => {
   const home = makeHome();
   try {
     writeConfig(home, {
@@ -260,7 +277,7 @@ test('node multi-cli tier shows gateway badge and forced external usage rows', (
         glm: { api_key: 'test-key' },
       },
     });
-    writeCachedSchedule(home);
+    writeCachedScheduleWithBanner(home);
     writeUsageCache(home);
     writeExternalUsageCaches(home);
 
@@ -279,12 +296,24 @@ test('node multi-cli tier shows gateway badge and forced external usage rows', (
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /via z\.ai \(GLM\)/);
+    const plainLines = stripAnsi(result.stdout).split(/\r?\n/);
+
+    // Line 1 is clean: no gateway badge, no sessions cockpit, no banner.
+    const line1 = plainLines[0];
+    assert.match(line1, /Sonnet 4\.6/);
+    assert.doesNotMatch(line1, /via/);
+    assert.doesNotMatch(line1, /sess/);
+    assert.doesNotMatch(line1, /PROMO/);
+
+    // The promo banner moves to the very last line, exactly once.
+    assert.match(plainLines[plainLines.length - 1], /PROMO ENDS SOON/);
+    assert.equal((result.stdout.match(/PROMO ENDS SOON/g) || []).length, 1);
+
+    // Codex + GLM render; Droid is dropped from multi-cli.
     assert.match(result.stdout, /Codex/);
     assert.match(result.stdout, /GLM/);
-    assert.match(result.stdout, /Droid/);
+    assert.doesNotMatch(result.stdout, /Droid/);
 
-    const plainLines = stripAnsi(result.stdout).split(/\r?\n/);
     const glmLine = plainLines.find(line => line.includes('GLM') && line.includes('tok'));
     const codexLine = plainLines.find(line => line.includes('Codex') && line.includes('7d'));
     assert.ok(glmLine, stripAnsi(result.stdout));
@@ -293,6 +322,9 @@ test('node multi-cli tier shows gateway badge and forced external usage rows', (
     assert.match(glmLine, /tok 9%/);
     assert.doesNotMatch(glmLine, /[\u25b0\u25b1]/);
     assert.match(codexLine, /[\u25b0\u25b1]/);
+    // Reset is now an absolute end-time clock, not a duration; the weekly
+    // window resets far out so it renders date + time.
+    assert.match(codexLine, /\u27f3 \d+\/\d+ \d/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

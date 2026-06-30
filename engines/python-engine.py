@@ -85,7 +85,10 @@ TIER_PRESETS = {
     "standard": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "effort", "env"],
     # Full: clean line 1 + dashboard below with rate limits, spending, cache (with explanations)
     "full": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
-    "multi-cli": ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "churn", "effort", "env"],
+    # Line 1 stays clean: model, context, cost, effort, LOCAL, git. The Claude
+    # rate-limit dashboard + external provider rows + metrics render below in
+    # full mode; the promo banner is moved to the very last line (see main()).
+    "multi-cli": ["model", "context", "cost", "effort", "env", "git_branch", "git_dirty"],
 }
 
 DEFAULT_CONFIG = {
@@ -1523,7 +1526,8 @@ def _effective_external_usage_config(config, is_multi_cli=False):
     external["enabled"] = True
 
     defaults = DEFAULT_CONFIG.get("external_providers", {})
-    for provider in ("codex", "glm", "droid"):
+    # Codex + GLM are forced on by default in multi-cli.
+    for provider in ("codex", "glm"):
         raw = source.get(provider)
         provider_config = raw if isinstance(raw, dict) else {}
         merged = dict(defaults.get(provider, {}))
@@ -1531,12 +1535,15 @@ def _effective_external_usage_config(config, is_multi_cli=False):
         merged["enabled"] = not (raw is False or provider_config.get("enabled") is False)
         external[provider] = merged
 
-    anti_raw = source.get("antigravity")
-    anti_config = anti_raw if isinstance(anti_raw, dict) else {}
-    antigravity = dict(defaults.get("antigravity", {}))
-    antigravity.update(anti_config)
-    antigravity["enabled"] = anti_raw is True or anti_config.get("enabled") is True
-    external["antigravity"] = antigravity
+    # Droid only ever showed a cumulative token count (confusing), so it is
+    # opt-in like Antigravity now: it appears only when explicitly enabled.
+    for provider in ("droid", "antigravity"):
+        raw = source.get(provider)
+        provider_config = raw if isinstance(raw, dict) else {}
+        merged = dict(defaults.get(provider, {}))
+        merged.update(provider_config)
+        merged["enabled"] = raw is True or provider_config.get("enabled") is True
+        external[provider] = merged
 
     effective = dict(config or {})
     effective["external_providers"] = external
@@ -1557,6 +1564,17 @@ def build_external_usage_lines(ctx):
         return ""
 
     now_sec = time.time()
+
+    # External records carry resets_at as epoch seconds; convert to the engine's
+    # _format_reset so the row shows an absolute end-time (⟳ 12:00pm /
+    # ⟳ 4/7 5:00am) exactly like the Claude rate-limit line above.
+    def _format_clock(epoch_sec, style):
+        try:
+            iso = datetime.fromtimestamp(float(epoch_sec), tz=timezone.utc).isoformat()
+        except (TypeError, ValueError, OSError, OverflowError):
+            return ""
+        return _format_reset(iso, style)
+
     candidates = []
     for record in records:
         try:
@@ -1570,10 +1588,13 @@ def build_external_usage_lines(ctx):
     for record, _ in candidates:
         try:
             row = _usage_providers.format_provider_row_parts(
-                record, now_sec, label_width=label_width, format_duration=fmt_duration
+                record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
             )
-            if row:
-                lines.append(render_dashboard_line([_render_external_provider_parts(row)], ctx.get("render_width", 0)))
+            if not row:
+                continue
+            sub_rows = row.get("sub_rows") if isinstance(row.get("sub_rows"), list) and row.get("sub_rows") else [row]
+            for sub in sub_rows:
+                lines.append(render_dashboard_line([_render_external_provider_parts(sub)], ctx.get("render_width", 0)))
         except Exception:
             pass
     return "\n".join(lines)
@@ -1850,8 +1871,10 @@ def main():
 
     enabled = get_enabled_segments(config, schedule)
 
-    # Inject banner at the start if present
-    if "banner" not in enabled:
+    # Inject banner at the start if present. In multi-cli the banner moves to the
+    # very last line of output (rendered after the metrics line below); every
+    # other tier keeps it on line 1.
+    if not is_multi_cli and "banner" not in enabled:
         enabled.insert(0, "banner")
     if os.environ.get("ANTHROPIC_API_KEY") and "auth_mode" not in enabled:
         insert_at = 1 if enabled and enabled[0] == "banner" else 0
@@ -1925,6 +1948,13 @@ def main():
         metrics = build_metrics_line(ctx)
         if metrics:
             print(f"\n{metrics}", end="")
+
+    # multi-cli: the promo banner renders as the final line (it was removed from
+    # line 1 above), so line 1 stays clean and the banner anchors the bottom.
+    if is_multi_cli:
+        banner = _run_segment("banner", seg_banner, ctx)
+        if banner:
+            print(f"\n{banner}", end="")
 
     try:
         _write_vscode_context(ctx)

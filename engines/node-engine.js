@@ -32,7 +32,10 @@ const TIER_PRESETS = {
   minimal: ['model', 'context', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'rate_limits', 'effort', 'env'],
   standard: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'effort', 'env'],
   full: ['model', 'context', 'vim_mode', 'agent', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'effort', 'env'],
-  'multi-cli': ['model', 'gateway', 'context', 'vim_mode', 'agent', 'sessions', 'jobs', 'workflows', 'tasks', 'git_branch', 'git_dirty', 'cost', 'usage_credits', 'churn', 'effort', 'env'],
+  // Line 1 stays clean: model, context, cost, effort, LOCAL, git. The Claude
+  // rate-limit dashboard + external provider rows + metrics render below in
+  // full mode; the promo banner is moved to the very last line (see main()).
+  'multi-cli': ['model', 'context', 'cost', 'effort', 'env', 'git_branch', 'git_dirty'],
 };
 
 const DEFAULT_CONFIG = {
@@ -934,7 +937,10 @@ function effectiveExternalUsageConfig(config = {}, isMultiCli = false) {
     : {};
   const external = { ...source, enabled: true };
 
-  for (const provider of ['codex', 'glm', 'droid']) {
+  // Codex + GLM are forced on by default in multi-cli. Droid only ever showed a
+  // cumulative token count (confusing), so it is opt-in like Antigravity now:
+  // it appears only when the user explicitly enables it.
+  for (const provider of ['codex', 'glm']) {
     const raw = source[provider];
     const providerConfig = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
     external[provider] = {
@@ -944,13 +950,15 @@ function effectiveExternalUsageConfig(config = {}, isMultiCli = false) {
     };
   }
 
-  const antiRaw = source.antigravity;
-  const antiConfig = antiRaw && typeof antiRaw === 'object' && !Array.isArray(antiRaw) ? antiRaw : {};
-  external.antigravity = {
-    ...((DEFAULT_CONFIG.external_providers || {}).antigravity || {}),
-    ...antiConfig,
-    enabled: antiRaw === true || antiConfig.enabled === true,
-  };
+  for (const provider of ['droid', 'antigravity']) {
+    const raw = source[provider];
+    const providerConfig = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    external[provider] = {
+      ...((DEFAULT_CONFIG.external_providers || {})[provider] || {}),
+      ...providerConfig,
+      enabled: raw === true || providerConfig.enabled === true,
+    };
+  }
 
   return { ...(config || {}), external_providers: external };
 }
@@ -970,11 +978,23 @@ async function buildExternalUsageLines(ctx) {
     } catch {}
   }
   const labelWidth = candidates.reduce((max, item) => Math.max(max, item.label.length), 0);
+  // External records carry resets_at as epoch seconds; convert to the engine's
+  // formatReset so the row shows an absolute end-time (⟳ 12:00pm / ⟳ 4/7 5:00am)
+  // exactly like the Claude rate-limit line above.
+  const formatClock = (epochSec, style) => {
+    const ms = Number(epochSec) * 1000;
+    if (!Number.isFinite(ms)) return '';
+    return formatReset(new Date(ms).toISOString(), style);
+  };
   const lines = [];
   for (const { record } of candidates) {
     try {
-      const row = usageProviders.formatProviderRowParts(record, nowSec, { labelWidth, formatDuration: fmtDur });
-      if (row) lines.push(renderDashboardLine([renderExternalProviderParts(row)], ctx.renderWidth || 0));
+      const row = usageProviders.formatProviderRowParts(record, nowSec, { labelWidth, formatDuration: fmtDur, formatClock });
+      if (!row) continue;
+      const subRows = Array.isArray(row.subRows) && row.subRows.length ? row.subRows : [row];
+      for (const sub of subRows) {
+        lines.push(renderDashboardLine([renderExternalProviderParts(sub)], ctx.renderWidth || 0));
+      }
     } catch {}
   }
   return lines.join('\n');
@@ -1145,7 +1165,9 @@ async function main() {
     isPeak: false, renderWidth: resolveRenderWidth(config),
   };
   const enabled = getEnabled(config, schedule);
-  if (!enabled.includes('banner')) enabled.unshift('banner');
+  // In multi-cli the banner moves to the very last line of output (rendered
+  // after the metrics line below); every other tier keeps it on line 1.
+  if (!isMultiCli && !enabled.includes('banner')) enabled.unshift('banner');
   if (process.env.ANTHROPIC_API_KEY && !enabled.includes('auth_mode')) {
     enabled.splice(enabled[0] === 'banner' ? 1 : 0, 0, 'auth_mode');
   }
@@ -1189,6 +1211,13 @@ async function main() {
     if (ext) process.stdout.write(`\n${ext}`);
     const ml = buildMetricsLine(ctx);
     if (ml) process.stdout.write(`\n${ml}`);
+  }
+
+  // multi-cli: the promo banner renders as the final line (it was removed from
+  // line 1 above), so line 1 stays clean and the banner anchors the bottom.
+  if (isMultiCli) {
+    const banner = runSegment('banner', ctx);
+    if (banner) process.stdout.write(`\n${banner}`);
   }
 
   try { writeVscodeContext(ctx); } catch {}

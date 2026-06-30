@@ -219,6 +219,52 @@ def test_provider_row_parts_omit_past_reset_countdown():
     assert row["stale_text"] == ""
 
 
+def test_antigravity_dual_model_rows_render_two_compact_rows_without_bars():
+    record = {
+        "provider": "antigravity",
+        "label": "AGY",
+        "available": True,
+        "display": "compact",
+        "metrics_5h": [
+            {"label": "Opus", "used_pct": 12, "resets_at": 4_071_000_000},
+            {"label": "Pro", "used_pct": 45, "resets_at": 4_071_000_000},
+            {"label": "Flash", "used_pct": 7, "resets_at": 4_071_000_000},
+        ],
+        "metrics_weekly": [
+            {"label": "Opus", "used_pct": 30, "resets_at": 4_072_000_000},
+            {"label": "Pro", "used_pct": 60, "resets_at": 4_072_000_000},
+            {"label": "Flash", "used_pct": 22, "resets_at": 4_072_000_000},
+        ],
+        "stale_seconds": 0,
+    }
+
+    # Fixed clock formatter so the two-row layout is deterministic across hosts.
+    def clock(_epoch, style):
+        return "12:00pm" if style == "time" else "4/7 5:00am"
+
+    row = providers.format_provider_row_parts(record, 1_000, format_clock=clock)
+
+    assert row is not None
+    assert row["display"] == "agy_dual"
+    assert len(row["sub_rows"]) == 2
+
+    lines = row["text"].splitlines()
+    assert len(lines) == 2
+    five_hour, weekly = lines
+
+    assert five_hour.startswith("AGY 5h")
+    assert "Opus 12%" in five_hour and "Pro 45%" in five_hour and "Flash 7%" in five_hour
+    assert "⟳ 12:00pm" in five_hour
+
+    assert weekly.startswith("AGY 7d")
+    assert "Opus 30%" in weekly and "Pro 60%" in weekly and "Flash 22%" in weekly
+    assert "⟳ 4/7 5:00am" in weekly
+
+    # No bar glyphs in either row.
+    assert "▰" not in row["text"]
+    assert "▱" not in row["text"]
+
+
 def test_providers_gracefully_unavailable_without_home_data(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.delenv("ZAI_API_KEY", raising=False)

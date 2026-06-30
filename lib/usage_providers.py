@@ -157,19 +157,49 @@ def _compact_metrics_for_record(record):
     return [metric for metric in (_normalize_display_metric(item) for item in raw_metrics) if metric]
 
 
-def _soonest_reset_text(metrics, now_sec, format_duration):
+def _reset_style_for_label(label):
+    # A 5-hour window shows a bare clock (12:00pm); anything longer shows a
+    # date + clock (4/7 5:00am), mirroring the Claude rate-limit line.
+    return "time" if "5h" in str(label or "") else "datetime"
+
+
+def _reset_display(resets_at, label, now_sec, format_duration, format_clock):
+    """Reset text for one window/metric.
+
+    With a clock formatter the reset is an absolute end-time (⟳ 12:00pm /
+    ⟳ 4/7 5:00am); otherwise it falls back to the legacy duration countdown
+    (⟳ 3h 58m). A null/missing reset shows nothing (no ⟳).
+    """
+    if format_clock is not None:
+        if resets_at is None:
+            return ""
+        try:
+            clock = format_clock(resets_at, _reset_style_for_label(label))
+        except Exception:
+            clock = ""
+        return f"⟳ {clock}" if clock else ""
+    return _reset_countdown(resets_at, now_sec, format_duration)
+
+
+def _soonest_reset_text(metrics, now_sec, format_duration, format_clock=None):
     now = _number_or_zero(now_sec)
     soonest = None
+    soonest_at = None
     for metric in metrics:
         reset = metric.get("resets_at")
         if reset is None:
             continue
-        reset = _number_or_zero(reset)
-        if reset <= now:
+        reset_val = _number_or_zero(reset)
+        # Legacy duration mode hides already-elapsed resets; clock mode keeps the
+        # absolute end-time regardless.
+        if format_clock is None and reset_val <= now:
             continue
-        if soonest is None or reset < soonest:
-            soonest = reset
-    return "" if soonest is None else _reset_countdown(soonest, now_sec, format_duration)
+        if soonest_at is None or reset_val < soonest_at:
+            soonest_at = reset_val
+            soonest = metric
+    if soonest is None:
+        return ""
+    return _reset_display(soonest.get("resets_at"), soonest.get("label"), now_sec, format_duration, format_clock)
 
 
 def _plain_usage_bar(pct, width=10):
@@ -210,7 +240,58 @@ def _format_provider_row_text(row):
     return f"{'  '.join(chunks)}{row.get('stale_text') or ''}"
 
 
-def format_provider_row_parts(record, now_sec=None, label_width=0, format_duration=None):
+def _antigravity_dual_rows(record, label, now_sec, format_duration, format_clock, stale):
+    """Two compact rows (5h + weekly) for an Antigravity per-model record.
+
+    Returns None when the record has no metrics_5h / metrics_weekly lists, so
+    callers fall through to the normal compact/bars rendering.
+    """
+    metrics_5h = record.get("metrics_5h")
+    metrics_weekly = record.get("metrics_weekly")
+    if not isinstance(metrics_5h, list) and not isinstance(metrics_weekly, list):
+        return None
+
+    sub_rows = []
+    for window_label, raw_metrics in (("5h", metrics_5h), ("7d", metrics_weekly)):
+        if not isinstance(raw_metrics, list):
+            continue
+        norm = [metric for metric in (_normalize_display_metric(item) for item in raw_metrics) if metric]
+        if not norm:
+            continue
+        sub_label = f"{label} {window_label}"
+        sub_parts = [{"kind": "label", "label": sub_label, "raw_label": sub_label, "plan": ""}]
+        for metric in norm:
+            sub_parts.append(
+                {"kind": "metric", "label": metric["label"], "pct": metric["used_pct"], "resets_at": metric.get("resets_at")}
+            )
+        resets = [metric.get("resets_at") for metric in norm if metric.get("resets_at") is not None]
+        soonest_reset = min(resets) if resets else None
+        sub = {
+            "label": sub_label,
+            "display": "compact",
+            "parts": sub_parts,
+            "reset_text": _reset_display(soonest_reset, window_label, now_sec, format_duration, format_clock),
+            "stale": stale,
+            "stale_text": " ·stale" if stale else "",
+        }
+        sub["text"] = _format_provider_row_text(sub)
+        sub_rows.append(sub)
+
+    if not sub_rows:
+        return None
+    row = {
+        "label": label,
+        "display": "agy_dual",
+        "parts": [{"kind": "label", "label": label, "raw_label": label, "plan": ""}],
+        "sub_rows": sub_rows,
+        "stale": stale,
+        "stale_text": " ·stale" if stale else "",
+    }
+    row["text"] = "\n".join(sub["text"] for sub in sub_rows)
+    return row
+
+
+def format_provider_row_parts(record, now_sec=None, label_width=0, format_duration=None, format_clock=None):
     if not isinstance(record, dict) or not record.get("available"):
         return None
     if now_sec is None:
@@ -233,6 +314,13 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
     stale_seconds = record.get("stale_seconds")
     stale = stale_seconds is not None and _number_or_zero(stale_seconds) > 600
 
+    # Antigravity per-model two-row layout: when the record carries metrics_5h /
+    # metrics_weekly lists (Opus/Pro/Flash), emit two compact rows \u2014 a 5-hour row
+    # and a weekly row \u2014 instead of a single line.
+    dual = _antigravity_dual_rows(record, label, now_sec, format_duration, format_clock, stale)
+    if dual is not None:
+        return dual
+
     if display == "compact":
         metrics = _compact_metrics_for_record(record)
         for metric in metrics:
@@ -250,7 +338,7 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
             "label": label,
             "display": display,
             "parts": parts,
-            "reset_text": _soonest_reset_text(metrics, now_sec, format_duration),
+            "reset_text": _soonest_reset_text(metrics, now_sec, format_duration, format_clock),
             "stale": stale,
             "stale_text": " \u00b7stale" if stale else "",
         }
@@ -267,7 +355,7 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
                 "kind": "window",
                 "label": window_label,
                 "pct": pct,
-                "reset_text": _reset_countdown(window.get("resets_at"), now_sec, format_duration),
+                "reset_text": _reset_display(window.get("resets_at"), window_label, now_sec, format_duration, format_clock),
             }
         )
 

@@ -37,7 +37,7 @@ REGULAR_TIER_PRESETS = {
     "full": ["model", "context", "vim_mode", "agent", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "effort", "env"],
 }
 
-MULTI_CLI_PRESET = ["model", "gateway", "context", "vim_mode", "agent", "sessions", "jobs", "workflows", "tasks", "git_branch", "git_dirty", "cost", "usage_credits", "churn", "effort", "env"]
+MULTI_CLI_PRESET = ["model", "context", "cost", "effort", "env", "git_branch", "git_dirty"]
 
 
 def _require_engine():
@@ -183,8 +183,11 @@ def test_python_tier_presets_keep_regular_tiers_clean_and_add_multi_cli():
         for segment in ("gateway", "sessions", "jobs", "churn"):
             assert segment not in engine.TIER_PRESETS[tier]
 
+    # multi-cli line 1 is now clean: model, context, cost, effort, LOCAL, git.
     assert engine.TIER_PRESETS["multi-cli"] == MULTI_CLI_PRESET
-    for segment in ("gateway", "sessions", "jobs", "churn", "usage_credits"):
+    for segment in ("gateway", "sessions", "jobs", "churn", "usage_credits", "vim_mode", "agent", "workflows", "tasks", "banner"):
+        assert segment not in engine.TIER_PRESETS["multi-cli"]
+    for segment in ("model", "context", "cost", "effort", "env", "git_branch", "git_dirty"):
         assert segment in engine.TIER_PRESETS["multi-cli"]
 
 
@@ -222,7 +225,9 @@ def test_python_multi_cli_effective_external_config_forces_default_providers(mon
     assert effective["enabled"] is True
     assert effective["codex"]["enabled"] is True
     assert effective["glm"]["enabled"] is True
-    assert effective["droid"]["enabled"] is True
+    # Droid is now opt-in (only its cumulative token count showed — confusing),
+    # so it is off by default just like Antigravity.
+    assert effective["droid"]["enabled"] is False
     assert effective["antigravity"]["enabled"] is False
 
 
@@ -241,7 +246,25 @@ def test_python_full_tier_ignores_foreign_gateway_and_keeps_claude_rate_limit_ba
     assert "$1.23" in proc.stdout
 
 
-def test_python_multi_cli_tier_shows_gateway_badge_and_forced_external_rows(tmp_path):
+def _write_cached_schedule_with_banner(home: Path) -> None:
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude" / "statusline-schedule.json").write_text(
+        json.dumps(
+            {
+                "v": 2,
+                "mode": "normal",
+                "peak": {"enabled": True, "tz": "UTC", "days": [1, 2, 3, 4, 5], "start": 5, "end": 11},
+                "banners": [{"text": "PROMO ENDS SOON", "expires": "2099-01-01", "color": "yellow"}],
+                "release": {},
+                "labels": {"five_hour": "Claude 5h", "weekly": "weekly"},
+                "features": {"show_peak_segment": True, "show_rate_limits": True, "show_timeline": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_python_multi_cli_tier_clean_line1_external_rows_and_bottom_banner(tmp_path):
     home = tmp_path / "home"
     _write_config(
         home,
@@ -252,18 +275,32 @@ def test_python_multi_cli_tier_shows_gateway_badge_and_forced_external_rows(tmp_
             "external_providers": {"enabled": False, "glm": {"api_key": "test-key"}},
         },
     )
-    _write_cached_schedule(home)
+    _write_cached_schedule_with_banner(home)
     _write_usage_cache(home)
     _write_external_usage_caches(home)
 
     proc = _run_engine(home, _stdin())
 
     assert proc.returncode == 0, proc.stderr
-    assert "via z.ai (GLM)" in proc.stdout
+    plain_lines = _strip_ansi(proc.stdout).splitlines()
+    assert plain_lines
+
+    # Line 1 is clean: no gateway badge, no sessions/jobs cockpit, no banner.
+    line1 = plain_lines[0]
+    assert "Sonnet 4.6" in line1
+    assert "via" not in line1
+    assert "sess" not in line1
+    assert "PROMO" not in line1
+
+    # The promo banner moves to the very last line.
+    assert "PROMO ENDS SOON" in plain_lines[-1]
+    assert proc.stdout.count("PROMO ENDS SOON") == 1
+
+    # Codex + GLM render; Droid is dropped from multi-cli.
     assert "Codex" in proc.stdout
     assert "lite" in proc.stdout
-    assert "Droid" in proc.stdout
-    plain_lines = _strip_ansi(proc.stdout).splitlines()
+    assert "Droid" not in proc.stdout
+
     glm_line = next((line for line in plain_lines if "GLM" in line and "tok" in line), "")
     codex_line = next((line for line in plain_lines if "Codex" in line and "7d" in line), "")
     assert glm_line
@@ -273,3 +310,6 @@ def test_python_multi_cli_tier_shows_gateway_badge_and_forced_external_rows(tmp_
     assert "\u25b0" not in glm_line
     assert "\u25b1" not in glm_line
     assert "\u25b0" in codex_line or "\u25b1" in codex_line
+    # Reset is now an absolute end-time clock (\u27f3 5:20am / \u27f3 13/1 7:06pm), not a
+    # duration (\u27f3 3h 58m). Codex's weekly window resets far out -> date + time.
+    assert re.search(r"\u27f3 \d+/\d+ \d", codex_line)
