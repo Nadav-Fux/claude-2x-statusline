@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.request
@@ -1079,24 +1080,76 @@ def _antigravity_db_path():
     return Path.home() / ".config" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
 
 
-def get_antigravity_usage(config=None):
-    try:
-        if isinstance(config, dict) and (config.get("db_path") or config.get("path")):
-            db_path = Path(config.get("db_path") or config.get("path"))
+def _map_antigravity_snapshot(snapshot):
+    """Map an `antigravity-usage quota --json` snapshot (models[].remainingPercentage
+    is a 0..1 fraction) into Opus/Pro/Flash compact metrics."""
+    if not isinstance(snapshot, dict):
+        return None
+    models = snapshot.get("models") if isinstance(snapshot.get("models"), list) else []
+    pick = {"Opus": None, "Pro": None, "Flash": None}
+    for m in models:
+        if not isinstance(m, dict) or m.get("isAutocompleteOnly"):
+            continue
+        ident = f"{m.get('label', '')} {m.get('modelId', '')}".lower()
+        if "opus" in ident or "claude" in ident or "sonnet" in ident:
+            group = "Opus"
+        elif "pro" in ident:
+            group = "Pro"
+        elif "flash" in ident:
+            group = "Flash"
         else:
-            db_path = _antigravity_db_path()
-        if not db_path.exists():
-            return unavailable("antigravity")
-        patterns = ("%antigravity%", "%usage%", "%quota%", "%limit%", "%credit%", "%ratelimit%")
-        where = " OR ".join("LOWER(key) LIKE ?" for _ in patterns)
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.5) as conn:
-            rows = [
-                {"key": key, "value": value}
-                for key, value in conn.execute(
-                    f"SELECT key, value FROM ItemTable WHERE {where}", [pattern.lower() for pattern in patterns]
-                ).fetchall()
-            ]
-        return parse_antigravity_item_table(rows)
+            continue
+        if pick[group] is not None:
+            continue
+        try:
+            frac = float(m.get("remainingPercentage"))
+        except (TypeError, ValueError):
+            continue
+        reset = _parse_iso_seconds(m.get("resetTime"))
+        pick[group] = {
+            "label": group,
+            "used_pct": max(0, min(100, round((1 - frac) * 100))),
+            "resets_at": int(reset) if reset else None,
+        }
+    metrics = [pick[g] for g in ("Opus", "Pro", "Flash") if pick[g]]
+    return metrics or None
+
+
+def get_antigravity_usage(config=None):
+    """Antigravity quota via the `antigravity-usage` CLI (owns OAuth refresh +
+    local-IDE/cloud fallback). Caches BOTH hits and misses so a logged-out machine
+    never re-spawns the CLI on every render."""
+    try:
+        config = config if isinstance(config, dict) else {}
+        cached = _read_cached_record("antigravity", GLM_CACHE_TTL)
+        if cached:
+            return cached
+        bin_path = str(config.get("bin") or "antigravity-usage")
+        out = ""
+        try:
+            proc = subprocess.run(
+                [bin_path, "quota", "--json", "--method", "auto"],
+                capture_output=True, text=True, timeout=5,
+            )
+            out = proc.stdout or ""
+        except Exception:
+            out = ""
+        try:
+            snapshot = json.loads(out)
+        except Exception:
+            snapshot = None
+        metrics = _map_antigravity_snapshot(snapshot)
+        if metrics:
+            record = unavailable("antigravity")
+            record.update({
+                "available": True, "label": "AGY", "display": "compact", "metrics": metrics,
+                "plan": snapshot.get("planType") if isinstance(snapshot, dict) else None,
+                "source": "api", "stale_seconds": 0,
+            })
+        else:
+            record = unavailable("antigravity")
+        _write_json(_cache_path("antigravity"), {"cached_at": time.time(), "record": record})
+        return record
     except Exception:
         return unavailable("antigravity")
 
