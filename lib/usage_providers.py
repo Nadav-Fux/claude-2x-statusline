@@ -22,6 +22,7 @@ PROVIDERS = {
 
 LOCAL_CACHE_TTL = 45
 GLM_CACHE_TTL = 60
+EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
 
 
@@ -205,6 +206,59 @@ def _read_cached_record(provider, ttl):
         return record if isinstance(record, dict) else None
     except Exception:
         return None
+
+
+def _is_available_record(record):
+    return isinstance(record, dict) and record.get("available") is True
+
+
+def _read_fresh_cache(provider, ttl=EXTERNAL_USAGE_CACHE_TTL):
+    try:
+        path = _cache_path(provider)
+        age = time.time() - path.stat().st_mtime
+        if age > ttl:
+            return None, None
+        return _read_json(path), max(0, int(age))
+    except Exception:
+        return None, None
+
+
+def read_cached_external_usage(config):
+    """Read external-provider usage from local cache files only.
+
+    This is intentionally synchronous and network-free for narrator use. Any
+    malformed config/file/record returns [] instead of surfacing an exception.
+    """
+    try:
+        external = config.get("external_providers") if isinstance(config, dict) else None
+        if not isinstance(external, dict) or external.get("enabled") is not True:
+            return []
+
+        records = []
+        for provider in ("codex", "glm", "droid", "antigravity"):
+            provider_config = external.get(provider)
+            if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
+                continue
+
+            data, stale = _read_fresh_cache(provider)
+            if not isinstance(data, dict):
+                continue
+
+            record = None
+            if provider == "glm":
+                response = data.get("response")
+                if isinstance(response, dict):
+                    record = parse_glm_quota_response(response, stale_seconds=stale)
+            else:
+                cached_record = data.get("record")
+                if isinstance(cached_record, dict):
+                    record = cached_record
+
+            if _is_available_record(record):
+                records.append(record)
+        return records
+    except Exception:
+        return []
 
 
 def _write_cached_record(provider, record):

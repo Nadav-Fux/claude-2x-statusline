@@ -32,6 +32,11 @@ except ImportError:
     find_session_dir = None
     read_completed_workflows = None
 
+try:
+    from lib import usage_providers
+except ImportError:
+    usage_providers = None
+
 # ---------------------------------------------------------------------------
 # Dataclass
 # ---------------------------------------------------------------------------
@@ -62,6 +67,7 @@ class Observation:
     # Rate limits (0–100 %)
     rate_limit_5h_pct: float = 0.0
     rate_limit_7d_pct: float = 0.0
+    external_usage: list = field(default_factory=list)
 
     # Rate-limit reset times (parsed datetimes; None when absent/malformed) and a
     # derived "hours until the 7-day weekly window resets". These let the rate-limit
@@ -409,6 +415,14 @@ def build(memory: dict) -> Observation:
             # Clamp negatives to 0 (a reset that has just passed = 0h left), so
             # the cycle math never produces a nonsense elapsed_frac > 1.
             obs.rate_limit_7d_hours_left = max(0.0, secs_left / 3600.0)
+
+    if usage_providers is not None:
+        try:
+            engine = _load_python_engine_module()
+            config = engine.load_config()
+            obs.external_usage = usage_providers.read_cached_external_usage(config)
+        except Exception:
+            obs.external_usage = []
 
     # ── rolling_state samples ────────────────────────────────────────────────
     try:

@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const rs = require(path.join(__dirname, '..', 'lib', 'rolling_state'));
+const usageProviders = require(path.join(__dirname, '..', 'lib', 'usage_providers'));
 
 const HOME = process.env.HOME || process.env.USERPROFILE;
 const CLAUDE_DIR = path.join(HOME, '.claude');
@@ -125,6 +126,15 @@ function loadStatuslineContext(stdinData) {
   } catch { return {}; }
 }
 
+function loadStatuslineConfig() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'statusline-config.json'), 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
 // Line count of the project CLAUDE.md (cwd/CLAUDE.md), 0 if none. Boris Cherny /
 // Anthropic guidance: ~60 optimal, 200 ceiling — rules past it get deprioritized.
 function countClaudeMdLines(stdinData) {
@@ -147,6 +157,7 @@ function buildObservation(memory) {
     is_peak: false, schedule_mode: 'normal',
     session_duration_min: 0, prompt_count: 0,
     rate_limit_5h_pct: 0, rate_limit_7d_pct: 0,
+    external_usage: [],
     // Rate-limit reset times (Date|null) + derived hours-until-weekly-reset; let
     // the rate-limit insight reason about WHERE we are in the 7-day reset cycle.
     rate_limit_5h_resets_at: null, rate_limit_7d_resets_at: null,
@@ -196,6 +207,12 @@ function buildObservation(memory) {
       }
     }
   } catch {}
+
+  try {
+    obs.external_usage = usageProviders.readCachedExternalUsage(loadStatuslineConfig());
+  } catch {
+    obs.external_usage = [];
+  }
 
   // Rolling state
   try {
@@ -432,6 +449,26 @@ function novelty(key, memory) {
   return 10;
 }
 
+function usagePct(window) {
+  if (!window || typeof window !== 'object' || Array.isArray(window)) return null;
+  const pct = Number(window.used_pct);
+  if (!Number.isFinite(pct)) return null;
+  return Math.max(0, Math.min(100, pct));
+}
+
+function recordLabel(record) {
+  const label = String((record && (record.label || record.provider)) || '').trim();
+  return label || 'provider';
+}
+
+function windowLabel(window, fallback) {
+  if (window && typeof window === 'object' && !Array.isArray(window)) {
+    const label = String(window.label || '').trim();
+    if (label) return label;
+  }
+  return fallback;
+}
+
 function nextMilestone(cost) {
   const crossed = COST_MILESTONES.filter(m => cost >= m);
   return crossed.length ? crossed[crossed.length - 1] : null;
@@ -547,6 +584,72 @@ function buildInsights(obs, memory) {
   if (!rateLimitFired && obs.is_peak && maxRl < 80) {
     const k = 'peak_rate_ok';
     results.push({ text: `Historical peak schedule is active in your custom tier. Budget: ${maxRl.toFixed(0)}% used. Use this as a local schedule cue, not a faster-drain warning.`, text_he: `לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: ${maxRl.toFixed(0)}% בשימוש. תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
+  }
+
+  const externalUsage = Array.isArray(obs.external_usage) ? obs.external_usage : [];
+  const capped = [];
+  for (const record of externalUsage) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    const label = recordLabel(record);
+    const fiveWindow = record.five_hour;
+    const fivePct = usagePct(fiveWindow);
+    if (fivePct != null && fivePct >= 95) capped.push({ pct: fivePct, label, window: windowLabel(fiveWindow, '5h'), kind: 'prompt' });
+    const weeklyWindow = record.weekly;
+    const weeklyPct = usagePct(weeklyWindow);
+    const weeklyLabel = windowLabel(weeklyWindow, '7d');
+    if (weeklyPct != null && weeklyPct >= 95) capped.push({ pct: weeklyPct, label, window: weeklyLabel, kind: 'token' });
+  }
+  if (capped.length) {
+    let hottest = capped[0];
+    for (const item of capped.slice(1)) {
+      if (item.pct > hottest.pct) hottest = item;
+    }
+    const pctText = hottest.pct.toFixed(0);
+    const kindHe = hottest.kind === 'token' ? 'טוקנים' : 'פרומפטים';
+    const k = 'cross_cli_capped';
+    results.push({
+      text: `${hottest.label} ${hottest.window} quota is maxed (${pctText}%) — route ${hottest.kind}-heavy work to another CLI until it resets.`,
+      text_he: `${hottest.label} ${hottest.window} quota מלאה (${pctText}%) — העבר עבודה עתירת ${kindHe} ל-CLI אחר עד שהיא מתאפסת.`,
+      urgency: 7,
+      novelty: novelty(k, memory),
+      actionability: 8,
+      uniqueness: 10,
+      template_key: k,
+    });
+  }
+
+  if (obs.rate_limit_7d_pct >= 60) {
+    const offloadCandidates = [];
+    for (const record of externalUsage) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+      const windows = [];
+      const fivePct = usagePct(record.five_hour);
+      const weeklyPct = usagePct(record.weekly);
+      if (fivePct != null) windows.push(fivePct);
+      if (weeklyPct != null) windows.push(weeklyPct);
+      if (!windows.length) continue;
+      // Only suggest a provider with real headroom on EVERY window — a tool warm
+      // on any window (e.g. Codex 5h at 90%) is a bad offload target.
+      const busiest = Math.max(...windows);
+      if (busiest > 50) continue;
+      offloadCandidates.push({ pct: busiest, label: recordLabel(record) });
+    }
+    if (offloadCandidates.length) {
+      let coolest = offloadCandidates[0];
+      for (const item of offloadCandidates.slice(1)) {
+        if (item.pct < coolest.pct || (item.pct === coolest.pct && item.label < coolest.label)) coolest = item;
+      }
+      const k = 'cross_cli_offload';
+      results.push({
+        text: `Claude weekly at ${obs.rate_limit_7d_pct.toFixed(0)}% — offload mechanical passes to ${coolest.label} (${coolest.pct.toFixed(0)}% used) and save Claude for the hard parts.`,
+        text_he: `Claude weekly ב-${obs.rate_limit_7d_pct.toFixed(0)}% — העבר משימות מכניות ל-${coolest.label} (${coolest.pct.toFixed(0)}% בשימוש) ושמור את Claude לחלקים הקשים.`,
+        urgency: 6,
+        novelty: novelty(k, memory),
+        actionability: 8,
+        uniqueness: 9,
+        template_key: k,
+      });
+    }
   }
 
   // Duration alone is a poor proxy — gate on real context fill (1M-aware).

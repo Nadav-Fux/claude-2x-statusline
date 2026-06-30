@@ -62,6 +62,31 @@ def _novelty(template_key: str, memory: dict) -> int:
     return 10
 
 
+def _usage_pct(window) -> Optional[float]:
+    if not isinstance(window, dict):
+        return None
+    try:
+        pct = float(window.get("used_pct"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(pct):
+        return None
+    return max(0.0, min(100.0, pct))
+
+
+def _record_label(record: dict) -> str:
+    label = str(record.get("label") or record.get("provider") or "").strip()
+    return label or "provider"
+
+
+def _window_label(window, fallback: str) -> str:
+    if isinstance(window, dict):
+        label = str(window.get("label") or "").strip()
+        if label:
+            return label
+    return fallback
+
+
 # ---------------------------------------------------------------------------
 # Template builders
 # ---------------------------------------------------------------------------
@@ -387,6 +412,86 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             uniqueness=5,
             template_key=key,
         ))
+
+    # ── Cross-CLI usage: capped external provider ────────────────────────────
+    external_usage = getattr(obs, "external_usage", []) or []
+    if isinstance(external_usage, list):
+        capped = []
+        for record in external_usage:
+            if not isinstance(record, dict):
+                continue
+            label = _record_label(record)
+            five_window = record.get("five_hour")
+            five_pct = _usage_pct(five_window)
+            if five_pct is not None and five_pct >= 95:
+                capped.append((five_pct, label, _window_label(five_window, "5h"), "prompt"))
+            weekly_window = record.get("weekly")
+            weekly_pct = _usage_pct(weekly_window)
+            weekly_label = _window_label(weekly_window, "7d")
+            if weekly_pct is not None and weekly_pct >= 95:
+                capped.append((weekly_pct, label, weekly_label, "token"))
+
+        if capped:
+            pct, label, window, kind = max(capped, key=lambda item: item[0])
+            pct_text = f"{pct:.0f}"
+            kind_he = "טוקנים" if kind == "token" else "פרומפטים"
+            key = "cross_cli_capped"
+            results.append(Insight(
+                text=(
+                    f"{label} {window} quota is maxed ({pct_text}%) — route {kind}-heavy "
+                    f"work to another CLI until it resets."
+                ),
+                text_he=(
+                    f"{label} {window} quota מלאה ({pct_text}%) — העבר עבודה עתירת "
+                    f"{kind_he} ל-CLI אחר עד שהיא מתאפסת."
+                ),
+                urgency=7,
+                novelty=_novelty(key, memory),
+                actionability=8,
+                uniqueness=10,
+                template_key=key,
+            ))
+
+    # ── Cross-CLI usage: offload when Claude weekly is warm ──────────────────
+    if isinstance(external_usage, list) and obs.rate_limit_7d_pct >= 60:
+        offload_candidates = []
+        for record in external_usage:
+            if not isinstance(record, dict):
+                continue
+            windows = []
+            five_pct = _usage_pct(record.get("five_hour"))
+            weekly_pct = _usage_pct(record.get("weekly"))
+            if five_pct is not None:
+                windows.append(five_pct)
+            if weekly_pct is not None:
+                windows.append(weekly_pct)
+            if not windows:
+                continue
+            busiest = max(windows)
+            # Only suggest a provider with real headroom on EVERY window — a tool
+            # warm on any window (e.g. Codex 5h at 90%) is a bad offload target.
+            if busiest > 50:
+                continue
+            offload_candidates.append((busiest, _record_label(record)))
+
+        if offload_candidates:
+            coolest_pct, label = min(offload_candidates, key=lambda item: (item[0], item[1]))
+            key = "cross_cli_offload"
+            results.append(Insight(
+                text=(
+                    f"Claude weekly at {obs.rate_limit_7d_pct:.0f}% — offload mechanical "
+                    f"passes to {label} ({coolest_pct:.0f}% used) and save Claude for the hard parts."
+                ),
+                text_he=(
+                    f"Claude weekly ב-{obs.rate_limit_7d_pct:.0f}% — העבר משימות מכניות "
+                    f"ל-{label} ({coolest_pct:.0f}% בשימוש) ושמור את Claude לחלקים הקשים."
+                ),
+                urgency=6,
+                novelty=_novelty(key, memory),
+                actionability=8,
+                uniqueness=9,
+                template_key=key,
+            ))
 
     # ── Session management templates ──────────────────────────────────────────
 
