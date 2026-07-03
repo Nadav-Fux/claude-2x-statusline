@@ -1216,6 +1216,14 @@ def seg_rate_limits(ctx):
 
     # Store for full mode
     ctx["usage_data"] = usage_data
+    # Record cache age so downstream rows can flag frozen data: a healthy fetch
+    # rewrites the cache every render (age < 60s TTL), while a failing OAuth
+    # fetch falls back to the stale cache above without updating mtime, so the
+    # age keeps climbing. Without this the fallback is silent for hours.
+    try:
+        ctx["usage_cache_age"] = time.time() - cache_file.stat().st_mtime
+    except Exception:
+        ctx["usage_cache_age"] = None
 
     # Build compact display for line 1
     fh = usage_data.get("five_hour", {})
@@ -1336,6 +1344,118 @@ def seg_sdk_meter(ctx):
     return f"{DIM}sdk{RST} {bar} {color}${consumed:.2f}/${ceiling:.0f}{RST}{DIM} ~per-machine approx{RST}{suffix}"
 
 
+_KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+
+def _claude_token_from_json(raw):
+    """Pull claudeAiOauth.accessToken out of a credentials blob, or '' if the
+    blob is something else (e.g. an mcpOAuth item stored under the same name)."""
+    try:
+        return json.loads(raw).get("claudeAiOauth", {}).get("accessToken", "") or ""
+    except Exception:
+        return ""
+
+
+def _keychain_read(args):
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-s", _KEYCHAIN_SERVICE, *args, "-w"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _keychain_accounts_for_service(dump):
+    """Extract accounts belonging to _KEYCHAIN_SERVICE from `security
+    dump-keychain` output. Handles both the quoted string form
+    (`"acct"<blob>="name"`) and the hex-blob form (`"acct"<blob>=0x...`) macOS
+    emits for non-ASCII accounts. Associates each account with its own item's
+    service so a foreign block can't leak in on a loose substring match."""
+    accounts = []
+    svc_ok = False
+    acct = None
+
+    def _flush():
+        if svc_ok and acct and acct not in accounts:
+            accounts.append(acct)
+
+    for line in dump.splitlines():
+        if line.startswith("keychain:"):
+            _flush()
+            svc_ok, acct = False, None
+        s = line.strip()
+        if s.startswith('"svce"<blob>=') and f'"{_KEYCHAIN_SERVICE}"' in s:
+            svc_ok = True
+        elif s.startswith('"acct"<blob>=0x'):
+            hexpart = s[len('"acct"<blob>=0x'):].split(" ", 1)[0]
+            try:
+                acct = bytes.fromhex(hexpart).decode("utf-8", "replace")
+            except Exception:
+                acct = None
+        elif s.startswith('"acct"<blob>="'):
+            m = re.match(r'"acct"<blob>="(.*)"$', s)
+            acct = m.group(1) if m else None
+    _flush()
+    return accounts
+
+
+def _keychain_claude_token():
+    """Read the Claude OAuth token from the macOS keychain, tolerant of multiple
+    items sharing the 'Claude Code-credentials' service name.
+
+    Claude Code stores MCP-server OAuth tokens under the SAME service name but a
+    different account, and `security find-generic-password -s ... -w` returns
+    only the FIRST match — which may be an MCP item whose claudeAiOauth block is
+    empty. Resolution order, cheapest first:
+      1. First match already carries the token.
+      2. Account == the OS username (the common case) — avoids scanning the
+         whole keychain, and sidesteps the security/perf cost of dump-keychain.
+      3. Last resort: enumerate accounts under the service via dump-keychain,
+         skipping accounts already tried, under a hard wall-clock budget so a
+         keychain full of same-named MCP items can't stall the render.
+    """
+    # 1. Fast path: the first match already carries the Claude token.
+    token = _claude_token_from_json(_keychain_read([]))
+    if token:
+        return token
+
+    tried = set()
+
+    # 2. Common case: the account name is the OS username.
+    try:
+        import getpass
+        user = getpass.getuser()
+    except Exception:
+        user = os.environ.get("USER", "")
+    if user:
+        tried.add(user)
+        token = _claude_token_from_json(_keychain_read(["-a", user]))
+        if token:
+            return token
+
+    # 3. Last resort: enumerate accounts (bounded), skipping ones already tried.
+    try:
+        dump = subprocess.run(
+            ["security", "dump-keychain"], capture_output=True, text=True, timeout=4
+        ).stdout
+    except Exception:
+        return ""
+
+    deadline = time.time() + 2.0
+    for acct in _keychain_accounts_for_service(dump):
+        if acct in tried or time.time() > deadline:
+            continue
+        tried.add(acct)
+        token = _claude_token_from_json(_keychain_read(["-a", acct]))
+        if token:
+            return token
+    return ""
+
+
 def _get_oauth_token():
     """Try to find Claude OAuth token."""
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -1352,20 +1472,7 @@ def _get_oauth_token():
         except Exception:
             pass
 
-    try:
-        r = subprocess.run(
-            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            data = json.loads(r.stdout.strip())
-            token = data.get("claudeAiOauth", {}).get("accessToken", "")
-            if token:
-                return token
-    except Exception:
-        pass
-
-    return ""
+    return _keychain_claude_token()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1425,6 +1532,24 @@ def build_timeline(ctx):
     return timeline
 
 
+def _usage_stale_marker(ctx):
+    """Dim '·stale <age>' marker when the Claude usage cache is far older than
+    its 60s fetch TTL — i.e. the OAuth usage fetch has been failing and the
+    5h/weekly numbers are frozen on stale-cache fallback. Surfaces silently
+    frozen data so it can't masquerade as live for hours."""
+    age = ctx.get("usage_cache_age")
+    # 600s (10 min): comfortably above the render cadence + a short idle gap, so
+    # an idle terminal doesn't cry wolf, yet far below a real multi-hour freeze.
+    if age is None or age <= 600:
+        return ""
+    if age >= 3600:
+        h, m = int(age // 3600), int((age % 3600) // 60)
+        age_txt = f"{h}h {m}m" if m else f"{h}h"
+    else:
+        age_txt = f"{int(age // 60)}m"
+    return f" {DIM}·stale {age_txt}{RST}"
+
+
 def build_rate_limits_line(ctx):
     if ctx.get("gateway", {}).get("foreign"):
         label = _gateway.gateway_note_label(ctx.get("gateway"))
@@ -1464,7 +1589,8 @@ def build_rate_limits_line(ctx):
     weekly = f"{WHITE}{wk_label}{RST} {sd_bar} {sd_color}{sd_pct:3d}%{RST} {DIM}\u27f3{RST} {WHITE}{sd_time}{RST}"
 
     offloop = _check_offloop_drain(ctx, usage_data)
-    line = render_dashboard_line([current, weekly], ctx.get("render_width", 0), trailing=offloop)
+    stale = _usage_stale_marker(ctx)
+    line = render_dashboard_line([current, weekly], ctx.get("render_width", 0), trailing=offloop + stale)
 
     # The sonnet weekly window resets on the same clock as the weekly window, so
     # drop the redundant \u27f3 stamp and give it its own continuation row below
