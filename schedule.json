@@ -1,18 +1,18 @@
 {
-  "v": 5,
-  "updated": "2026-06-10",
+  "v": 6,
+  "updated": "2026-07-03",
   "cache_hours": 3,
   "mode": "normal",
   "default_tier": "full",
   "peak": {
-    "enabled": true,
+    "enabled": false,
     "tz": "UTC",
     "days": [1, 2, 3, 4, 5],
     "start": 13,
     "end": 19,
     "label_peak": "Peak",
     "label_offpeak": "Off-Peak",
-    "note": "Peak hours removed 2026-05-06. This block retained for custom-tier timezone config only."
+    "note": "Peak hours removed for Pro/Max on 2026-05-06 (anthropic.com/news/higher-limits-spacex). Disabled here so no phantom Peak bar can render even outside mode=normal. Window kept only as an inert template for custom-tier timezone overrides."
   },
   "labels": {
     "five_hour": "Claude 5h",
@@ -45,7 +45,7 @@
     "required_text": "Update required v2.2.0 via /statusline-update"
   },
   "features": {
-    "show_peak_segment": true,
+    "show_peak_segment": false,
     "show_rate_limits": true,
     "show_timeline": true
   }
