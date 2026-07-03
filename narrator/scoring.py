@@ -285,7 +285,12 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
     # Tier 1 — NEAR CAP: the safety net, regardless of where we are in the cycle.
     # Fires at >=90% on either window, OR (when we have no reset data to reason
     # about the cycle) the old >80% behaviour.
-    if max_rl >= 90 or (hours_left is None and max_rl > 80):
+    # Suppress the near-cap nag when the WEEKLY window is the only driver but
+    # sits below the even ~14.3%/day pace line (headroom — especially near
+    # reset) and the 5h window isn't itself near cap. 89% weekly with ~5h to
+    # reset and a small task left is plenty of runway, not "close to cap".
+    _under_weekly_pace = pace is not None and pct7 < pace - 3 and pct5 < 90
+    if (max_rl >= 90 or (hours_left is None and max_rl > 80)) and not _under_weekly_pace:
         key = "rate_limit_high"
         results.append(Insight(
             text=f"Rate limit at {max_rl:.0f}% — close to cap. Plan break before compact.",
@@ -458,7 +463,11 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             ))
 
     # ── Cross-CLI usage: offload when Claude weekly is warm ──────────────────
-    if isinstance(external_usage, list) and obs.rate_limit_7d_pct >= 60:
+    # Only when weekly is genuinely AHEAD of the even ~14.3%/day pace line
+    # (burning hot). Below the pace line = headroom; nagging to offload there is
+    # noise the user explicitly does not want — reset will refill it anyway.
+    _weekly_ahead_of_pace = pace is None or obs.rate_limit_7d_pct >= pace - 3
+    if isinstance(external_usage, list) and obs.rate_limit_7d_pct >= 60 and _weekly_ahead_of_pace:
         offload_candidates = []
         for record in external_usage:
             if not isinstance(record, dict):
