@@ -7,6 +7,7 @@ The pick() function returns up to 2 Insight objects, sorted by weighted score.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 
@@ -695,10 +696,29 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+# Hard mute window: a given note speaks at most once per this interval, no
+# matter how urgent or how many prompts pass. novelty alone only *lowers* score
+# (urgency=10 still wins every prompt), so without this the same nag repeats on
+# every message. The user wants "say it once and stop" — this enforces it.
+_REPEAT_COOLDOWN_SECS = 90 * 60
+
+
 def pick(obs: "Observation", memory: dict) -> list[Insight]:
-    """Evaluate templates, score each, and return top 2 Insight objects."""
+    """Evaluate templates, score each, and return top 2 Insight objects.
+
+    A note whose template_key fired within _REPEAT_COOLDOWN_SECS is hard-dropped
+    (not just down-weighted) so the narrator never nags the same thing on every
+    prompt. A different note can still surface; a new session starts fresh."""
     try:
         insights = _build_insights(obs, memory)
+        last_fired = (memory.get("current") or {}).get("last_fired", {}) or {}
+        now = time.time()
+
+        def _muted(ins: Insight) -> bool:
+            ts = last_fired.get(ins.template_key)
+            return ts is not None and (now - ts) < _REPEAT_COOLDOWN_SECS
+
+        insights = [i for i in insights if not (i.template_key and _muted(i))]
         insights.sort(key=lambda i: i.score, reverse=True)
         return insights[:2]
     except Exception:

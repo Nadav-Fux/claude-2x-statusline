@@ -172,11 +172,17 @@ def append_observation(data: dict, obs_snapshot: dict) -> dict:
 
 
 def append_narrative(data: dict, entry: dict) -> dict:
-    """Append a delivered narrative entry; keep last 8."""
+    """Append a delivered narrative entry; keep last 8. Also stamp last_fired
+    per template_key (untruncated, unlike delivered_narratives) so pick() can
+    enforce a long per-note cooldown and never repeat the same nag every prompt."""
     current = data.setdefault("current", _default_current())
     delivered = current.setdefault("delivered_narratives", [])
     delivered.append(entry)
     current["delivered_narratives"] = delivered[-_MAX_DELIVERED_NARRATIVES:]
+    key = entry.get("template_key")
+    ts = entry.get("ts")
+    if key and ts is not None:
+        current.setdefault("last_fired", {})[key] = ts
     return data
 
 
