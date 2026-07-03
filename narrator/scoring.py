@@ -103,7 +103,12 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
     effective_burn = burn_10m if burn_10m is not None else burn_sess
 
     # ── Context: Critical (< 30 min left) ────────────────────────────────────
-    if ctx_left is not None and ctx_left < 30:
+    # Gate on actual fill level, not just the burn-rate projection: a fast burn
+    # at 19%/54% context extrapolates a scary "minutes until full" while there
+    # is still huge headroom, which reads as a false "context is full" alarm.
+    # Only warn once the window is genuinely filling (>= 70%).
+    _CTX_PRESSURE_FLOOR = 70
+    if ctx >= _CTX_PRESSURE_FLOOR and ctx_left is not None and ctx_left < 30:
         n = math.ceil(ctx_left)
         key = "ctx_critical"
         results.append(Insight(
@@ -117,7 +122,7 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         ))
 
     # ── Context: Warning (< 60 min left) ─────────────────────────────────────
-    elif ctx_left is not None and ctx_left < 60:
+    elif ctx >= _CTX_PRESSURE_FLOOR and ctx_left is not None and ctx_left < 60:
         n = math.ceil(ctx_left)
         key = "ctx_warning"
         results.append(Insight(

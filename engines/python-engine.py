@@ -1054,7 +1054,10 @@ def seg_burn_rate(ctx):
         if tokens_out_delta is not None and tokens_out_delta > 0:
             tokens_per_min = tokens_out_delta / 10
             remaining = size - current
-            if remaining > 0:
+            # Only project "ctx full" once the window is genuinely filling
+            # (>= 70%). A fast burn at 30-54% extrapolates a scary countdown
+            # while there is still huge headroom — a false "full" alarm.
+            if remaining > 0 and current * 100 / size >= 70:
                 mins_left = int(remaining / tokens_per_min)
                 if mins_left < 180:
                     color = RED if mins_left < 30 else YELLOW if mins_left < 60 else DIM
