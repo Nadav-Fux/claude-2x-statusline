@@ -827,9 +827,42 @@ def _fmt_tokens(n):
         return f"{n // 1_000}K"
     return str(n)
 
+def _model_window_from_name(name):
+    """Context window encoded in a model name: '[1m]' -> 1_000_000,
+    '(500k context)' -> 500_000. Only matches a number+unit in brackets/parens
+    or next to a context/token word, so version numbers never false-match.
+    Mirrors the narrator's resolver so statusline and narrator agree. Returns
+    tokens, or 0 when the name encodes no window."""
+    if not name:
+        return 0
+    for rx in (
+        re.compile(r"[\[(]\s*(\d+(?:\.\d+)?)\s*([mk])\b", re.I),
+        re.compile(r"(\d+(?:\.\d+)?)\s*([mk])\s*(?:context|tokens?|ctx|window)", re.I),
+    ):
+        m = rx.search(name)
+        if m:
+            n = float(m.group(1))
+            return int(n * (1_000_000 if m.group(2).lower() == "m" else 1_000))
+    return 0
+
+
+def _resolve_ctx_window(ctx):
+    """True context window size. Claude Code can report context_window_size=200000
+    on stdin even for a [1m] session, which mis-scales the % ~5x and fires false
+    'context full' pressure at ~16% of a 1M window. A window encoded in the model
+    name (e.g. 'Opus 4.8 (1M context)', id 'claude-opus-4-8[1m]') is authoritative
+    and overrides the (wrong) stdin size."""
+    stdin = ctx.get("stdin", {}) or {}
+    model = stdin.get("model", {}) or {}
+    win = _model_window_from_name(f"{model.get('display_name', '')} {model.get('id', '')}")
+    if win:
+        return win
+    return int((stdin.get("context_window", {}) or {}).get("context_window_size", 0) or 0)
+
+
 def seg_context(ctx):
+    size = _resolve_ctx_window(ctx)
     cw = ctx["stdin"].get("context_window", {})
-    size = cw.get("context_window_size", 0)
     if not size:
         return ""
     usage = cw.get("current_usage", {})
@@ -1009,7 +1042,7 @@ def seg_burn_rate(ctx):
 
     # Context depletion estimate using rolling tokens-out rate
     cw = ctx["stdin"].get("context_window", {})
-    size = cw.get("context_window_size", 0)
+    size = _resolve_ctx_window(ctx)
     usage = cw.get("current_usage", {})
     current = (
         usage.get("input_tokens", 0)
@@ -2107,7 +2140,7 @@ def _write_vscode_context(ctx):
         + int(current_usage.get("cache_creation_input_tokens", 0))
         + int(current_usage.get("cache_read_input_tokens", 0))
     )
-    size = int(cw.get("context_window_size", 0) or 0)
+    size = _resolve_ctx_window(ctx)
     pct = int(current * 100 / size) if size > 0 else 0
 
     payload = {
@@ -2122,7 +2155,13 @@ def _write_vscode_context(ctx):
         # session_id lets the narrator confirm this session-specific current_usage
         # is ours before trusting it (the file is global, last render wins).
         "session_id": stdin_data.get("session_id", ""),
-        "model": stdin_data.get("model", {}).get("display_name", ""),
+        # Include display_name AND id so the narrator can detect a window
+        # encoded in the id ('claude-opus-4-8[1m]') when the display_name
+        # ('Opus 4.8') carries no [1m]/(1M context) marker.
+        "model": (
+            f"{stdin_data.get('model', {}).get('display_name', '')} "
+            f"{stdin_data.get('model', {}).get('id', '')}"
+        ).strip(),
         "is_peak": ctx.get("is_peak", False),
         "active_workflow_agents": sum(item["agents"] for item in wf_live),
         "subagent_tokens_live": sum(item["tokens"] for item in wf_live),
