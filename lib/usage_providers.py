@@ -5,9 +5,7 @@ Every public provider reader returns a normalized record and never raises.
 import json
 import os
 import re
-import sqlite3
 import subprocess
-import sys
 import time
 import urllib.request
 from datetime import datetime
@@ -18,7 +16,8 @@ PROVIDERS = {
     "codex": ("Codex", "local-jsonl"),
     "glm": ("GLM", "api"),
     "droid": ("Droid", "local-jsonl"),
-    "antigravity": ("Antigravity", "sqlite"),
+    "antigravity": ("Antigravity", "api"),
+    "copilot": ("Copilot", "api"),
 }
 
 LOCAL_CACHE_TTL = 45
@@ -434,23 +433,35 @@ def _read_fresh_cache(provider, ttl=EXTERNAL_USAGE_CACHE_TTL):
         return None, None
 
 
-def read_cached_external_usage(config):
+def read_cached_external_usage(config, only=None):
     """Read external-provider usage from local cache files only.
 
     This is intentionally synchronous and network-free for narrator use. Any
     malformed config/file/record returns [] instead of surfacing an exception.
+
+    ``only`` — when an ordered list of provider names is supplied, read exactly
+    those providers (in that order), bypassing the ``external_providers``
+    enabled-flag iteration. This lets callers honor ``providers.selected``.
+    Default (None) preserves the legacy enabled-flag behavior.
     """
     try:
         external = config.get("external_providers") if isinstance(config, dict) else None
-        if not isinstance(external, dict) or external.get("enabled") is not True:
-            return []
+        if not isinstance(external, dict):
+            external = {}
+
+        if only is not None:
+            providers_iter = [p for p in only if p in PROVIDERS]
+        else:
+            if external.get("enabled") is not True:
+                return []
+            providers_iter = [
+                p
+                for p in ("codex", "glm", "droid", "antigravity", "copilot")
+                if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
+            ]
 
         records = []
-        for provider in ("codex", "glm", "droid", "antigravity"):
-            provider_config = external.get(provider)
-            if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
-                continue
-
+        for provider in providers_iter:
             data, stale = _read_fresh_cache(provider)
             if not isinstance(data, dict):
                 continue
@@ -1011,75 +1022,6 @@ def _find_antigravity_windows(value, path_parts=None):
     return found
 
 
-def parse_antigravity_item_table(rows):
-    try:
-        if not isinstance(rows, (list, tuple)):
-            return unavailable("antigravity")
-        five_hour = None
-        weekly = None
-        model_metrics = []
-        for row in rows:
-            if isinstance(row, dict):
-                key = row.get("key")
-                raw_value = row.get("value")
-            elif isinstance(row, (list, tuple)) and len(row) >= 2:
-                key, raw_value = row[0], row[1]
-            else:
-                continue
-            value = _decode_antigravity_value(raw_value)
-            if value is None:
-                continue
-            metrics = parse_antigravity_models(value)
-            if metrics:
-                for metric in metrics:
-                    if not any(existing.get("label") == metric.get("label") for existing in model_metrics):
-                        model_metrics.append(metric)
-            found = _find_antigravity_windows(value, [key])
-            if five_hour is None and found.get("five_hour"):
-                five_hour = found["five_hour"]
-            if weekly is None and found.get("weekly"):
-                weekly = found["weekly"]
-        if model_metrics:
-            order = {"Flash": 0, "Pro": 1, "Opus": 2}
-            model_metrics.sort(key=lambda metric: order.get(metric.get("label"), 99))
-            record = unavailable("antigravity")
-            record.update(
-                {
-                    "label": "AGY",
-                    "available": True,
-                    "five_hour": five_hour,
-                    "weekly": weekly,
-                    "display": "compact",
-                    "metrics": [
-                        {
-                            "label": metric.get("label"),
-                            "used_pct": metric.get("used_pct"),
-                            "resets_at": metric.get("resets_at") if metric.get("resets_at") is not None else None,
-                        }
-                        for metric in model_metrics
-                    ],
-                }
-            )
-            return record
-        if five_hour is None and weekly is None:
-            return unavailable("antigravity")
-        record = unavailable("antigravity")
-        record.update({"available": True, "five_hour": five_hour, "weekly": weekly})
-        return record
-    except Exception:
-        return unavailable("antigravity")
-
-
-def _antigravity_db_path():
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
-    if sys.platform.startswith("win"):
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
-    return Path.home() / ".config" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
-
-
 def _map_antigravity_snapshot(snapshot):
     """Map an `antigravity-usage quota --json` snapshot (models[].remainingPercentage
     is a 0..1 fraction) into Opus/Pro/Flash compact metrics."""
@@ -1154,6 +1096,40 @@ def get_antigravity_usage(config=None):
         return unavailable("antigravity")
 
 
+def get_copilot_usage(config=None):
+    """GitHub Copilot AI-credit usage.
+
+    Data is produced out-of-band by ~/.claude/copilot-credits-refresh.sh (which
+    queries the GitHub billing API) and cached in statusline-usage-copilot.json.
+    This reader is network-free; when the cache is stale it kicks off the
+    refresher in a detached background process (stale-while-revalidate) so the
+    statusline never blocks on the network.
+    """
+    path = _cache_path("copilot")
+    data = _read_json(path)
+    try:
+        age = time.time() - path.stat().st_mtime
+    except Exception:
+        age = None
+    if age is None or age > 300:
+        try:
+            import subprocess
+
+            script = Path.home() / ".claude" / "copilot-credits-refresh.sh"
+            if script.exists():
+                subprocess.Popen(
+                    ["bash", str(script)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+        except Exception:
+            pass
+    record = data.get("record") if isinstance(data, dict) else None
+    return record if _is_available_record(record) else unavailable("copilot")
+
+
 def get_provider_usage(provider, config=None):
     try:
         if provider == "codex":
@@ -1164,21 +1140,43 @@ def get_provider_usage(provider, config=None):
             return get_droid_usage(config)
         if provider == "antigravity":
             return get_antigravity_usage(config)
+        if provider == "copilot":
+            return get_copilot_usage(config)
     except Exception:
         pass
     return unavailable(provider) if provider in PROVIDERS else None
 
 
-def collect_external_usage(config):
+def collect_external_usage(config, only=None):
+    """Fetch external-provider usage records.
+
+    ``only`` — when an ordered list of provider names is supplied, fetch exactly
+    those providers (in that order), treating the selection as authoritative
+    (the ``external_providers.enabled`` / per-provider enabled flags are not
+    consulted for gating; the per-provider config block is still read so each
+    reader gets its ``base_url`` / ``api_key`` / ``bin``). Default (None)
+    preserves the legacy enabled-flag iteration.
+    """
     external = config.get("external_providers") if isinstance(config, dict) else None
-    if not isinstance(external, dict) or external.get("enabled") is not True:
-        return []
+    if not isinstance(external, dict):
+        external = {}
+
+    if only is not None:
+        providers_iter = [p for p in only if p in PROVIDERS]
+    else:
+        if external.get("enabled") is not True:
+            return []
+        providers_iter = [
+            p
+            for p in ("codex", "glm", "droid", "antigravity", "copilot")
+            if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
+        ]
 
     records = []
-    for provider in ("codex", "glm", "droid", "antigravity"):
+    for provider in providers_iter:
         provider_config = external.get(provider)
-        if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
-            continue
+        if not isinstance(provider_config, dict):
+            provider_config = {}
         record = get_provider_usage(provider, provider_config)
         if isinstance(record, dict):
             records.append(record)

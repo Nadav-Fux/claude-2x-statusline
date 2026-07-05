@@ -231,6 +231,66 @@ def test_python_multi_cli_effective_external_config_forces_default_providers(mon
     assert effective["antigravity"]["enabled"] is False
 
 
+def test_python_multi_cli_with_providers_selected_does_not_force_codex_glm(monkeypatch):
+    _require_engine()
+    captured = {}
+
+    def fake_collect(config, only=None):
+        captured["only"] = only
+        return [
+            {
+                "provider": "antigravity",
+                "label": "AGY",
+                "available": True,
+                "display": "compact",
+                "metrics": [{"label": "Opus", "used_pct": 1, "resets_at": None}],
+                "plan": None,
+                "tokens": None,
+                "stale_seconds": 0,
+            }
+        ]
+
+    monkeypatch.setattr(engine._usage_providers, "collect_external_usage", fake_collect)
+    rendered = engine.build_external_usage_lines(
+        {
+            "config": {
+                "tier": "multi-cli",
+                # User selected only Antigravity — codex/glm must NOT be forced on.
+                "providers": {"schema_version": 1, "selected": ["claude", "antigravity"]},
+                "external_providers": {"enabled": True, "codex": {"enabled": False}, "glm": {"enabled": False}},
+            },
+            "is_full": True,
+            "is_multi_cli": True,
+            "render_width": 0,
+        }
+    )
+
+    assert "AGY" in rendered
+    assert captured["only"] == ["antigravity"]
+
+
+def test_python_multi_cli_claude_only_selection_renders_no_external_rows(monkeypatch):
+    _require_engine()
+
+    def fake_collect(config, only=None):  # pragma: no cover - should not be reached
+        raise AssertionError("collect_external_usage must not run for a claude-only selection")
+
+    monkeypatch.setattr(engine._usage_providers, "collect_external_usage", fake_collect)
+    rendered = engine.build_external_usage_lines(
+        {
+            "config": {
+                "tier": "multi-cli",
+                "providers": {"schema_version": 1, "selected": ["claude"]},
+                "external_providers": {"enabled": True},
+            },
+            "is_full": True,
+            "is_multi_cli": True,
+            "render_width": 0,
+        }
+    )
+    assert rendered == ""
+
+
 def test_python_full_tier_ignores_foreign_gateway_and_keeps_claude_rate_limit_bars(tmp_path):
     home = tmp_path / "home"
     _write_config(home, {"tier": "full", "schedule_url": "", "schedule_cache_hours": 999})
@@ -266,13 +326,22 @@ def _write_cached_schedule_with_banner(home: Path) -> None:
 
 def test_python_multi_cli_tier_clean_line1_external_rows_and_bottom_banner(tmp_path):
     home = tmp_path / "home"
+    # The multi-cli cockpit now derives from the selection model: migrate_providers
+    # turns enabled:true externals into providers.selected (the legacy "force
+    # codex+glm on" is gone). Codex + GLM enabled, Droid off -> the cockpit shows
+    # Codex + GLM but not Droid, exactly like a real migrated cockpit.
     _write_config(
         home,
         {
             "tier": "multi-cli",
             "schedule_url": "",
             "schedule_cache_hours": 999,
-            "external_providers": {"enabled": False, "glm": {"api_key": "test-key"}},
+            "external_providers": {
+                "enabled": True,
+                "codex": {"enabled": True},
+                "glm": {"enabled": True, "api_key": "test-key"},
+                "droid": {"enabled": False},
+            },
         },
     )
     _write_cached_schedule_with_banner(home)

@@ -1,0 +1,16 @@
+{
+  "cached_at": 1783286257.0,
+  "record": {
+    "provider": "copilot",
+    "label": "Copilot",
+    "available": true,
+    "display": "bars",
+    "five_hour": {"label": "1500 left", "used_pct": 25, "resets_at": 1785542400},
+    "plan": "business",
+    "source": "gh-billing",
+    "used": 500.0,
+    "cap": 2000,
+    "pool": 4000,
+    "remaining": 1500.0
+  }
+}

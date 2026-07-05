@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 from lib import usage_providers as providers
@@ -129,25 +131,6 @@ def test_provider_row_parts_prefer_per_window_labels():
     assert row["parts"][2]["label"] == "wk"
 
 
-def test_antigravity_parser_maps_sprint_and_weekly_windows():
-    record = providers.parse_antigravity_item_table(
-        [
-            {
-                "key": "antigravity.usage",
-                "value": '{"sprint":{"usedPercent":40,"resetsAt":1790000000},"weekly":{"usedPercent":12}}',
-            }
-        ]
-    )
-
-    assert record["available"] is True
-    assert record["five_hour"]["used_pct"] == 40
-    assert record["five_hour"]["resets_at"] == 1790000000
-    assert record["five_hour"]["label"] == "5h"
-    assert record["weekly"]["used_pct"] == 12
-    assert record["weekly"]["resets_at"] is None
-    assert record["weekly"]["label"] == "wk"
-
-
 def test_antigravity_model_parser_maps_model_group_metrics():
     metrics = providers.parse_antigravity_models(
         {
@@ -161,43 +144,6 @@ def test_antigravity_model_parser_maps_model_group_metrics():
 
     assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Flash", 23), ("Pro", 67), ("Opus", 41)]
     assert providers.parse_antigravity_models({"hello": "world"}) is None
-
-    record = providers.parse_antigravity_item_table(
-        [
-            {
-                "key": "antigravity.models",
-                "value": json.dumps(
-                    {
-                        "models": {
-                            "gemini-3-flash": {"usedPercent": 23},
-                            "gemini-3-pro-low": {"usedPercent": 67},
-                            "claude-opus": {"usedPercent": 41},
-                        }
-                    }
-                ),
-            }
-        ]
-    )
-    assert record["available"] is True
-    assert record["label"] == "AGY"
-    assert record["display"] == "compact"
-    assert [(metric["label"], metric["used_pct"]) for metric in record["metrics"]] == [
-        ("Flash", 23),
-        ("Pro", 67),
-        ("Opus", 41),
-    ]
-
-
-def test_antigravity_parser_returns_unavailable_for_junk_rows():
-    record = providers.parse_antigravity_item_table(
-        [
-            {"key": "antigravity.usage", "value": "not json"},
-            {"key": "other", "value": '{"hello":"world"}'},
-        ]
-    )
-
-    assert record["provider"] == "antigravity"
-    assert record["available"] is False
 
 
 def test_provider_row_parts_omit_past_reset_countdown():
@@ -263,6 +209,58 @@ def test_antigravity_dual_model_rows_render_two_compact_rows_without_bars():
     # No bar glyphs in either row.
     assert "▰" not in row["text"]
     assert "▱" not in row["text"]
+
+
+def _write_copilot_cache(home, age_seconds=0):
+    """Copy the copilot cache fixture into a monkeypatched home and age it.
+
+    Returns the cache path. `age_seconds` sets how long ago the file was last
+    written (0 = fresh, >300 = stale enough to trigger a background refresh).
+    """
+    claude_dir = home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    cache = claude_dir / "statusline-usage-copilot.json"
+    cache.write_text((FIXTURES / "copilot_usage_cache.json").read_text(encoding="utf-8"), encoding="utf-8")
+    mtime = time.time() - age_seconds
+    os.utime(cache, (mtime, mtime))
+    return cache
+
+
+def test_copilot_reads_fresh_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    _write_copilot_cache(tmp_path, age_seconds=0)
+
+    record = providers.get_copilot_usage({})
+
+    assert record["provider"] == "copilot"
+    assert record["available"] is True
+    assert record["label"] == "Copilot"
+    assert record["plan"] == "business"
+    assert record["five_hour"]["used_pct"] == 25
+    assert record["five_hour"]["label"] == "1500 left"
+
+
+def test_copilot_reads_stale_cache_still_returns_record(tmp_path, monkeypatch):
+    # A stale cache (age > 300s) still renders the last good record; the reader
+    # only kicks off a background refresh (no refresh script exists under the
+    # test home, so nothing is spawned) and never clobbers the cache.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    _write_copilot_cache(tmp_path, age_seconds=3600)
+
+    record = providers.get_copilot_usage({})
+
+    assert record["provider"] == "copilot"
+    assert record["available"] is True
+    assert record["five_hour"]["used_pct"] == 25
+
+
+def test_copilot_missing_cache_is_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    record = providers.get_copilot_usage({})
+
+    assert record["provider"] == "copilot"
+    assert record["available"] is False
 
 
 def test_providers_gracefully_unavailable_without_home_data(tmp_path, monkeypatch):
