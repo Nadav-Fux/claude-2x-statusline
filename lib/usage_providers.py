@@ -651,15 +651,15 @@ def _read_provider_env_key():
 def _keychain_glm_key():
     """Read the GLM key from the OS secret store (keychain / file fallback).
 
-    Guarded end-to-end: a missing secrets module, a shadowed stdlib ``secrets``
+    Guarded end-to-end: a missing secret_store module, a legacy shadowed module
     (no ``secret_read`` attr), or any backend failure all collapse to "" so the
     reader falls through to the env/config/providers.env chain. Never raises,
     never logs the value."""
     try:
         try:
-            from . import secrets as _secrets  # package import (lib.usage_providers)
+            from . import secret_store as _secrets  # package import (lib.usage_providers)
         except Exception:
-            import secrets as _secrets  # lib/ on sys.path (standalone import)
+            import secret_store as _secrets  # lib/ on sys.path (standalone import)
         reader = getattr(_secrets, "secret_read", None)
         if reader is None:
             return ""

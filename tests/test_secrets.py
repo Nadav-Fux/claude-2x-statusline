@@ -13,7 +13,7 @@ import json
 import stat
 from pathlib import Path
 
-from lib import secrets
+from lib import secret_store as secrets
 
 
 # ── File-fallback backend ─────────────────────────────────────────────────────

@@ -320,7 +320,7 @@ def test_glm_key_falls_through_to_config_when_keychain_and_env_empty(monkeypatch
 def test_keychain_glm_key_swallows_secret_store_errors(monkeypatch):
     # Even if the secret store raises, _keychain_glm_key returns "" (never raises)
     # so _glm_key can fall through the rest of the chain.
-    from lib import secrets as _secrets
+    from lib import secret_store as _secrets
 
     def boom(service, account):
         raise RuntimeError("no keychain")
@@ -332,7 +332,7 @@ def test_keychain_glm_key_swallows_secret_store_errors(monkeypatch):
 # ── store_glm_key ─────────────────────────────────────────────────────────────
 
 class _FakeSecrets:
-    """In-memory stand-in for lib/secrets with the same store/read surface."""
+    """In-memory stand-in for lib/secret_store with the same store/read surface."""
 
     def __init__(self, store=None):
         self.store = store if store is not None else {}

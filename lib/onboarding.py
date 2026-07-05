@@ -41,17 +41,17 @@ def _load_usage_providers():
 
 
 def _load_secrets():
-    """Import the secret-store module (lib/secrets.py) regardless of import
-    style. Guards against the stdlib ``secrets`` shadowing our module: a module
+    """Import the secret-store module (lib/secret_store.py) regardless of import
+    style. Named secret_store (not secrets) so it can never shadow the stdlib: a module
     without ``secret_store`` is treated as absent. Returns the module or None."""
     try:
-        from . import secrets as _secrets  # package-style import
+        from . import secret_store as _secrets  # package-style import
         if hasattr(_secrets, "secret_store"):
             return _secrets
     except Exception:
         pass
     try:
-        import secrets as _secrets  # lib/ on sys.path
+        import secret_store as _secrets  # lib/ on sys.path
         if hasattr(_secrets, "secret_store"):
             return _secrets
     except Exception:

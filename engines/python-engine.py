@@ -2359,9 +2359,8 @@ def _get_telemetry_id():
             if len(existing) == 16 and all(ch in "0123456789abcdef" for ch in existing):
                 return existing
 
-        # os.urandom(8).hex() == secrets.token_hex(8) (16 lowercase hex chars),
-        # but avoids `import secrets` — lib/ sits at sys.path[0], so that name
-        # now resolves to our lib/secrets.py, not the stdlib module.
+        # os.urandom(8).hex() == secrets.token_hex(8) (16 lowercase hex chars)
+        # without importing anything beyond os.
         uid = os.urandom(8).hex()
         TELEMETRY_ID_PATH.write_text(uid)
         try:
