@@ -1699,7 +1699,8 @@ def _effective_external_usage_config(config, is_multi_cli=False):
 
     # Droid only ever showed a cumulative token count (confusing), so it is
     # opt-in like Antigravity now: it appears only when explicitly enabled.
-    for provider in ("droid", "antigravity"):
+    # Copilot is opt-in too (its data comes from a background billing-API refresh).
+    for provider in ("droid", "antigravity", "copilot"):
         raw = source.get(provider)
         provider_config = raw if isinstance(raw, dict) else {}
         merged = dict(defaults.get(provider, {}))

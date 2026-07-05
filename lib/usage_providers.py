@@ -19,6 +19,7 @@ PROVIDERS = {
     "glm": ("GLM", "api"),
     "droid": ("Droid", "local-jsonl"),
     "antigravity": ("Antigravity", "sqlite"),
+    "copilot": ("Copilot", "api"),
 }
 
 LOCAL_CACHE_TTL = 45
@@ -446,7 +447,7 @@ def read_cached_external_usage(config):
             return []
 
         records = []
-        for provider in ("codex", "glm", "droid", "antigravity"):
+        for provider in ("codex", "glm", "droid", "antigravity", "copilot"):
             provider_config = external.get(provider)
             if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
                 continue
@@ -1154,6 +1155,40 @@ def get_antigravity_usage(config=None):
         return unavailable("antigravity")
 
 
+def get_copilot_usage(config=None):
+    """GitHub Copilot AI-credit usage.
+
+    Data is produced out-of-band by ~/.claude/copilot-credits-refresh.sh (which
+    queries the GitHub billing API) and cached in statusline-usage-copilot.json.
+    This reader is network-free; when the cache is stale it kicks off the
+    refresher in a detached background process (stale-while-revalidate) so the
+    statusline never blocks on the network.
+    """
+    path = _cache_path("copilot")
+    data = _read_json(path)
+    try:
+        age = time.time() - path.stat().st_mtime
+    except Exception:
+        age = None
+    if age is None or age > 300:
+        try:
+            import subprocess
+
+            script = Path.home() / ".claude" / "copilot-credits-refresh.sh"
+            if script.exists():
+                subprocess.Popen(
+                    ["bash", str(script)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+        except Exception:
+            pass
+    record = data.get("record") if isinstance(data, dict) else None
+    return record if _is_available_record(record) else unavailable("copilot")
+
+
 def get_provider_usage(provider, config=None):
     try:
         if provider == "codex":
@@ -1164,6 +1199,8 @@ def get_provider_usage(provider, config=None):
             return get_droid_usage(config)
         if provider == "antigravity":
             return get_antigravity_usage(config)
+        if provider == "copilot":
+            return get_copilot_usage(config)
     except Exception:
         pass
     return unavailable(provider) if provider in PROVIDERS else None
@@ -1175,7 +1212,7 @@ def collect_external_usage(config):
         return []
 
     records = []
-    for provider in ("codex", "glm", "droid", "antigravity"):
+    for provider in ("codex", "glm", "droid", "antigravity", "copilot"):
         provider_config = external.get(provider)
         if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
             continue

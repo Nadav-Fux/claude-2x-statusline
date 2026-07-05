@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 from lib import usage_providers as providers
@@ -263,6 +265,58 @@ def test_antigravity_dual_model_rows_render_two_compact_rows_without_bars():
     # No bar glyphs in either row.
     assert "▰" not in row["text"]
     assert "▱" not in row["text"]
+
+
+def _write_copilot_cache(home, age_seconds=0):
+    """Copy the copilot cache fixture into a monkeypatched home and age it.
+
+    Returns the cache path. `age_seconds` sets how long ago the file was last
+    written (0 = fresh, >300 = stale enough to trigger a background refresh).
+    """
+    claude_dir = home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    cache = claude_dir / "statusline-usage-copilot.json"
+    cache.write_text((FIXTURES / "copilot_usage_cache.json").read_text(encoding="utf-8"), encoding="utf-8")
+    mtime = time.time() - age_seconds
+    os.utime(cache, (mtime, mtime))
+    return cache
+
+
+def test_copilot_reads_fresh_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    _write_copilot_cache(tmp_path, age_seconds=0)
+
+    record = providers.get_copilot_usage({})
+
+    assert record["provider"] == "copilot"
+    assert record["available"] is True
+    assert record["label"] == "Copilot"
+    assert record["plan"] == "business"
+    assert record["five_hour"]["used_pct"] == 25
+    assert record["five_hour"]["label"] == "1500 left"
+
+
+def test_copilot_reads_stale_cache_still_returns_record(tmp_path, monkeypatch):
+    # A stale cache (age > 300s) still renders the last good record; the reader
+    # only kicks off a background refresh (no refresh script exists under the
+    # test home, so nothing is spawned) and never clobbers the cache.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    _write_copilot_cache(tmp_path, age_seconds=3600)
+
+    record = providers.get_copilot_usage({})
+
+    assert record["provider"] == "copilot"
+    assert record["available"] is True
+    assert record["five_hour"]["used_pct"] == 25
+
+
+def test_copilot_missing_cache_is_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    record = providers.get_copilot_usage({})
+
+    assert record["provider"] == "copilot"
+    assert record["available"] is False
 
 
 def test_providers_gracefully_unavailable_without_home_data(tmp_path, monkeypatch):
