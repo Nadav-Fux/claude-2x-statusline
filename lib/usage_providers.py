@@ -5,9 +5,7 @@ Every public provider reader returns a normalized record and never raises.
 import json
 import os
 import re
-import sqlite3
 import subprocess
-import sys
 import time
 import urllib.request
 from datetime import datetime
@@ -18,7 +16,7 @@ PROVIDERS = {
     "codex": ("Codex", "local-jsonl"),
     "glm": ("GLM", "api"),
     "droid": ("Droid", "local-jsonl"),
-    "antigravity": ("Antigravity", "sqlite"),
+    "antigravity": ("Antigravity", "api"),
     "copilot": ("Copilot", "api"),
 }
 
@@ -1010,75 +1008,6 @@ def _find_antigravity_windows(value, path_parts=None):
         if found["weekly"] is None and child.get("weekly"):
             found["weekly"] = child["weekly"]
     return found
-
-
-def parse_antigravity_item_table(rows):
-    try:
-        if not isinstance(rows, (list, tuple)):
-            return unavailable("antigravity")
-        five_hour = None
-        weekly = None
-        model_metrics = []
-        for row in rows:
-            if isinstance(row, dict):
-                key = row.get("key")
-                raw_value = row.get("value")
-            elif isinstance(row, (list, tuple)) and len(row) >= 2:
-                key, raw_value = row[0], row[1]
-            else:
-                continue
-            value = _decode_antigravity_value(raw_value)
-            if value is None:
-                continue
-            metrics = parse_antigravity_models(value)
-            if metrics:
-                for metric in metrics:
-                    if not any(existing.get("label") == metric.get("label") for existing in model_metrics):
-                        model_metrics.append(metric)
-            found = _find_antigravity_windows(value, [key])
-            if five_hour is None and found.get("five_hour"):
-                five_hour = found["five_hour"]
-            if weekly is None and found.get("weekly"):
-                weekly = found["weekly"]
-        if model_metrics:
-            order = {"Flash": 0, "Pro": 1, "Opus": 2}
-            model_metrics.sort(key=lambda metric: order.get(metric.get("label"), 99))
-            record = unavailable("antigravity")
-            record.update(
-                {
-                    "label": "AGY",
-                    "available": True,
-                    "five_hour": five_hour,
-                    "weekly": weekly,
-                    "display": "compact",
-                    "metrics": [
-                        {
-                            "label": metric.get("label"),
-                            "used_pct": metric.get("used_pct"),
-                            "resets_at": metric.get("resets_at") if metric.get("resets_at") is not None else None,
-                        }
-                        for metric in model_metrics
-                    ],
-                }
-            )
-            return record
-        if five_hour is None and weekly is None:
-            return unavailable("antigravity")
-        record = unavailable("antigravity")
-        record.update({"available": True, "five_hour": five_hour, "weekly": weekly})
-        return record
-    except Exception:
-        return unavailable("antigravity")
-
-
-def _antigravity_db_path():
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
-    if sys.platform.startswith("win"):
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
-    return Path.home() / ".config" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
 
 
 def _map_antigravity_snapshot(snapshot):

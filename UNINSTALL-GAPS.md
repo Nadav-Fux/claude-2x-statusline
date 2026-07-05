@@ -109,7 +109,12 @@ would be needed. The script does not attempt this at all.
 
 ### 3. `statusline-minimal.md`, `statusline-standard.md`, `statusline-full.md` not copied to commands/ on install
 
-These three commands exist in `cc-2x-statusline/commands/` but were never symlinked or copied to `~/.claude/commands/` (only `statusline-tier.md` was installed there). The uninstall script tries to remove all three from `~/.claude/commands/`, but they were never there — so these `rm -f` calls are silent no-ops. This suggests either the install script has a bug (failing to deploy 3 of 4 commands), or the design changed and the uninstall script was not updated.
+> **RESOLVED.** As of the current `install.sh`, `install_commands()` copies **all**
+> `commands/*.md` to `~/.claude/commands/` (`cp "$SCRIPT_DIR/commands/"*.md ...`), not just
+> `statusline-tier.md`. The paragraph below describes the original 2026-04-19 observation and
+> is kept for historical context.
+
+At audit time these three commands existed in `cc-2x-statusline/commands/` but were not copied to `~/.claude/commands/` (only `statusline-tier.md` was installed there), so the uninstall script's `rm -f` for the other three were silent no-ops. The installer was subsequently fixed to deploy every command file.
 
 ---
 
@@ -151,15 +156,13 @@ if command -v code &>/dev/null; then
 fi
 ```
 
-### Fix 3 — Audit install.sh to match commands being installed/removed
+### Fix 3 — Audit install.sh to match commands being installed/removed — DONE
 
-The install script should be verified to copy all four command files to `~/.claude/commands/`:
-- `statusline-minimal.md`
-- `statusline-standard.md`  
-- `statusline-full.md`
-- `statusline-tier.md`
-
-Currently only `statusline-tier.md` is being installed to `~/.claude/commands/`. Either the install script should deploy all four, or the uninstall script should remove only the ones that are actually installed.
+`install.sh` now copies **all** command files (`cp "$SCRIPT_DIR/commands/"*.md
+"$HOME/.claude/commands/"`), so every `commands/*.md` — including `statusline-minimal.md`,
+`statusline-standard.md`, `statusline-full.md`, `statusline-tier.md`, `explain.md`,
+`narrate.md`, `narrator-lang.md` — is deployed to `~/.claude/commands/` and the uninstall
+`rm -f` calls line up with what was installed.
 
 ---
 
@@ -169,4 +172,4 @@ Currently only `statusline-tier.md` is being installed to `~/.claude/commands/`.
 |---|---|---|
 | `enabledPlugins` entry left in settings.json | High — orphaned plugin registration, may cause errors on restart | Add `plugins.pop('claude-2x-statusline@nadav-plugins', None)` to the Python snippet |
 | VS Code extension not uninstalled | Medium — but not installed in this environment | Add `code --uninstall-extension` block with install-check guard |
-| Install/uninstall mismatch on 3 command files | Low — silent no-ops, no residue | Audit install.sh; align what gets deployed to `~/.claude/commands/` |
+| Install/uninstall mismatch on 3 command files | Low — silent no-ops, no residue | **Fixed** — `install.sh` now copies all `commands/*.md` to `~/.claude/commands/` |

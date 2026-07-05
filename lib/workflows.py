@@ -19,8 +19,8 @@ def project_slug(cwd: str) -> str:
     """Mirror Claude Code's project-dir naming: every non-alphanumeric char -> '-'.
 
     Verified empirically against ~/.claude/projects, e.g.
-    'C:\\Users\\nadav\\github\\Nadav-Plugins&Skils' ->
-    'C--Users-nadav-github-Nadav-Plugins-Skils'.
+    'C:\\Users\\me\\github\\My-Plugins&Skills' ->
+    'C--Users-me-github-My-Plugins-Skills'.
     """
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 

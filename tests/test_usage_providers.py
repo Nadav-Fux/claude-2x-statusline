@@ -131,25 +131,6 @@ def test_provider_row_parts_prefer_per_window_labels():
     assert row["parts"][2]["label"] == "wk"
 
 
-def test_antigravity_parser_maps_sprint_and_weekly_windows():
-    record = providers.parse_antigravity_item_table(
-        [
-            {
-                "key": "antigravity.usage",
-                "value": '{"sprint":{"usedPercent":40,"resetsAt":1790000000},"weekly":{"usedPercent":12}}',
-            }
-        ]
-    )
-
-    assert record["available"] is True
-    assert record["five_hour"]["used_pct"] == 40
-    assert record["five_hour"]["resets_at"] == 1790000000
-    assert record["five_hour"]["label"] == "5h"
-    assert record["weekly"]["used_pct"] == 12
-    assert record["weekly"]["resets_at"] is None
-    assert record["weekly"]["label"] == "wk"
-
-
 def test_antigravity_model_parser_maps_model_group_metrics():
     metrics = providers.parse_antigravity_models(
         {
@@ -163,43 +144,6 @@ def test_antigravity_model_parser_maps_model_group_metrics():
 
     assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Flash", 23), ("Pro", 67), ("Opus", 41)]
     assert providers.parse_antigravity_models({"hello": "world"}) is None
-
-    record = providers.parse_antigravity_item_table(
-        [
-            {
-                "key": "antigravity.models",
-                "value": json.dumps(
-                    {
-                        "models": {
-                            "gemini-3-flash": {"usedPercent": 23},
-                            "gemini-3-pro-low": {"usedPercent": 67},
-                            "claude-opus": {"usedPercent": 41},
-                        }
-                    }
-                ),
-            }
-        ]
-    )
-    assert record["available"] is True
-    assert record["label"] == "AGY"
-    assert record["display"] == "compact"
-    assert [(metric["label"], metric["used_pct"]) for metric in record["metrics"]] == [
-        ("Flash", 23),
-        ("Pro", 67),
-        ("Opus", 41),
-    ]
-
-
-def test_antigravity_parser_returns_unavailable_for_junk_rows():
-    record = providers.parse_antigravity_item_table(
-        [
-            {"key": "antigravity.usage", "value": "not json"},
-            {"key": "other", "value": '{"hello":"world"}'},
-        ]
-    )
-
-    assert record["provider"] == "antigravity"
-    assert record["available"] is False
 
 
 def test_provider_row_parts_omit_past_reset_countdown():
