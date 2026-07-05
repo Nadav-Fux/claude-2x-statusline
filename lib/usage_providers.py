@@ -433,23 +433,35 @@ def _read_fresh_cache(provider, ttl=EXTERNAL_USAGE_CACHE_TTL):
         return None, None
 
 
-def read_cached_external_usage(config):
+def read_cached_external_usage(config, only=None):
     """Read external-provider usage from local cache files only.
 
     This is intentionally synchronous and network-free for narrator use. Any
     malformed config/file/record returns [] instead of surfacing an exception.
+
+    ``only`` — when an ordered list of provider names is supplied, read exactly
+    those providers (in that order), bypassing the ``external_providers``
+    enabled-flag iteration. This lets callers honor ``providers.selected``.
+    Default (None) preserves the legacy enabled-flag behavior.
     """
     try:
         external = config.get("external_providers") if isinstance(config, dict) else None
-        if not isinstance(external, dict) or external.get("enabled") is not True:
-            return []
+        if not isinstance(external, dict):
+            external = {}
+
+        if only is not None:
+            providers_iter = [p for p in only if p in PROVIDERS]
+        else:
+            if external.get("enabled") is not True:
+                return []
+            providers_iter = [
+                p
+                for p in ("codex", "glm", "droid", "antigravity", "copilot")
+                if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
+            ]
 
         records = []
-        for provider in ("codex", "glm", "droid", "antigravity", "copilot"):
-            provider_config = external.get(provider)
-            if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
-                continue
-
+        for provider in providers_iter:
             data, stale = _read_fresh_cache(provider)
             if not isinstance(data, dict):
                 continue
@@ -1135,16 +1147,36 @@ def get_provider_usage(provider, config=None):
     return unavailable(provider) if provider in PROVIDERS else None
 
 
-def collect_external_usage(config):
+def collect_external_usage(config, only=None):
+    """Fetch external-provider usage records.
+
+    ``only`` — when an ordered list of provider names is supplied, fetch exactly
+    those providers (in that order), treating the selection as authoritative
+    (the ``external_providers.enabled`` / per-provider enabled flags are not
+    consulted for gating; the per-provider config block is still read so each
+    reader gets its ``base_url`` / ``api_key`` / ``bin``). Default (None)
+    preserves the legacy enabled-flag iteration.
+    """
     external = config.get("external_providers") if isinstance(config, dict) else None
-    if not isinstance(external, dict) or external.get("enabled") is not True:
-        return []
+    if not isinstance(external, dict):
+        external = {}
+
+    if only is not None:
+        providers_iter = [p for p in only if p in PROVIDERS]
+    else:
+        if external.get("enabled") is not True:
+            return []
+        providers_iter = [
+            p
+            for p in ("codex", "glm", "droid", "antigravity", "copilot")
+            if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
+        ]
 
     records = []
-    for provider in ("codex", "glm", "droid", "antigravity", "copilot"):
+    for provider in providers_iter:
         provider_config = external.get(provider)
-        if not isinstance(provider_config, dict) or provider_config.get("enabled") is not True:
-            continue
+        if not isinstance(provider_config, dict):
+            provider_config = {}
         record = get_provider_usage(provider, provider_config)
         if isinstance(record, dict):
             records.append(record)

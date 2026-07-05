@@ -212,6 +212,43 @@ def build_release_notice(schedule):
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
+# Canonical external-provider render order (claude is the rate-limit line, not
+# an external row, so it is not in this tuple).
+_EXTERNAL_PROVIDER_ORDER = ("codex", "glm", "droid", "antigravity", "copilot")
+
+
+def migrate_providers(config):
+    """Ensure an in-memory ``providers`` selection block exists.
+
+    Pure and idempotent. When a user config already carries a
+    ``providers.selected`` array it is left untouched. When absent (every
+    existing install pre-Phase-1), a block is derived from the legacy
+    ``external_providers`` enabled flags:
+
+        selected = ["claude"] + [p for p in <order> if external_providers[p].enabled is True]
+
+    so an existing cockpit renders exactly the same providers it did before.
+
+    IMPORTANT: this only mutates the passed dict in memory and NEVER writes the
+    config file. The render path must stay read-only; persisting a selection is
+    the onboarding writer's job (lib/onboarding.apply_selection).
+    """
+    if not isinstance(config, dict):
+        return config
+    providers = config.get("providers")
+    if isinstance(providers, dict) and isinstance(providers.get("selected"), list):
+        return config
+    external = config.get("external_providers")
+    external = external if isinstance(external, dict) else {}
+    selected = ["claude"]
+    for provider in _EXTERNAL_PROVIDER_ORDER:
+        pc = external.get(provider)
+        if isinstance(pc, dict) and pc.get("enabled") is True:
+            selected.append(provider)
+    config["providers"] = {"schema_version": 1, "selected": selected}
+    return config
+
+
 def load_config():
     config_path = Path.home() / ".claude" / "statusline-config.json"
     config = dict(DEFAULT_CONFIG)
@@ -222,6 +259,7 @@ def load_config():
             config.update(user)
         except Exception:
             pass
+    migrate_providers(config)
     return config
 
 
@@ -1713,18 +1751,70 @@ def _effective_external_usage_config(config, is_multi_cli=False):
     return effective
 
 
+def _selected_external_providers(config):
+    """Ordered list of external providers to render.
+
+    Resolution order:
+      1. When a ``providers.selected`` block exists it is the single source of
+         truth — return it minus ``claude`` (that is the Claude rate-limit line,
+         not an external row), keeping only known external providers in the
+         user's chosen order. The legacy ``multi-cli`` force-on of codex+glm is
+         intentionally NOT applied here: selection is authoritative.
+      2. Otherwise fall back to the legacy behavior — the enabled externals from
+         the ``external_providers`` block, in canonical order.
+    """
+    providers = config.get("providers") if isinstance(config, dict) else None
+    if isinstance(providers, dict) and isinstance(providers.get("selected"), list):
+        return [
+            p for p in providers["selected"] if p != "claude" and p in _EXTERNAL_PROVIDER_ORDER
+        ]
+    external = config.get("external_providers") if isinstance(config, dict) else None
+    external = external if isinstance(external, dict) else {}
+    return [
+        p
+        for p in _EXTERNAL_PROVIDER_ORDER
+        if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
+    ]
+
+
 def build_external_usage_lines(ctx):
-    config = _effective_external_usage_config(ctx.get("config") or {}, bool(ctx.get("is_multi_cli")))
-    external = config.get("external_providers")
-    if not (
-        ctx.get("is_multi_cli")
-        or (ctx.get("is_full") and isinstance(external, dict) and external.get("enabled") is True)
-    ):
-        return ""
-    try:
-        records = _usage_providers.collect_external_usage(config)
-    except Exception:
-        return ""
+    raw_config = ctx.get("config") or {}
+    is_multi_cli = bool(ctx.get("is_multi_cli"))
+    is_full = bool(ctx.get("is_full"))
+
+    providers_block = raw_config.get("providers") if isinstance(raw_config, dict) else None
+    has_selection = isinstance(providers_block, dict) and isinstance(providers_block.get("selected"), list)
+
+    if has_selection:
+        # Selection is authoritative. Gating (whether external rows appear at
+        # all) is unchanged: multi-cli always, full only when external enabled.
+        config = raw_config
+        external = config.get("external_providers")
+        if not (
+            is_multi_cli
+            or (is_full and isinstance(external, dict) and external.get("enabled") is True)
+        ):
+            return ""
+        only = _selected_external_providers(config)
+        if not only:
+            return ""
+        try:
+            records = _usage_providers.collect_external_usage(config, only=only)
+        except Exception:
+            return ""
+    else:
+        # Legacy path — bit-for-bit unchanged (no providers block present).
+        config = _effective_external_usage_config(raw_config, is_multi_cli)
+        external = config.get("external_providers")
+        if not (
+            is_multi_cli
+            or (is_full and isinstance(external, dict) and external.get("enabled") is True)
+        ):
+            return ""
+        try:
+            records = _usage_providers.collect_external_usage(config)
+        except Exception:
+            return ""
 
     now_sec = time.time()
 
