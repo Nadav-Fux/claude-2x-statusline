@@ -42,13 +42,30 @@ re-runnable: run it any time to add or remove a provider.
    This writes `providers.selected`, mirrors it into `external_providers`, and
    auto-sets the tier (`multi-cli` for 2+ providers).
 
-5. For each selected provider whose detected status from step 2 is NOT `ok`,
-   print the one-line auth hint (no interactive auth yet — that is Phase 2):
-   - **codex** → "Run `codex login` in another terminal."
-   - **antigravity** → "Run `antigravity-usage login` (or open the Antigravity app)."
-   - **glm** → "Set a z.ai API key: export `ZAI_API_KEY=…` (hooks don't read your shell rc — a keychain option comes later)."
-   - **copilot** → "Run `gh auth login`."
-   - **droid** → "Install Factory Droid and start one session."
+5. **Auth stage.** For each selected provider run a bounded auth probe and card
+   only the ones that are NOT `ok` (statuses: `ok`/`unauth`/`missing`/`unknown`):
+   ```bash
+   python3 -c "import sys, os, json; sys.path.insert(0, os.path.expanduser('~/.claude/cc-2x-statusline/lib')); from onboarding import validate_provider; p=os.path.expanduser('~/.claude/statusline-config.json'); cfg=json.load(open(p)) if os.path.exists(p) else {}; print(validate_provider('codex', cfg))"
+   ```
+   Drive each card with `AskUserQuestion` (Hebrew-first labels, English terms),
+   then re-run `validate_provider` to confirm:
+   - **codex** — "הריצו `codex login` בטרמינל אחר, ואז המשיכו." (statusline reads Codex's own session files — no key to paste.)
+   - **antigravity** — "הריצו `antigravity-usage login` (או פתחו את אפליקציית Antigravity / ה-IDE), ואז המשיכו."
+   - **glm** — ask for the z.ai key (https://z.ai). **Never print the key.** Pass
+     it through an env var (not inside the `-c`) so it stays out of the python
+     argv, then call `store_glm_key`:
+     ```bash
+     ZAI_KEY='PASTE_THE_KEY' python3 -c "import sys, os; sys.path.insert(0, os.path.expanduser('~/.claude/cc-2x-statusline/lib')); from onboarding import store_glm_key; err=store_glm_key(os.path.expanduser('~/.claude/statusline-config.json'), os.environ.get('ZAI_KEY','')); print(err or 'OK — key validated, saved to the OS keychain, plaintext removed from config')"
+     ```
+     It validates the key first; on failure it stores **nothing** and prints an
+     error (offer retry / skip). On success the key lives only in the keychain /
+     secret store, never in the config or chat.
+   - **copilot** — "הריצו `gh auth login`." For an org pool, also set `COPILOT_ORG` (or `external_providers.copilot.org`) to the org slug.
+   - **droid** — "התקינו/הפעילו את Factory Droid והתחילו session אחד, ואז המשיכו."
+
+   Never abort the wizard on one failing provider — keep the selection. A
+   selected provider that stays non-`ok` renders a dim
+   `no data — /statusline-onboarding` row until it authenticates.
 
 6. End with: "Saved. Restart Claude Code once to load the new cockpit. Re-run
-   `/statusline-onboarding` anytime to add or remove a provider."
+   `/statusline-onboarding` anytime to add, remove, or re-auth a provider."

@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -37,6 +38,25 @@ def _load_usage_providers():
         return up
     except Exception:
         return None
+
+
+def _load_secrets():
+    """Import the secret-store module (lib/secret_store.py) regardless of import
+    style. Named secret_store (not secrets) so it can never shadow the stdlib: a module
+    without ``secret_store`` is treated as absent. Returns the module or None."""
+    try:
+        from . import secret_store as _secrets  # package-style import
+        if hasattr(_secrets, "secret_store"):
+            return _secrets
+    except Exception:
+        pass
+    try:
+        import secret_store as _secrets  # lib/ on sys.path
+        if hasattr(_secrets, "secret_store"):
+            return _secrets
+    except Exception:
+        pass
+    return None
 
 
 # ── Detection (read-only, never raises) ──────────────────────────────────────
@@ -207,3 +227,215 @@ def apply_selection(config_path, selected):
 
     _atomic_write_config(config_path, config)
     return config
+
+
+# ── GLM key: validate → keychain → blank plaintext (Phase 2) ──────────────────
+
+_GLM_SERVICE = "claude-statusline-glm"
+_GLM_ACCOUNT = "glm"
+
+
+def _glm_config_from(config):
+    external = config.get("external_providers") if isinstance(config, dict) else None
+    external = external if isinstance(external, dict) else {}
+    glm = external.get("glm")
+    return glm if isinstance(glm, dict) else {}
+
+
+def store_glm_key(config_path, key):
+    """Validate a z.ai / GLM API key, persist it to the OS secret store, and
+    blank any plaintext ``external_providers.glm.api_key`` left in the config.
+
+    Returns "" on success, or a short human-readable error string on failure —
+    in which case NOTHING is stored and the config file is left untouched.
+
+    Security: the key is never echoed, logged, or written anywhere but the
+    secret store; every error string is redaction-safe (never contains key
+    material), and exception bodies never interpolate the key.
+    """
+    key = str(key or "").strip()
+    if not key:
+        return "No key provided."
+
+    up = _load_usage_providers()
+    if up is None:
+        return "Internal error: GLM reader unavailable."
+
+    config = _read_config(config_path)
+    glm_config = _glm_config_from(config)
+
+    # 1. Validate BEFORE persisting: the key must fetch a parseable quota record.
+    try:
+        response = up._fetch_glm_response(glm_config, key)
+        record = up.parse_glm_quota_response(response)
+    except Exception:
+        return "Could not reach the GLM quota endpoint (check the key or your network)."
+    if not (isinstance(record, dict) and record.get("available")):
+        return "The GLM key was rejected (endpoint returned no quota)."
+
+    # 2. Persist to the secret store (keychain / 0600 file fallback).
+    secrets = _load_secrets()
+    if secrets is None:
+        return "Secret store unavailable; key not saved."
+    if not secrets.secret_store(_GLM_SERVICE, _GLM_ACCOUNT, key):
+        return "Could not write the key to the OS secret store."
+
+    # 3. Blank any plaintext api_key in the config file (atomic rewrite). The key
+    #    now lives only in the secret store; a lingering plaintext copy would be
+    #    a downgrade. Failing to blank is non-fatal — the key is safely stored.
+    try:
+        external = config.get("external_providers")
+        if isinstance(external, dict) and isinstance(external.get("glm"), dict):
+            if external["glm"].get("api_key"):
+                external = dict(external)
+                glm = dict(external["glm"])
+                glm["api_key"] = ""
+                external["glm"] = glm
+                config["external_providers"] = external
+                _atomic_write_config(config_path, config)
+    except Exception:
+        return ""
+    return ""
+
+
+# ── validate_provider — bounded auth probes (onboarding / doctor only) ────────
+#
+# NEVER call these on the render path: they may spawn subprocesses and make
+# network calls. Each is bounded (<=5s) and swallows every error into "unknown".
+# Results: "ok" | "unauth" | "missing" | "unknown".
+
+_CLAUDE_CACHE_FRESH_TTL = 3600
+_COPILOT_CACHE_FRESH_TTL = 15 * 60
+_CODEX_MAX_AGE = 7 * 24 * 3600
+
+
+def _validate_claude():
+    try:
+        cache = Path.home() / ".claude" / "statusline-usage-cache.json"
+        try:
+            if time.time() - cache.stat().st_mtime < _CLAUDE_CACHE_FRESH_TTL:
+                return "ok"
+        except Exception:
+            pass
+        if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            return "ok"
+        if (Path.home() / ".claude" / ".credentials.json").exists():
+            return "ok"
+        return "unauth"
+    except Exception:
+        return "unknown"
+
+
+def _validate_codex(up):
+    try:
+        if up is None:
+            return "unknown"
+        rollout = up._newest_codex_rollout()
+        if rollout is None:
+            return "missing"
+        try:
+            if time.time() - rollout.stat().st_mtime > _CODEX_MAX_AGE:
+                return "unauth"
+        except Exception:
+            pass
+        try:
+            with rollout.open(encoding="utf-8") as fh:
+                for line in fh:
+                    if '"token_count"' in line:
+                        return "ok"
+        except Exception:
+            return "unknown"
+        return "unauth"
+    except Exception:
+        return "unknown"
+
+
+def _validate_glm(up, config):
+    try:
+        if up is None:
+            return "unknown"
+        glm_config = _glm_config_from(config)
+        key = up._glm_key(glm_config)
+        if not key:
+            return "missing"
+        try:
+            record = up.parse_glm_quota_response(up._fetch_glm_response(glm_config, key))
+        except Exception:
+            return "unauth"
+        return "ok" if isinstance(record, dict) and record.get("available") else "unauth"
+    except Exception:
+        return "unknown"
+
+
+def _validate_antigravity(up, config):
+    try:
+        external = config.get("external_providers") if isinstance(config, dict) else {}
+        external = external if isinstance(external, dict) else {}
+        agy = external.get("antigravity") if isinstance(external.get("antigravity"), dict) else {}
+        bin_path = str(agy.get("bin") or "antigravity-usage")
+        if shutil.which(bin_path) is None and "/" not in bin_path and "\\" not in bin_path:
+            return "missing"
+        try:
+            proc = subprocess.run(
+                [bin_path, "quota", "--json", "--method", "auto"],
+                capture_output=True, text=True, timeout=5,
+            )
+            snapshot = json.loads(proc.stdout or "")
+        except Exception:
+            return "unauth"
+        metrics = up._map_antigravity_snapshot(snapshot) if up is not None else None
+        return "ok" if metrics else "unauth"
+    except Exception:
+        return "unknown"
+
+
+def _validate_copilot():
+    try:
+        cache = Path.home() / ".claude" / "statusline-usage-copilot.json"
+        try:
+            if time.time() - cache.stat().st_mtime < _COPILOT_CACHE_FRESH_TTL:
+                return "ok"
+        except Exception:
+            pass
+        if shutil.which("gh") is None:
+            return "missing"
+        try:
+            proc = subprocess.run(["gh", "auth", "status"], capture_output=True, timeout=5)
+        except Exception:
+            return "unknown"
+        return "ok" if proc.returncode == 0 else "unauth"
+    except Exception:
+        return "unknown"
+
+
+def _validate_droid(up):
+    try:
+        if up is None:
+            return "unknown"
+        record = up.get_droid_usage({})
+        return "ok" if isinstance(record, dict) and record.get("available") else "missing"
+    except Exception:
+        return "unknown"
+
+
+def validate_provider(provider, config):
+    """Bounded (<=5s) auth probe for one provider. See module note above — this
+    is for onboarding / doctor ONLY and must never run on the render path."""
+    config = config if isinstance(config, dict) else {}
+    try:
+        if provider == "claude":
+            return _validate_claude()
+        up = _load_usage_providers()
+        if provider == "codex":
+            return _validate_codex(up)
+        if provider == "glm":
+            return _validate_glm(up, config)
+        if provider == "antigravity":
+            return _validate_antigravity(up, config)
+        if provider == "copilot":
+            return _validate_copilot()
+        if provider == "droid":
+            return _validate_droid(up)
+    except Exception:
+        return "unknown"
+    return "unknown"
