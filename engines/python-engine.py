@@ -1677,6 +1677,32 @@ def build_rate_limits_line(ctx):
     return line
 
 
+# Display labels for a degraded (no-data) provider row. Mirrors the live
+# labels: Antigravity renders as "AGY" when it has data, so its degraded row
+# matches. Kept in sync with lib/usage_providers.py PROVIDERS.
+_PROVIDER_DEGRADED_LABELS = {
+    "codex": "Codex",
+    "glm": "GLM",
+    "droid": "Droid",
+    "antigravity": "AGY",
+    "copilot": "Copilot",
+}
+
+
+def _provider_degraded_label(provider):
+    return _PROVIDER_DEGRADED_LABELS.get(provider, (str(provider or "").title() or "provider"))
+
+
+def _render_degraded_provider_row(provider, label_width, render_width):
+    """A dim/yellow single-line row for a SELECTED provider that returned no
+    usable data — so it visibly needs attention instead of silently vanishing.
+    Reuses render_dashboard_line so it shares the cockpit border/marker."""
+    label = _provider_degraded_label(provider)
+    padded = label + (" " * max(0, int(label_width) - len(label)))
+    body = f"{YELLOW}{DIM}{padded}  no data — /statusline-onboarding{RST}"
+    return render_dashboard_line([body], render_width)
+
+
 def _render_external_provider_parts(row):
     if row and row.get("display") == "compact":
         label_part = next((part for part in row.get("parts") or [] if part.get("kind") == "label"), {})
@@ -1836,6 +1862,58 @@ def build_external_usage_lines(ctx):
                 candidates.append((record, row.get("label") or ""))
         except Exception:
             pass
+
+    def _render_available(record, label_width):
+        out = []
+        row = _usage_providers.format_provider_row_parts(
+            record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
+        )
+        if not row:
+            return out
+        sub_rows = row.get("sub_rows") if isinstance(row.get("sub_rows"), list) and row.get("sub_rows") else [row]
+        for sub in sub_rows:
+            out.append(render_dashboard_line([_render_external_provider_parts(sub)], ctx.get("render_width", 0)))
+        return out
+
+    if has_selection:
+        # Selection path: render every selected provider IN ORDER. A selected
+        # provider whose reader returns no usable row becomes a dim degraded
+        # row ("no data — /statusline-onboarding") instead of vanishing —
+        # unless providers.show_unavailable is explicitly False (default ON).
+        # NOTE (parity TODO): the node/bash engines don't draw degraded rows yet
+        # — this is python-first, like the narrator.
+        record_by_provider = {}
+        for record in records:
+            if isinstance(record, dict):
+                record_by_provider.setdefault(record.get("provider"), record)
+        available_providers = {rec.get("provider") for rec, _ in candidates}
+        show_unavailable = not (
+            isinstance(providers_block, dict) and providers_block.get("show_unavailable") is False
+        )
+        degraded = [p for p in only if p not in available_providers]
+        label_width = max(
+            [len(label) for _, label in candidates]
+            + [len(_provider_degraded_label(p)) for p in degraded],
+            default=0,
+        )
+        lines = []
+        for provider in only:
+            record = record_by_provider.get(provider)
+            rendered = []
+            if record is not None:
+                try:
+                    rendered = _render_available(record, label_width)
+                except Exception:
+                    rendered = []
+            if rendered:
+                lines.extend(rendered)
+            elif show_unavailable:
+                lines.append(
+                    _render_degraded_provider_row(provider, label_width, ctx.get("render_width", 0))
+                )
+        return "\n".join(lines)
+
+    # Legacy path — byte-for-byte unchanged (no providers block present).
     label_width = max((len(label) for _, label in candidates), default=0)
     lines = []
     for record, _ in candidates:
@@ -2281,9 +2359,10 @@ def _get_telemetry_id():
             if len(existing) == 16 and all(ch in "0123456789abcdef" for ch in existing):
                 return existing
 
-        import secrets
-
-        uid = secrets.token_hex(8)
+        # os.urandom(8).hex() == secrets.token_hex(8) (16 lowercase hex chars),
+        # but avoids `import secrets` — lib/ sits at sys.path[0], so that name
+        # now resolves to our lib/secrets.py, not the stdlib module.
+        uid = os.urandom(8).hex()
         TELEMETRY_ID_PATH.write_text(uid)
         try:
             os.chmod(TELEMETRY_ID_PATH, 0o600)

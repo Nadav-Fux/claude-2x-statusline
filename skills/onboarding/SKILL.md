@@ -36,11 +36,31 @@ Present the trio first, then the extras. Never offer to remove Claude.
    `apply_selection` writes `providers.selected`, mirrors it into
    `external_providers.<p>.enabled` (so the Node/Bash engines keep working with
    no code change), and auto-sets `tier` (`multi-cli` for 2+ providers).
-6. For each selected provider whose detected status is not `ok`, print the auth
-   hint (no interactive auth in this phase):
-   - **codex** → `codex login`
-   - **antigravity** → `antigravity-usage login` (or open the Antigravity app)
-   - **glm** → set `ZAI_API_KEY` (hooks don't source your shell rc; a keychain flow comes later)
-   - **copilot** → `gh auth login`
-   - **droid** → install Factory Droid and start one session
-7. Close with: "Saved. Restart Claude Code once to load the new cockpit."
+
+6. **Auth stage (Phase 2).** For each selected provider, confirm it actually
+   authenticates with a bounded probe (`validate_provider` → `ok`/`unauth`/
+   `missing`/`unknown`). Only card the providers that are NOT `ok`:
+   ```bash
+   python3 -c "import sys, os, json; sys.path.insert(0, os.path.expanduser('~/.claude/cc-2x-statusline/lib')); from onboarding import validate_provider; p=os.path.expanduser('~/.claude/statusline-config.json'); cfg=json.load(open(p)) if os.path.exists(p) else {}; print(validate_provider('codex', cfg))"
+   ```
+   For each non-`ok` provider, drive the matching card (Hebrew-first, English
+   terms) with `AskUserQuestion`, then re-run `validate_provider` to confirm:
+
+   - **codex** — *Codex CLI · דרוש login*: "הריצו `codex login` בטרמינל אחר, ואז המשיכו."
+   - **antigravity** — *Antigravity · דרוש login*: "הריצו `antigravity-usage login` (או פתחו את אפליקציית Antigravity / ה-IDE), ואז המשיכו."
+   - **glm** — *z.ai key*: בקשו מהמשתמש את מפתח ה-z.ai (get it at https://z.ai). **אל תדפיסו את המפתח.** העבירו אותו דרך משתנה סביבה (לא בתוך ה-`-c`) והריצו:
+     ```bash
+     ZAI_KEY='PASTE_THE_KEY' python3 -c "import sys, os; sys.path.insert(0, os.path.expanduser('~/.claude/cc-2x-statusline/lib')); from onboarding import store_glm_key; err=store_glm_key(os.path.expanduser('~/.claude/statusline-config.json'), os.environ.get('ZAI_KEY','')); print(err or 'OK — key validated, saved to the OS keychain, plaintext removed from config')"
+     ```
+     `store_glm_key` validates the key first; on failure it prints an error and
+     stores **nothing** (retry or skip). On success the key lives only in the
+     keychain/secret store — never in the config file or chat.
+   - **copilot** — *GitHub Copilot*: "הריצו `gh auth login`." For an org pool, also set `COPILOT_ORG` (or `external_providers.copilot.org` in the config) to the org slug.
+   - **droid** — *Factory Droid*: "התקינו/הפעילו את Factory Droid והתחילו session אחד, ואז המשיכו."
+
+   A provider that stays non-`ok` after its card is fine — the selection is kept
+   and the statusline shows a dim `no data — /statusline-onboarding` row until it
+   authenticates. Never abort the wizard on one failed provider.
+
+7. Close with: "נשמר. הפעילו מחדש את Claude Code כדי לטעון את ה-cockpit. הריצו
+   `/statusline-onboarding` שוב מתי שתרצו כדי להוסיף / להסיר / לחבר מחדש provider."

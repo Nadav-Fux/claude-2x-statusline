@@ -1122,7 +1122,111 @@ except Exception:
         0 ""
 }
 
-# ── Check 10: CLAUDE.md length (Boris Cherny / Anthropic best practice) ───
+# ── Check 10: provider auth (only once providers.selected exists) ─────────
+#
+# Reads statusline-config.json. If a providers.selected array is present, it
+# probes each selected provider's auth via lib/onboarding.validate_provider and
+# caches the results in ~/.claude/statusline-provider-state.json with a
+# checked_at timestamp — a probe is skipped entirely when the cache is <1h old
+# (the probes make network / subprocess calls, so they must not run on every
+# doctor invocation). Secrets are never read or printed. WARN per selected
+# provider whose status != ok; fix hint: /statusline-onboarding.
+check_providers_auth() {
+    [ -f "$CONFIG" ] || return
+    local py
+    py=$(have_python) || py=""
+    [ -n "$py" ] || return
+
+    local state_file="$CLAUDE_DIR/statusline-provider-state.json"
+    local out
+    out=$("$py" - "$CONFIG" "$state_file" "$REPO_ROOT/lib" <<'PY' 2>/dev/null
+import json, os, sys, time
+
+config_path, state_path, lib_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, lib_dir)
+try:
+    import onboarding
+except Exception:
+    sys.exit(0)
+
+try:
+    with open(config_path, encoding="utf-8") as fh:
+        config = json.load(fh)
+except Exception:
+    config = {}
+
+providers = config.get("providers") if isinstance(config, dict) else None
+selected = providers.get("selected") if isinstance(providers, dict) else None
+if not isinstance(selected, list) or not selected:
+    sys.exit(0)  # no selection recorded → nothing to check
+
+now = time.time()
+state = {}
+try:
+    with open(state_path, encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    if isinstance(loaded, dict):
+        state = loaded
+except Exception:
+    state = {}
+
+checked_at = state.get("checked_at")
+cached = state.get("providers")
+fresh = (
+    isinstance(checked_at, (int, float))
+    and (now - checked_at) < 3600
+    and isinstance(cached, dict)
+)
+
+if fresh:
+    results = {p: cached.get(p, "unknown") for p in selected}
+else:
+    results = {}
+    for p in selected:
+        try:
+            results[p] = onboarding.validate_provider(p, config)
+        except Exception:
+            results[p] = "unknown"
+    try:
+        tmp = state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"checked_at": now, "providers": results}, fh)
+        os.replace(tmp, state_path)
+        try:
+            os.chmod(state_path, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+for p in selected:
+    print("%s\t%s" % (p, results.get(p, "unknown")))
+PY
+)
+    [ -n "$out" ] || return
+
+    local any_warn=0 p status
+    while IFS="$(printf '\t')" read -r p status; do
+        [ -n "$p" ] || continue
+        if [ "$status" != "ok" ]; then
+            any_warn=1
+            add_result warn providers_auth \
+                "Provider '$p' not authenticated ($status)" \
+                "Selected in statusline-config.json but its auth probe returned '$status'. Fix: run /statusline-onboarding." \
+                0 ""
+        fi
+    done <<EOF
+$out
+EOF
+
+    if [ "$any_warn" = "0" ]; then
+        add_result ok providers_auth \
+            "All selected providers authenticated" \
+            "" 0 ""
+    fi
+}
+
+# ── Check 11: CLAUDE.md length (Boris Cherny / Anthropic best practice) ───
 # A CLAUDE.md much longer than ~60 lines (200 is the hard ceiling) causes the
 # model to deprioritize rules near the bottom. Warn only when a file is over
 # the 200-line ceiling; stay silent otherwise. Robust to missing/unreadable
@@ -1170,6 +1274,7 @@ check_execution
 check_origin
 check_redundant_commands
 check_narrator_hook
+check_providers_auth
 check_claude_md_size
 
 # ── Output ───────────────────────────────────────────────────────────────
