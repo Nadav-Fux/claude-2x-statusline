@@ -99,14 +99,41 @@ def merge(base, patch):
         return merged
     if isinstance(base, list) and isinstance(patch, list):
         merged = list(base)
-        seen = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in base}
+        seen = {_marker(item) for item in base}
         for item in patch:
-            marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
+            marker = _marker(item)
             if marker not in seen:
                 merged.append(item)
                 seen.add(marker)
         return merged
     return patch
+
+
+def _norm_cmd(cmd):
+    # "bash '/x/y.sh'", "'/x/y.sh'" and "/x/y.sh" are the same hook; installer
+    # quoting changed across versions, so compare commands quote-insensitively
+    # or every update appends a duplicate hook entry.
+    c = cmd.strip()
+    if c.startswith("bash "):
+        c = c[5:].strip()
+    if len(c) >= 2 and c[0] == c[-1] and c[0] in ("'", '"'):
+        c = c[1:-1]
+    return c
+
+
+def _norm(value):
+    if isinstance(value, dict):
+        return {
+            k: (_norm_cmd(v) if k == "command" and isinstance(v, str) else _norm(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_norm(v) for v in value]
+    return value
+
+
+def _marker(item):
+    return json.dumps(_norm(item), sort_keys=True, ensure_ascii=False)
 
 
 target_path = sys.argv[1]
@@ -140,12 +167,12 @@ const path = require('path');
 function merge(base, patch) {
   if (Array.isArray(base) && Array.isArray(patch)) {
     const merged = [...base];
-    const seen = new Set(base.map(item => JSON.stringify(item)));
+    const seen = new Set(base.map(item => marker(item)));
     for (const item of patch) {
-      const marker = JSON.stringify(item);
-      if (!seen.has(marker)) {
+      const m = marker(item);
+      if (!seen.has(m)) {
         merged.push(item);
-        seen.add(marker);
+        seen.add(m);
       }
     }
     return merged;
@@ -164,6 +191,34 @@ function merge(base, patch) {
 
 function isObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+// "bash '/x/y.sh'", "'/x/y.sh'" and "/x/y.sh" are the same hook; installer
+// quoting changed across versions, so compare commands quote-insensitively
+// or every update appends a duplicate hook entry.
+function normCmd(cmd) {
+  let c = cmd.trim();
+  if (c.startsWith('bash ')) c = c.slice(5).trim();
+  if (c.length >= 2 && c[0] === c[c.length - 1] && (c[0] === "'" || c[0] === '"')) {
+    c = c.slice(1, -1);
+  }
+  return c;
+}
+
+function norm(value) {
+  if (Array.isArray(value)) return value.map(norm);
+  if (isObject(value)) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = k === 'command' && typeof v === 'string' ? normCmd(v) : norm(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+function marker(item) {
+  return JSON.stringify(norm(item));
 }
 
 const targetPath = process.argv[2];
@@ -188,6 +243,20 @@ NODE
                 base_json=$(cat "$target") || return 20
             fi
             printf '%s' "$base_json" | "$_WIRE_JSON_RUNTIME" --argjson patch "$merge_json" '
+def normcmd:
+  gsub("^\\s+|\\s+$"; "")
+  | (if startswith("bash ") then .[5:] | gsub("^\\s+|\\s+$"; "") else . end)
+  | (if (length >= 2) and ((startswith("'\''") and endswith("'\''")) or (startswith("\"") and endswith("\"")))
+     then .[1:length-1] else . end);
+def norm:
+  if type == "object" then
+    with_entries(
+      if .key == "command" and (.value | type) == "string"
+      then .value |= normcmd
+      else .value |= norm end
+    )
+  elif type == "array" then map(norm)
+  else . end;
 def rmerge($base; $patch):
   if (($base | type) == "object") and (($patch | type) == "object") then
     reduce ($patch | keys_unsorted[]) as $key ($base;
@@ -195,7 +264,7 @@ def rmerge($base; $patch):
     )
   elif (($base | type) == "array") and (($patch | type) == "array") then
     reduce $patch[] as $item ($base;
-      if any(.[]; . == $item) then . else . + [$item] end
+      if any(.[]; (. | norm) == ($item | norm)) then . else . + [$item] end
     )
   else
     $patch

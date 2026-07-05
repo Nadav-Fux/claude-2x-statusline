@@ -68,10 +68,10 @@ function Merge-JsonValue {
         $merged = @($Base)
         $seen = @{}
         foreach ($item in $merged) {
-            $seen[(ConvertTo-Json $item -Depth 20 -Compress)] = $true
+            $seen[(Get-DedupMarker $item)] = $true
         }
         foreach ($item in $Patch) {
-            $marker = ConvertTo-Json $item -Depth 20 -Compress
+            $marker = Get-DedupMarker $item
             if (-not $seen.ContainsKey($marker)) {
                 $merged += ,$item
                 $seen[$marker] = $true
@@ -81,6 +81,52 @@ function Merge-JsonValue {
     }
 
     return $Patch
+}
+
+# "bash '/x/y.sh'", "'/x/y.sh'" and "/x/y.sh" are the same hook; installer
+# quoting changed across versions, so compare commands quote-insensitively
+# or every update appends a duplicate hook entry.
+function ConvertTo-NormalizedCommand {
+    param([string]$Command)
+
+    $c = $Command.Trim()
+    if ($c.StartsWith('bash ')) {
+        $c = $c.Substring(5).Trim()
+    }
+    if ($c.Length -ge 2 -and $c[0] -eq $c[$c.Length - 1] -and ($c[0] -eq "'" -or $c[0] -eq '"')) {
+        $c = $c.Substring(1, $c.Length - 2)
+    }
+    return $c
+}
+
+function ConvertTo-DedupNormalized {
+    param($Value)
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $out = @{}
+        foreach ($key in $Value.Keys) {
+            if ($key -eq 'command' -and ($Value[$key] -is [string])) {
+                $out[$key] = ConvertTo-NormalizedCommand $Value[$key]
+            } else {
+                $out[$key] = ConvertTo-DedupNormalized $Value[$key]
+            }
+        }
+        return $out
+    }
+    if ($Value -is [System.Collections.IList]) {
+        $items = @()
+        foreach ($item in $Value) {
+            $items += ,(ConvertTo-DedupNormalized $item)
+        }
+        return ,$items
+    }
+    return $Value
+}
+
+function Get-DedupMarker {
+    param($Item)
+
+    return (ConvertTo-Json (ConvertTo-DedupNormalized $Item) -Depth 20 -Compress)
 }
 
 function ConvertTo-WireJsonString {

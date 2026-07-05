@@ -301,6 +301,28 @@ def is_legacy_narrator_entry(e):
         return False
     return any(b in cmd for b in NARRATOR_BASENAMES)
 
+def _norm_cmd(cmd):
+    c = cmd.strip()
+    if c.startswith("bash "):
+        c = c[5:].strip()
+    if len(c) >= 2 and c[0] == c[-1] and c[0] in ("'", '"'):
+        c = c[1:-1]
+    return c
+
+def narrator_marker(e):
+    # Older installers wrote the hook path unquoted, newer ones single-quoted;
+    # both forms are the same hook and must collapse to one entry.
+    if not isinstance(e, dict) or not isinstance(e.get("hooks"), list):
+        return None
+    cmds = tuple(
+        _norm_cmd(h.get("command", ""))
+        for h in e["hooks"]
+        if isinstance(h, dict) and isinstance(h.get("command"), str)
+    )
+    if cmds and any(any(b in c for b in NARRATOR_BASENAMES) for c in cmds):
+        return cmds
+    return None
+
 try:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -317,8 +339,17 @@ for event in ("SessionStart", "UserPromptSubmit"):
     if not isinstance(arr, list):
         continue
     cleaned = [e for e in arr if not is_legacy_narrator_entry(e)]
-    if len(cleaned) != len(arr):
-        hooks[event] = cleaned
+    seen_markers = set()
+    deduped = []
+    for e in cleaned:
+        m = narrator_marker(e)
+        if m is not None:
+            if m in seen_markers:
+                continue
+            seen_markers.add(m)
+        deduped.append(e)
+    if len(deduped) != len(arr):
+        hooks[event] = deduped
         changed = True
 
 if not changed:
