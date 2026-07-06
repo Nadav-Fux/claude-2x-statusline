@@ -55,7 +55,7 @@ Present the trio first, then the extras. Never offer to remove Claude.
      `store_glm_key` validates the key first; on failure it prints an error and
      stores **nothing** (retry or skip). On success the key lives only in the
      keychain/secret store — never in the config file or chat.
-   - **copilot** — *GitHub Copilot*: "הריצו `gh auth login`." For an org pool, also set `COPILOT_ORG` (or `external_providers.copilot.org` in the config) to the org slug.
+   - **copilot** — *GitHub Copilot*: "הריצו `gh auth login`, ואז בחרו מצב: `individual` לרוב המשתמשים, או `org` לבריכת ארגון." במצב `individual` לא צריך לשמור token או cap; במצב `org` בקשו org slug ו-cap חודשי חיובי, ושמרו אותם ב-`external_providers.copilot.org` וב-`external_providers.copilot.cap` יחד עם `mode: "org"` (אפשר גם `pool` להצגה). אם `validate_provider('copilot', cfg)` מחזיר `missing`, חסר `gh` או שחסרים `org`/`cap` למצב org.
    - **droid** — *Factory Droid*: "התקינו/הפעילו את Factory Droid והתחילו session אחד, ואז המשיכו."
 
    A provider that stays non-`ok` after its card is fine — the selection is kept

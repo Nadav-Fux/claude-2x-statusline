@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -24,6 +24,8 @@ LOCAL_CACHE_TTL = 45
 GLM_CACHE_TTL = 60
 EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
+COPILOT_CACHE_TTL = 300
+COPILOT_DEFAULT_SKUS = ("Copilot AI Credits", "Copilot Premium Requests")
 
 
 def unavailable(provider):
@@ -401,8 +403,9 @@ def _write_json(path, value):
             os.chmod(path, 0o600)
         except Exception:
             pass
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _read_cached_record(provider, ttl):
@@ -1120,14 +1123,260 @@ def get_antigravity_usage(config=None):
         return unavailable("antigravity")
 
 
+def _copilot_provider_config(config):
+    if not isinstance(config, dict):
+        return {}
+    external = config.get("external_providers")
+    if isinstance(external, dict) and isinstance(external.get("copilot"), dict):
+        return dict(external.get("copilot") or {})
+    return dict(config)
+
+
+def _copilot_mode(config):
+    mode = str(config.get("mode") or "individual").strip().lower()
+    return "org" if mode == "org" else "individual"
+
+
+def _copilot_skus(config):
+    raw = config.get("skus")
+    values = []
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip() for item in raw]
+    elif isinstance(raw, str):
+        values = [item.strip() for item in raw.split(",")]
+    values = [item for item in values if item]
+    return values or list(COPILOT_DEFAULT_SKUS)
+
+
+def _copilot_number(value):
+    number = _finite_number(value)
+    if number is None:
+        return None
+    return int(number) if float(number).is_integer() else number
+
+
+def _copilot_positive_number(value):
+    number = _copilot_number(value)
+    if number is None or number <= 0:
+        return None
+    return number
+
+
+def _copilot_next_month_epoch(now=None):
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    start = now.astimezone(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if start.month == 12:
+        start = start.replace(year=start.year + 1, month=1)
+    else:
+        start = start.replace(month=start.month + 1)
+    return int(start.timestamp())
+
+
+def _copilot_match_item(item, skus):
+    if not isinstance(item, dict):
+        return False
+    sku = str(item.get("sku") or "").lower()
+    return bool(sku) and any(str(needle).lower() in sku for needle in skus)
+
+
+def _copilot_usage_total(response, skus):
+    items = response.get("usageItems") if isinstance(response, dict) else None
+    if not isinstance(items, list):
+        return 0.0
+    total = 0.0
+    for item in items:
+        if not _copilot_match_item(item, skus):
+            continue
+        quantity = _finite_number(item.get("quantity")) if isinstance(item, dict) else None
+        if quantity is not None:
+            total += quantity
+    return total
+
+
+def _copilot_quota_candidates(value, path=None):
+    if path is None:
+        path = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = [*path, str(key)]
+            yield from _copilot_quota_candidates(child, child_path)
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            yield from _copilot_quota_candidates(child, [*path, str(idx)])
+    else:
+        number = _finite_number(value)
+        if number is None or number <= 0:
+            return
+        path_text = ".".join(path).lower()
+        include_terms = ("included", "free", "quota", "allowance", "limit", "cap")
+        exclude_terms = ("used", "remaining", "consumed", "discount", "gross", "net", "price", "cost", "amount")
+        if not any(term in path_text for term in include_terms):
+            return
+        if any(term in path_text for term in exclude_terms):
+            return
+        yield number
+
+
+def _copilot_derived_cap(response):
+    candidates = list(_copilot_quota_candidates(response))
+    if not candidates:
+        return None
+    return _copilot_number(max(candidates))
+
+
+def _copilot_record(mode, used, cap=None, pool=None, plan=None):
+    cap = _copilot_positive_number(cap)
+    pool = _copilot_number(pool) or 0
+    used = float(used or 0.0)
+    remaining = None
+    used_pct = 0
+    if cap is not None:
+        remaining = max(0.0, float(cap) - used)
+        used_pct = min(100, round(used / float(cap) * 100)) if cap else 0
+        label = f"{remaining:.0f} left"
+    else:
+        label = f"{used:.0f} used"
+    return {
+        "provider": "copilot",
+        "label": "Copilot",
+        "available": True,
+        "display": "bars",
+        "five_hour": {"label": label, "used_pct": used_pct, "resets_at": _copilot_next_month_epoch()},
+        "plan": str(plan or ("business" if mode == "org" else "individual")),
+        "source": "gh-billing",
+        "used": round(used, 2),
+        "cap": cap or 0,
+        "pool": pool,
+        "remaining": None if remaining is None else round(remaining, 2),
+    }
+
+
+def _run_gh(args):
+    try:
+        proc = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    return proc.stdout or ""
+
+
+def _gh_auth_ok():
+    return _run_gh(["auth", "status"]) is not None
+
+
+def _gh_api_json(endpoint):
+    out = _run_gh(["api", endpoint])
+    if not out:
+        return None
+    try:
+        data = json.loads(out)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _gh_api_text(*args):
+    out = _run_gh(["api", *args])
+    return out.strip() if out is not None else ""
+
+
+def refresh_copilot_cache(config=None):
+    """Refresh the Copilot billing cache with the GitHub CLI.
+
+    Returns True only after a successful API read and cache write. Auth errors,
+    403s, timeouts, a missing gh binary, or incomplete org-mode config all return
+    False and never clobber the previous cache.
+    """
+    try:
+        config = _copilot_provider_config(config)
+        mode = _copilot_mode(config)
+        skus = _copilot_skus(config)
+        now = datetime.now(timezone.utc)
+        year = now.year
+        month = now.month
+        org = ""
+        org_cap = None
+        if mode == "org":
+            org = str(config.get("org") or "").strip()
+            org_cap = _copilot_positive_number(config.get("cap"))
+            if not org or org_cap is None:
+                return False
+
+        if not _gh_auth_ok():
+            return False
+
+        if mode == "org":
+            response = _gh_api_json(f"/organizations/{org}/settings/billing/usage?year={year}&month={month}")
+            if response is None:
+                return False
+            used = _copilot_usage_total(response, skus)
+            record = _copilot_record(
+                mode,
+                used,
+                cap=org_cap,
+                pool=_copilot_number(config.get("pool")) or 0,
+                plan=config.get("plan"),
+            )
+        else:
+            login = _gh_api_text("user", "-q", ".login")
+            if not login:
+                return False
+            response = _gh_api_json(f"/users/{login}/settings/billing/usage?year={year}&month={month}")
+            if response is None:
+                return False
+            used = _copilot_usage_total(response, skus)
+            cap = _copilot_derived_cap(response) or _copilot_positive_number(config.get("cap"))
+            record = _copilot_record(
+                mode,
+                used,
+                cap=cap,
+                pool=_copilot_number(config.get("pool")) or 0,
+                plan=config.get("plan"),
+            )
+
+        return _write_json(_cache_path("copilot"), {"cached_at": time.time(), "record": record}) is True
+    except Exception:
+        return False
+
+
+def _spawn_copilot_refresh(config):
+    try:
+        env = dict(os.environ)
+        env["CLAUDE_STATUSLINE_PROVIDER_LIB"] = str(Path(__file__).resolve().parent)
+        env["CLAUDE_STATUSLINE_COPILOT_CONFIG"] = json.dumps(_copilot_provider_config(config))
+        code = (
+            "import json, os, sys; "
+            "sys.path.insert(0, os.environ.get('CLAUDE_STATUSLINE_PROVIDER_LIB', '')); "
+            "import usage_providers; "
+            "cfg=json.loads(os.environ.get('CLAUDE_STATUSLINE_COPILOT_CONFIG', '{}')); "
+            "usage_providers.refresh_copilot_cache(cfg)"
+        )
+        subprocess.Popen(
+            ["python3", "-c", code],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env=env,
+        )
+    except Exception:
+        pass
+
+
 def get_copilot_usage(config=None):
     """GitHub Copilot AI-credit usage.
 
-    Data is produced out-of-band by ~/.claude/copilot-credits-refresh.sh (which
-    queries the GitHub billing API) and cached in statusline-usage-copilot.json.
-    This reader is network-free; when the cache is stale it kicks off the
-    refresher in a detached background process (stale-while-revalidate) so the
-    statusline never blocks on the network.
+    Reads statusline-usage-copilot.json synchronously. When the cache is missing
+    or older than COPILOT_CACHE_TTL, it kicks off a detached in-process refresher
+    and returns the stale record immediately so rendering never blocks on gh/API.
     """
     path = _cache_path("copilot")
     data = _read_json(path)
@@ -1135,23 +1384,15 @@ def get_copilot_usage(config=None):
         age = time.time() - path.stat().st_mtime
     except Exception:
         age = None
-    if age is None or age > 300:
-        try:
-            import subprocess
-
-            script = Path.home() / ".claude" / "copilot-credits-refresh.sh"
-            if script.exists():
-                subprocess.Popen(
-                    ["bash", str(script)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-        except Exception:
-            pass
+    if age is None or age > COPILOT_CACHE_TTL:
+        _spawn_copilot_refresh(config)
     record = data.get("record") if isinstance(data, dict) else None
-    return record if _is_available_record(record) else unavailable("copilot")
+    if not _is_available_record(record):
+        return unavailable("copilot")
+    if age is not None and age > COPILOT_CACHE_TTL:
+        record = dict(record)
+        record["stale_seconds"] = max(0, int(age))
+    return record
 
 
 def get_provider_usage(provider, config=None):

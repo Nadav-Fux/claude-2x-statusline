@@ -226,12 +226,179 @@ def _write_copilot_cache(home, age_seconds=0):
     return cache
 
 
+class _Proc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_refresh_copilot_cache_org_mode_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["gh", "auth", "status"]:
+            return _Proc(0, "")
+        assert cmd[0:2] == ["gh", "api"]
+        assert cmd[2].startswith("/organizations/acme/settings/billing/usage?")
+        return _Proc(
+            0,
+            json.dumps(
+                {
+                    "usageItems": [
+                        {"sku": "Copilot AI Credits", "quantity": 500},
+                        {"sku": "Actions Linux", "quantity": 999},
+                    ]
+                }
+            ),
+        )
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+
+    assert providers.refresh_copilot_cache({"mode": "org", "org": "acme", "cap": 2000, "pool": 4000}) is True
+
+    cache = json.loads((tmp_path / ".claude" / "statusline-usage-copilot.json").read_text(encoding="utf-8"))
+    record = cache["record"]
+    assert calls[0] == ["gh", "auth", "status"]
+    assert record["provider"] == "copilot"
+    assert record["available"] is True
+    assert record["display"] == "bars"
+    assert record["five_hour"]["label"] == "1500 left"
+    assert record["five_hour"]["used_pct"] == 25
+    assert isinstance(record["five_hour"]["resets_at"], int)
+    assert record["plan"] == "business"
+    assert record["source"] == "gh-billing"
+    assert record["used"] == 500
+    assert record["cap"] == 2000
+    assert record["pool"] == 4000
+    assert record["remaining"] == 1500
+
+
+def test_refresh_copilot_cache_individual_derives_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["gh", "auth", "status"]:
+            return _Proc(0, "")
+        if cmd == ["gh", "api", "user", "-q", ".login"]:
+            return _Proc(0, "octo\n")
+        assert cmd[0:2] == ["gh", "api"]
+        assert cmd[2].startswith("/users/octo/settings/billing/usage?year=")
+        return _Proc(
+            0,
+            json.dumps(
+                {
+                    "includedQuantity": 300,
+                    "usageItems": [
+                        {"sku": "Copilot Premium Requests", "quantity": 50},
+                        {"sku": "Actions Linux", "quantity": 10},
+                    ],
+                }
+            ),
+        )
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+
+    assert providers.refresh_copilot_cache({"mode": "individual"}) is True
+
+    record = json.loads((tmp_path / ".claude" / "statusline-usage-copilot.json").read_text(encoding="utf-8"))["record"]
+    assert record["plan"] == "individual"
+    assert record["used"] == 50
+    assert record["cap"] == 300
+    assert record["remaining"] == 250
+    assert record["five_hour"]["label"] == "250 left"
+    assert record["five_hour"]["used_pct"] == 17
+
+
+def test_refresh_copilot_cache_individual_without_cap_is_count_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["gh", "auth", "status"]:
+            return _Proc(0, "")
+        if cmd == ["gh", "api", "user", "-q", ".login"]:
+            return _Proc(0, "octo\n")
+        assert cmd[0:2] == ["gh", "api"]
+        assert cmd[2].startswith("/users/octo/settings/billing/usage?year=")
+        return _Proc(0, json.dumps({"usageItems": [{"sku": "Copilot Premium Requests", "quantity": 12}]}))
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+
+    assert providers.refresh_copilot_cache({"mode": "individual"}) is True
+
+    record = json.loads((tmp_path / ".claude" / "statusline-usage-copilot.json").read_text(encoding="utf-8"))["record"]
+    assert record["used"] == 12
+    assert record["cap"] == 0
+    assert record["remaining"] is None
+    assert record["five_hour"]["label"] == "12 used"
+    assert record["five_hour"]["used_pct"] == 0
+
+
+def test_refresh_copilot_cache_sku_filtering(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["gh", "auth", "status"]:
+            return _Proc(0, "")
+        return _Proc(
+            0,
+            json.dumps(
+                {
+                    "usageItems": [
+                        {"sku": "Copilot AI Credits", "quantity": 500},
+                        {"sku": "Copilot Premium Requests", "quantity": 9},
+                    ]
+                }
+            ),
+        )
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+
+    assert providers.refresh_copilot_cache({"mode": "org", "org": "acme", "cap": 100, "skus": ["Premium Requests"]})
+    record = json.loads((tmp_path / ".claude" / "statusline-usage-copilot.json").read_text(encoding="utf-8"))["record"]
+    assert record["used"] == 9
+    assert record["remaining"] == 91
+    assert record["five_hour"]["used_pct"] == 9
+
+
+def test_refresh_copilot_cache_gh_failure_preserves_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    cache = _write_copilot_cache(tmp_path, age_seconds=0)
+    before = cache.read_text(encoding="utf-8")
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["gh", "auth", "status"]:
+            return _Proc(0, "")
+        return _Proc(1, "", "HTTP 403")
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+
+    assert providers.refresh_copilot_cache({"mode": "org", "org": "acme", "cap": 2000}) is False
+    assert cache.read_text(encoding="utf-8") == before
+
+
+def test_refresh_copilot_cache_incomplete_org_config_returns_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    def fail_run(cmd, **kwargs):
+        raise AssertionError("gh should not run for incomplete org config")
+
+    monkeypatch.setattr(providers.subprocess, "run", fail_run)
+
+    assert providers.refresh_copilot_cache({"mode": "org", "org": "acme"}) is False
+    assert not (tmp_path / ".claude" / "statusline-usage-copilot.json").exists()
+
+
 def test_copilot_reads_fresh_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     _write_copilot_cache(tmp_path, age_seconds=0)
 
     record = providers.get_copilot_usage({})
+    expected = json.loads((FIXTURES / "copilot_usage_cache.json").read_text(encoding="utf-8"))["record"]
 
+    assert record == expected
     assert record["provider"] == "copilot"
     assert record["available"] is True
     assert record["label"] == "Copilot"
@@ -242,20 +409,37 @@ def test_copilot_reads_fresh_cache(tmp_path, monkeypatch):
 
 def test_copilot_reads_stale_cache_still_returns_record(tmp_path, monkeypatch):
     # A stale cache (age > 300s) still renders the last good record; the reader
-    # only kicks off a background refresh (no refresh script exists under the
-    # test home, so nothing is spawned) and never clobbers the cache.
+    # only kicks off a detached background refresh and never clobbers the cache.
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     _write_copilot_cache(tmp_path, age_seconds=3600)
+    popens = []
+
+    class _Popen:
+        def __init__(self, cmd, **kwargs):
+            popens.append((cmd, kwargs))
+
+    monkeypatch.setattr(providers.subprocess, "Popen", _Popen)
 
     record = providers.get_copilot_usage({})
 
+    assert popens
+    cmd, kwargs = popens[0]
+    assert cmd[:2] == ["python3", "-c"]
+    assert "refresh_copilot_cache" in cmd[2]
+    assert kwargs["stdout"] is providers.subprocess.DEVNULL
+    assert kwargs["stderr"] is providers.subprocess.DEVNULL
+    assert kwargs["stdin"] is providers.subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+    assert json.loads(kwargs["env"]["CLAUDE_STATUSLINE_COPILOT_CONFIG"]) == {}
     assert record["provider"] == "copilot"
     assert record["available"] is True
     assert record["five_hour"]["used_pct"] == 25
+    assert record["stale_seconds"] >= 300
 
 
 def test_copilot_missing_cache_is_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers.subprocess, "Popen", lambda *a, **k: None)
 
     record = providers.get_copilot_usage({})
 
