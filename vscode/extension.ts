@@ -32,6 +32,8 @@ interface StatuslineConfig {
   segments?: Record<string, boolean>;
   schedule_url?: string;
   schedule_cache_hours?: number;
+  providers?: { selected?: unknown };
+  external_providers?: Record<string, unknown>;
 }
 
 interface UsageData {
@@ -48,6 +50,42 @@ interface ContextData {
   active_workflow_agents?: number;
   subagent_tokens_live?: number;
   subagent_runs_session?: number;
+  five_hour_pct?: number;
+  seven_day_pct?: number;
+}
+
+type ExternalProvider = 'codex' | 'glm' | 'droid' | 'antigravity' | 'copilot';
+
+interface ExternalUsageWindow {
+  label?: string;
+  used_pct?: number;
+  resets_at?: number | string | null;
+}
+
+interface ExternalUsageRecord {
+  provider?: string;
+  label?: string;
+  available?: boolean;
+  display?: 'bars' | 'compact' | string;
+  plan?: string | null;
+  five_hour?: ExternalUsageWindow | null;
+  weekly?: ExternalUsageWindow | null;
+  metrics?: ExternalUsageWindow[] | null;
+  metrics_5h?: ExternalUsageWindow[] | null;
+  metrics_weekly?: ExternalUsageWindow[] | null;
+}
+
+interface ExternalUsageCache {
+  cached_at?: number | string;
+  record?: ExternalUsageRecord;
+  response?: unknown;
+}
+
+interface ProviderSnapshot {
+  provider: ExternalProvider;
+  record: ExternalUsageRecord;
+  cachedAtMs: number;
+  ageMs: number;
 }
 
 // ── Constants ──
@@ -61,6 +99,23 @@ const USAGE_CACHE_PATH = path.join(CLAUDE_DIR, 'statusline-usage-cache.json');
 const CONTEXT_PATH = path.join(os.tmpdir(), 'claude', 'statusline-context.json');
 
 const DEFAULT_SCHEDULE_URL = 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json';
+const CONTEXT_TTL_MS = 10 * 60_000;
+const PROVIDER_CACHE_STALE_MS = 15 * 60_000;
+const EXTERNAL_PROVIDER_ORDER: ExternalProvider[] = ['codex', 'glm', 'droid', 'antigravity', 'copilot'];
+const PROVIDER_SUMMARY_LABELS: Record<ExternalProvider, string> = {
+  codex: 'Cdx',
+  glm: 'GLM',
+  droid: 'Droid',
+  antigravity: 'AGY',
+  copilot: 'CoP',
+};
+const PROVIDER_FALLBACK_LABELS: Record<ExternalProvider, string> = {
+  codex: 'Codex',
+  glm: 'GLM',
+  droid: 'Droid',
+  antigravity: 'Antigravity',
+  copilot: 'Copilot',
+};
 
 const DEFAULT_SCHEDULE: Schedule = {
   v: 2,
@@ -77,6 +132,7 @@ const DEFAULT_SCHEDULE: Schedule = {
 let peakItem: vscode.StatusBarItem;
 let fhItem: vscode.StatusBarItem;
 let wdItem: vscode.StatusBarItem;
+let cockpitItem: vscode.StatusBarItem;
 let ctxItem: vscode.StatusBarItem;
 let infoItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
@@ -97,14 +153,16 @@ export function activate(context: vscode.ExtensionContext) {
   peakItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 201);
   fhItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 200);
   wdItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 199);
+  cockpitItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 198.5);
   ctxItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 198);
   infoItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 197);
 
-  context.subscriptions.push(peakItem, fhItem, wdItem, ctxItem, infoItem);
+  context.subscriptions.push(peakItem, fhItem, wdItem, cockpitItem, ctxItem, infoItem);
 
   // Register refresh command
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeStatusline.refresh', () => refresh())
+    vscode.commands.registerCommand('claudeStatusline.refresh', () => refresh()),
+    vscode.commands.registerCommand('claudeStatusline.refreshProviderCockpit', () => refreshProviderCockpit())
   );
 
   // Initial update
@@ -184,12 +242,21 @@ async function refresh() {
 
     updatePeakItem(schedule, vsConfig.get<boolean>('showPeakHours', true));
     await updateRateLimitItems(tier, vsConfig.get<boolean>('showRateLimits', true));
+    updateProviderCockpit(config);
     updateContextItem(tier);
     updateInfoItem(tier);
   } catch {
     // Silently fail — statusline is non-critical
   } finally {
     isRefreshing = false;
+  }
+}
+
+function refreshProviderCockpit() {
+  try {
+    updateProviderCockpit(loadConfig());
+  } catch {
+    cockpitItem.hide();
   }
 }
 
@@ -401,6 +468,279 @@ function updateWdItem(item: vscode.StatusBarItem, pct: number, resetAt?: string)
   item.show();
 }
 
+// ── Provider cockpit ──
+
+function updateProviderCockpit(config: StatuslineConfig) {
+  const providers = selectedExternalProviders(config);
+  if (providers.length === 0) {
+    cockpitItem.hide();
+    return;
+  }
+
+  const snapshots = providers
+    .map(provider => readProviderSnapshot(provider))
+    .filter((snapshot): snapshot is ProviderSnapshot => snapshot !== null);
+
+  if (snapshots.length === 0) {
+    cockpitItem.text = '⛁ no provider cache';
+    cockpitItem.tooltip = providerCacheMissTooltip(providers);
+    cockpitItem.command = 'claudeStatusline.refreshProviderCockpit';
+    cockpitItem.backgroundColor = undefined;
+    cockpitItem.color = undefined;
+    cockpitItem.show();
+    return;
+  }
+
+  const summaryParts = snapshots
+    .map(snapshot => {
+      const pct = maxProviderPct(snapshot.record);
+      if (pct === null) { return null; }
+      return `${PROVIDER_SUMMARY_LABELS[snapshot.provider]} ${pct}%`;
+    })
+    .filter((part): part is string => part !== null);
+
+  if (summaryParts.length === 0) {
+    cockpitItem.text = '⛁ no provider usage';
+  } else {
+    const allStale = snapshots.every(snapshot => snapshot.ageMs > PROVIDER_CACHE_STALE_MS);
+    cockpitItem.text = `⛁ ${summaryParts.join(' · ')}${allStale ? ' (stale)' : ''}`;
+  }
+
+  cockpitItem.tooltip = providerCockpitTooltip(snapshots);
+  cockpitItem.command = 'claudeStatusline.refreshProviderCockpit';
+  cockpitItem.backgroundColor = undefined;
+  cockpitItem.color = undefined;
+  cockpitItem.show();
+}
+
+function selectedExternalProviders(config: StatuslineConfig): ExternalProvider[] {
+  const providers = config.providers;
+  if (providers && Array.isArray(providers.selected)) {
+    return providers.selected
+      .filter((provider): provider is ExternalProvider => isExternalProvider(provider));
+  }
+
+  const external = config.external_providers;
+  if (!external || typeof external !== 'object') { return []; }
+  return EXTERNAL_PROVIDER_ORDER.filter(provider => {
+    const value = external[provider];
+    return !!value && typeof value === 'object' && (value as { enabled?: unknown }).enabled === true;
+  });
+}
+
+function isExternalProvider(value: unknown): value is ExternalProvider {
+  return typeof value === 'string' && value !== 'claude' && (EXTERNAL_PROVIDER_ORDER as string[]).includes(value);
+}
+
+function providerCachePath(provider: ExternalProvider): string {
+  return path.join(CLAUDE_DIR, `statusline-usage-${provider}.json`);
+}
+
+function readProviderSnapshot(provider: ExternalProvider): ProviderSnapshot | null {
+  const cachePath = providerCachePath(provider);
+  try {
+    const stat = fs.statSync(cachePath);
+    const cache: ExternalUsageCache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    const record = normalizeProviderRecord(provider, cache);
+    if (!record) { return null; }
+
+    const cachedAt = Number(cache.cached_at);
+    const cachedAtMs = Number.isFinite(cachedAt) && cachedAt > 0 ? cachedAt * 1000 : stat.mtimeMs;
+    const ageMs = Math.max(0, Date.now() - cachedAtMs);
+    return { provider, record, cachedAtMs, ageMs };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProviderRecord(provider: ExternalProvider, cache: ExternalUsageCache): ExternalUsageRecord | null {
+  if (cache.record && typeof cache.record === 'object') {
+    if (cache.record.available === false && providerWindows(cache.record).length === 0) { return null; }
+    return {
+      provider,
+      label: PROVIDER_FALLBACK_LABELS[provider],
+      ...cache.record,
+    };
+  }
+  if (provider === 'glm' && cache.response && typeof cache.response === 'object') {
+    return parseGlmCacheResponse(cache.response as Record<string, unknown>);
+  }
+  return null;
+}
+
+function parseGlmCacheResponse(body: Record<string, unknown>): ExternalUsageRecord | null {
+  const data = body.data && typeof body.data === 'object' ? body.data as Record<string, unknown> : {};
+  const limits = Array.isArray(data.limits) ? data.limits : [];
+  let fiveHour: ExternalUsageWindow | null = null;
+  let weekly: ExternalUsageWindow | null = null;
+
+  for (const item of limits) {
+    if (!item || typeof item !== 'object') { continue; }
+    const row = item as Record<string, unknown>;
+    const reset = millisToEpochSeconds(row.nextResetTime);
+    if (row.type === 'TIME_LIMIT') {
+      fiveHour = usageWindow(row.percentage, reset, '5h');
+    } else if (row.type === 'TOKENS_LIMIT') {
+      weekly = usageWindow(row.percentage, reset, 'tok');
+    }
+  }
+
+  if (!fiveHour && !weekly) { return null; }
+  const metrics = [fiveHour, weekly].filter((metric): metric is ExternalUsageWindow => metric !== null);
+  return {
+    provider: 'glm',
+    label: 'GLM',
+    available: true,
+    display: 'compact',
+    plan: stringValue(data.level) ?? stringValue(body.level),
+    five_hour: fiveHour,
+    weekly,
+    metrics,
+  };
+}
+
+function millisToEpochSeconds(value: unknown): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) { return null; }
+  return Math.round(numeric / 1000);
+}
+
+function usageWindow(usedPct: unknown, resetsAt: number | null, label: string): ExternalUsageWindow | null {
+  const pct = numericPct(usedPct);
+  if (pct === null) { return null; }
+  return { label, used_pct: pct, resets_at: resetsAt };
+}
+
+function maxProviderPct(record: ExternalUsageRecord): number | null {
+  const pcts = providerWindows(record)
+    .map(window => numericPct(window.used_pct))
+    .filter((pct): pct is number => pct !== null);
+  if (pcts.length === 0) { return null; }
+  return Math.round(Math.max(...pcts));
+}
+
+function providerWindows(record: ExternalUsageRecord): ExternalUsageWindow[] {
+  const windows: ExternalUsageWindow[] = [];
+  if (record.five_hour && typeof record.five_hour === 'object') { windows.push(record.five_hour); }
+  if (record.weekly && typeof record.weekly === 'object') { windows.push(record.weekly); }
+  appendMetricWindows(windows, record.metrics);
+  appendMetricWindows(windows, record.metrics_5h);
+  appendMetricWindows(windows, record.metrics_weekly);
+  return windows;
+}
+
+function appendMetricWindows(target: ExternalUsageWindow[], metrics: ExternalUsageWindow[] | null | undefined) {
+  if (!Array.isArray(metrics)) { return; }
+  for (const metric of metrics) {
+    if (metric && typeof metric === 'object') { target.push(metric); }
+  }
+}
+
+function providerCockpitTooltip(snapshots: ProviderSnapshot[]): vscode.MarkdownString {
+  const lines = ['### Multi-CLI cockpit', ''];
+  for (const snapshot of snapshots) {
+    const record = snapshot.record;
+    const label = stringValue(record.label) || PROVIDER_FALLBACK_LABELS[snapshot.provider];
+    const plan = stringValue(record.plan);
+    const staleText = snapshot.ageMs > PROVIDER_CACHE_STALE_MS ? ` ·stale ${fmtAge(snapshot.ageMs)}` : '';
+    lines.push(`#### ${escapeMarkdown(label)}${plan ? ` · ${escapeMarkdown(plan)}` : ''}${staleText}`, '');
+    lines.push(`Cached: ${formatLocalDateTime(snapshot.cachedAtMs)}`, '');
+    appendWindowTooltipLines(lines, '5h', record.five_hour);
+    appendWindowTooltipLines(lines, '7d', record.weekly);
+    appendMetricsTooltipLines(lines, 'Metrics', record.metrics);
+    appendMetricsTooltipLines(lines, '5h models', record.metrics_5h);
+    appendMetricsTooltipLines(lines, '7d models', record.metrics_weekly);
+    lines.push('');
+  }
+  lines.push('Click to re-read provider caches.');
+  return new vscode.MarkdownString(lines.join('\n'), true);
+}
+
+function providerCacheMissTooltip(providers: ExternalProvider[]): vscode.MarkdownString {
+  const labels = providers.map(provider => PROVIDER_FALLBACK_LABELS[provider]).join(', ');
+  return new vscode.MarkdownString(
+    [
+      '### Multi-CLI cockpit',
+      '',
+      `Selected: ${escapeMarkdown(labels)}`,
+      '',
+      'No provider cache files were readable yet.',
+      '',
+      'Click to re-read provider caches.',
+    ].join('\n'),
+    true
+  );
+}
+
+function appendWindowTooltipLines(lines: string[], fallbackLabel: string, window: ExternalUsageWindow | null | undefined) {
+  if (!window || typeof window !== 'object') { return; }
+  const pct = numericPct(window.used_pct);
+  if (pct === null) { return; }
+  const label = stringValue(window.label) || fallbackLabel;
+  const reset = formatResetLocal(window.resets_at);
+  lines.push(`- **${escapeMarkdown(label)}**: ${Math.round(pct)}% ${usageBar(pct)}${reset ? ` · resets ${reset}` : ''}`);
+}
+
+function appendMetricsTooltipLines(lines: string[], title: string, metrics: ExternalUsageWindow[] | null | undefined) {
+  if (!Array.isArray(metrics) || metrics.length === 0) { return; }
+  const entries = metrics
+    .map(metric => {
+      const pct = numericPct(metric.used_pct);
+      if (pct === null) { return null; }
+      const label = stringValue(metric.label) || 'metric';
+      const reset = formatResetLocal(metric.resets_at);
+      return `${escapeMarkdown(label)} ${Math.round(pct)}%${reset ? ` (${reset})` : ''}`;
+    })
+    .filter((entry): entry is string => entry !== null);
+  if (entries.length > 0) {
+    lines.push(`- **${escapeMarkdown(title)}**: ${entries.join(' · ')}`);
+  }
+}
+
+function numericPct(value: unknown): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) { return null; }
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function formatResetLocal(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') { return ''; }
+  let date: Date;
+  if (typeof value === 'number') {
+    date = new Date(value * 1000);
+  } else {
+    const numeric = Number(value);
+    date = Number.isFinite(numeric) ? new Date(numeric * 1000) : new Date(value);
+  }
+  if (Number.isNaN(date.getTime())) { return String(value); }
+  return formatLocalDateTime(date.getTime());
+}
+
+function formatLocalDateTime(epochMs: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(epochMs));
+}
+
+function fmtAge(ageMs: number): string {
+  const mins = Math.max(1, Math.floor(ageMs / 60_000));
+  if (mins < 60) { return `${mins}m`; }
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) { return `${hours}h`; }
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function escapeMarkdown(value: string): string {
+  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, '\\$1');
+}
+
 function batteryBar(pct: number): string {
   const width = 8;
   const filled = Math.round(pct * width / 100);
@@ -410,6 +750,13 @@ function batteryBar(pct: number): string {
 async function fetchUsage(): Promise<UsageData | null> {
   // Use memory cache if fresh (60s)
   if (cachedUsage && Date.now() - usageFetchedAt < 60_000) {
+    return cachedUsage;
+  }
+
+  const contextUsage = loadUsageFromFreshContext();
+  if (contextUsage) {
+    cachedUsage = contextUsage;
+    usageFetchedAt = Date.now();
     return cachedUsage;
   }
 
@@ -448,6 +795,23 @@ function loadUsageFromDisk(): UsageData | null {
     }
   } catch { /* no disk cache */ }
   return null;
+}
+
+function loadUsageFromFreshContext(): UsageData | null {
+  try {
+    const stat = fs.statSync(CONTEXT_PATH);
+    if (Date.now() - stat.mtimeMs > CONTEXT_TTL_MS) { return null; }
+    const data: ContextData = JSON.parse(fs.readFileSync(CONTEXT_PATH, 'utf8'));
+    if (typeof data.five_hour_pct !== 'number' || typeof data.seven_day_pct !== 'number') {
+      return null;
+    }
+    return {
+      five_hour: { utilization: data.five_hour_pct },
+      seven_day: { utilization: data.seven_day_pct },
+    };
+  } catch {
+    return null;
+  }
 }
 
 function saveUsageToDisk(data: UsageData) {
@@ -538,7 +902,7 @@ function updateContextItem(tier: string) {
   try {
     const stat = fs.statSync(CONTEXT_PATH);
     // Ignore if older than 10 minutes (session probably ended)
-    if (Date.now() - stat.mtimeMs > 600_000) {
+    if (Date.now() - stat.mtimeMs > CONTEXT_TTL_MS) {
       ctxItem.hide();
       return;
     }
@@ -671,29 +1035,53 @@ function usageBar(pct: number): string {
 
 // ── Timezone helpers ──
 
-function getPacificOffset(): number {
+function getSourceOffset(tz: string): number {
   const now = new Date();
-  const year = now.getUTCFullYear();
-  // Second Sunday of March
-  const mar1 = new Date(Date.UTC(year, 2, 1));
-  const dstStart = new Date(Date.UTC(year, 2, 1 + ((7 - mar1.getUTCDay()) % 7) + 7, 10));
-  // First Sunday of November
-  const nov1 = new Date(Date.UTC(year, 10, 1));
-  const dstEnd = new Date(Date.UTC(year, 10, 1 + ((7 - nov1.getUTCDay()) % 7), 9));
-  return (now >= dstStart && now < dstEnd) ? -7 : -8;
+  return timeZoneOffsetHours(tz || 'America/Los_Angeles', now)
+    ?? timeZoneOffsetHours('America/Los_Angeles', now)
+    ?? 0;
 }
 
-function getSourceOffset(tz: string): number {
-  if (!tz || tz === 'America/Los_Angeles') { return getPacificOffset(); }
-  if (tz === 'UTC' || tz === 'Etc/UTC') { return 0; }
-  // For other US timezones, apply known offsets (DST-aware via Pacific)
-  const pacificOff = getPacificOffset(); // -7 PDT or -8 PST
-  const tzOffsets: Record<string, number> = {
-    'America/New_York': pacificOff + 3,
-    'America/Chicago': pacificOff + 2,
-    'America/Denver': pacificOff + 1,
-  };
-  return tzOffsets[tz] ?? getPacificOffset();
+function timeZoneOffsetHours(timeZone: string, date: Date): number | null {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = formatter.formatToParts(date);
+    const values: Record<string, number> = {};
+    for (const part of parts) {
+      if (part.type !== 'literal') {
+        values[part.type] = Number(part.value);
+      }
+    }
+    const zonedAsUtc = Date.UTC(
+      values.year,
+      values.month - 1,
+      values.day,
+      values.hour,
+      values.minute,
+      values.second
+    );
+    const utc = Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      date.getUTCHours(),
+      date.getUTCMinutes(),
+      date.getUTCSeconds()
+    );
+    const offset = (zonedAsUtc - utc) / 3_600_000;
+    return Number.isFinite(offset) ? offset : null;
+  } catch {
+    return null;
+  }
 }
 
 function peakHoursToLocal(schedule: Schedule, localOffset: number): { startLocal: number; endLocal: number; peakDayOffset: number } {
