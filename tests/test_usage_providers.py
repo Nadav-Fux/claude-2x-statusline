@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import urllib.error
 from pathlib import Path
 
 from lib import usage_providers as providers
@@ -224,6 +225,132 @@ def _write_copilot_cache(home, age_seconds=0):
     mtime = time.time() - age_seconds
     os.utime(cache, (mtime, mtime))
     return cache
+
+
+def _write_glm_cache(home, age_seconds=0, auth_style=None):
+    claude_dir = home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    response = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
+    payload = {"cached_at": time.time(), "response": response}
+    if auth_style:
+        payload["auth_style"] = auth_style
+    cache = claude_dir / "statusline-usage-glm.json"
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    mtime = time.time() - age_seconds
+    os.utime(cache, (mtime, mtime))
+    return cache
+
+
+class _HttpResponse:
+    status = 200
+
+    def __init__(self, data):
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return json.dumps(self.data).encode("utf-8")
+
+
+def test_glm_fetch_retries_bearer_after_raw_401(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    response = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
+    auth_headers = []
+
+    def fake_urlopen(req, timeout):
+        auth_headers.append(req.get_header("Authorization"))
+        if len(auth_headers) == 1:
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+        return _HttpResponse(response)
+
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+
+    data = providers._fetch_glm_response({"base_url": "https://api.z.ai"}, "KEY-PLACEHOLDER")
+
+    assert data == response
+    assert auth_headers == ["KEY-PLACEHOLDER", "Bearer KEY-PLACEHOLDER"]
+    assert providers._GLM_LAST_AUTH_STYLE == "bearer"
+
+
+def test_refresh_glm_cache_persists_successful_auth_style(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers, "_keychain_glm_key", lambda: "")
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+    response = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
+    auth_headers = []
+
+    def fake_urlopen(req, timeout):
+        auth_headers.append(req.get_header("Authorization"))
+        if len(auth_headers) == 1:
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+        return _HttpResponse(response)
+
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+
+    assert providers.refresh_glm_cache({"api_key": "KEY-PLACEHOLDER"}) is True
+
+    cache = json.loads((tmp_path / ".claude" / "statusline-usage-glm.json").read_text(encoding="utf-8"))
+    assert auth_headers == ["KEY-PLACEHOLDER", "Bearer KEY-PLACEHOLDER"]
+    assert cache["auth_style"] == "bearer"
+    assert cache["response"] == response
+
+
+def test_glm_fetch_uses_remembered_bearer_style_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    _write_glm_cache(tmp_path, auth_style="bearer")
+    response = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
+    auth_headers = []
+
+    def fake_urlopen(req, timeout):
+        auth_headers.append(req.get_header("Authorization"))
+        return _HttpResponse(response)
+
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+
+    data = providers._fetch_glm_response({}, "KEY-PLACEHOLDER")
+
+    assert data == response
+    assert auth_headers == ["Bearer KEY-PLACEHOLDER"]
+
+
+def test_glm_reads_stale_cache_and_spawns_refresh_without_blocking(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    _write_glm_cache(tmp_path, age_seconds=3600, auth_style="raw")
+    popens = []
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("render path must not fetch GLM synchronously")
+
+    class _Popen:
+        def __init__(self, cmd, **kwargs):
+            popens.append((cmd, kwargs))
+
+    monkeypatch.setattr(providers, "_fetch_glm_response", fail_fetch)
+    monkeypatch.setattr(providers.subprocess, "Popen", _Popen)
+
+    record = providers.get_glm_usage({"base_url": "https://api.z.ai", "api_key": "KEY-PLACEHOLDER"})
+
+    assert popens
+    cmd, kwargs = popens[0]
+    assert cmd[:2] == ["python3", "-c"]
+    assert "refresh_" in cmd[2]
+    assert "CLAUDE_STATUSLINE_REFRESH_CONFIG" in kwargs["env"]
+    assert kwargs["env"]["HOME"] == str(tmp_path)
+    assert json.loads(kwargs["env"]["CLAUDE_STATUSLINE_REFRESH_CONFIG"]) == {"base_url": "https://api.z.ai"}
+    assert kwargs["stdout"] is providers.subprocess.DEVNULL
+    assert kwargs["stderr"] is providers.subprocess.DEVNULL
+    assert kwargs["stdin"] is providers.subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+    assert record["provider"] == "glm"
+    assert record["available"] is True
+    assert record["weekly"]["label"] == "tok"
+    assert record["stale_seconds"] >= 300
 
 
 class _Proc:

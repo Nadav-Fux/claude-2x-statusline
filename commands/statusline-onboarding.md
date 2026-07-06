@@ -51,15 +51,20 @@ re-runnable: run it any time to add or remove a provider.
    then re-run `validate_provider` to confirm:
    - **codex** — "הריצו `codex login` בטרמינל אחר, ואז המשיכו." (statusline reads Codex's own session files — no key to paste.)
    - **antigravity** — "הריצו `antigravity-usage login` (או פתחו את אפליקציית Antigravity / ה-IDE), ואז המשיכו."
-   - **glm** — ask for the z.ai key (https://z.ai). **Never print the key.** Pass
-     it through an env var (not inside the `-c`) so it stays out of the python
-     argv, then call `store_glm_key`:
+   - **glm** — ask for the z.ai key (https://z.ai). **Never print the key.**
+     Prefer `store_glm_key`/keychain storage because hook/render processes do
+     not source shell rc files, so `ZAI_API_KEY`/`ZHIPU_API_KEY` are often
+     missing there. Pass the key through a temporary env var (not inside the
+     `-c`) so it stays out of the python argv, then call `store_glm_key`:
      ```bash
      ZAI_KEY='PASTE_THE_KEY' python3 -c "import sys, os; sys.path.insert(0, os.path.expanduser('~/.claude/cc-2x-statusline/lib')); from onboarding import store_glm_key; err=store_glm_key(os.path.expanduser('~/.claude/statusline-config.json'), os.environ.get('ZAI_KEY','')); print(err or 'OK — key validated, saved to the OS keychain, plaintext removed from config')"
      ```
      It validates the key first; on failure it stores **nothing** and prints an
      error (offer retry / skip). On success the key lives only in the keychain /
-     secret store, never in the config or chat.
+     secret store, never in the config or chat. GLM key resolution order:
+     OS keychain / secret store → `ZAI_API_KEY` → `ZHIPU_API_KEY` →
+     `external_providers.glm.api_key` (legacy/plaintext) →
+     `~/.codex/providers.env`.
    - **copilot** — "הריצו `gh auth login`, ואז בחרו מצב: `individual` לרוב המשתמשים, או `org` לבריכת ארגון." במצב `individual` לא צריך לשמור token או cap. במצב `org` בקשו org slug ו-cap חודשי חיובי, ושמרו אותם ב-`external_providers.copilot.org` וב-`external_providers.copilot.cap` יחד עם `mode: "org"` (אפשר גם `pool` להצגה). אם `validate_provider('copilot', cfg)` מחזיר `missing`, חסר `gh` או שחסרים `org`/`cap` למצב org.
    - **droid** — "התקינו/הפעילו את Factory Droid והתחילו session אחד, ואז המשיכו."
 
