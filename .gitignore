@@ -54,3 +54,6 @@ CODE_REVIEW_*.md
 
 # ── Docs generated artifacts ──
 docs/reports/
+
+# Local planning artifacts stay untracked (session deliverables, not product docs)
+docs/plans/
