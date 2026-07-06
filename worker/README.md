@@ -1,5 +1,22 @@
 # statusline-telemetry worker
 
+## Self-hosting / forks
+
+`wrangler.toml` ships with `account_id` and the `TELEMETRY` KV namespace `id`
+set to `REPLACE_ME` placeholders — the values above are the maintainer's own
+Cloudflare account and are not usable by forks. To self-host your own
+telemetry backend:
+
+1. `wrangler kv:namespace create TELEMETRY` and put the returned id into
+   `id` under `[[kv_namespaces]]`.
+2. Put your own Cloudflare account id (from `wrangler whoami`) into
+   `account_id`.
+3. Point your fork's client-side `TELEMETRY_URL` (installer + engines +
+   VS Code extension) at your deployed worker URL.
+
+Telemetry itself is opt-in on the client side by default — see the main
+README's "Telemetry (opt-in)" section.
+
 ## Deploy
 ```bash
 cd worker

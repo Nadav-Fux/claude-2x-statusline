@@ -42,6 +42,7 @@ const DEFAULT_CONFIG = {
   tier: 'standard',
   mode: 'minimal',
   gateway_awareness: true,
+  // fork note: override via schedule_url in config
   schedule_url: 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json',
   schedule_cache_hours: 3,
   external_providers: {
@@ -1117,7 +1118,9 @@ function getTelemetryId() {
 }
 
 function telemetryDisabled(config) {
-  return config.telemetry === false || process.env.STATUSLINE_DISABLE_TELEMETRY === '1';
+  // Telemetry is opt-in: requires telemetry: true in config (default is off).
+  // STATUSLINE_DISABLE_TELEMETRY=1 is a hard override that always wins.
+  return config.telemetry !== true || process.env.STATUSLINE_DISABLE_TELEMETRY === '1';
 }
 
 function maybeHeartbeat(config) {

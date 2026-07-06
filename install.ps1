@@ -4,7 +4,8 @@
 param(
     [string]$Tier,
     [switch]$Update,
-    [switch]$Quiet
+    [switch]$Quiet,
+    [switch]$Telemetry
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,7 +21,12 @@ $ScheduleCache = Join-Path $ClaudeDir 'statusline-schedule.json'
 $TelemetryIdFile = Join-Path $ClaudeDir '.statusline-telemetry-id'
 $DefaultScheduleUrl = 'https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json'
 $DefaultScheduleCacheHours = 3
-$script:TelemetryEnabled = $true
+# Telemetry is opt-in: off by default. -Telemetry switch or a prior opt-in
+# preserved from an existing config (below) can turn it on.
+$script:TelemetryEnabled = $false
+if ($Telemetry) {
+    $script:TelemetryEnabled = $true
+}
 
 function Test-RepoRoot {
     param([string]$Path)
@@ -474,7 +480,12 @@ Sync-SourceTree -SourceDir $sourceDir -TargetDir $RepoDir
 $existingConfig = Read-ExistingConfig
 $scheduleUrl = if ($existingConfig -and $existingConfig.schedule_url) { [string]$existingConfig.schedule_url } else { $DefaultScheduleUrl }
 $scheduleCacheHours = if ($existingConfig -and $existingConfig.schedule_cache_hours) { [int]$existingConfig.schedule_cache_hours } else { $DefaultScheduleCacheHours }
-if ($existingConfig -and $existingConfig.PSObject.Properties.Name -contains 'telemetry' -and $existingConfig.telemetry -eq $false) {
+if (-not $Telemetry -and $existingConfig -and $existingConfig.PSObject.Properties.Name -contains 'telemetry' -and $existingConfig.telemetry -eq $true) {
+    $script:TelemetryEnabled = $true
+}
+
+# Hard kill switch: always wins, even over -Telemetry or a prior opt-in.
+if ($env:STATUSLINE_DISABLE_TELEMETRY -eq '1') {
     $script:TelemetryEnabled = $false
 }
 
@@ -507,8 +518,8 @@ ${configMerge} = @{
     schedule_url = $scheduleUrl
     schedule_cache_hours = $scheduleCacheHours
 }
-if (-not $script:TelemetryEnabled) {
-    $configMerge.telemetry = $false
+if ($script:TelemetryEnabled) {
+    $configMerge.telemetry = $true
 }
 Set-SettingsEntry -TargetPath $ConfigFile -Merge $configMerge
 Write-Host "  Config saved to $ConfigFile" -ForegroundColor Green

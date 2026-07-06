@@ -2,9 +2,11 @@
 
 Covers:
   - TELEMETRY_LEVEL derivation from statusline-config.json
-    (full / minimal / off)
+    (off / minimal / full). Telemetry is opt-in: the default (no config, or
+    no "telemetry": true) is "off" — full/minimal only apply once the user
+    has explicitly opted in.
   - "Diagnostic code: ..." line in output
-  - "Telemetry: off" line when telemetry disabled
+  - "Telemetry: off" line when telemetry disabled (including the default)
   - sanitize_report() logic (home path, Windows path, username, hostname)
     tested both by running doctor.sh and by a pure-Python reimplementation
     of the same regex logic.
@@ -111,28 +113,43 @@ def _sanitize(text: str, home: str, user: str, host: str) -> str:
 class TestTelemetryLevelOutput:
     """The doctor should print a 'Diagnostic code:' or 'Telemetry: off' footer."""
 
-    def test_no_config_defaults_to_full(self, tmp_path):
-        """When statusline-config.json is absent, level defaults to full."""
+    def test_no_config_defaults_to_off(self, tmp_path):
+        """When statusline-config.json is absent, telemetry defaults to off (opt-in)."""
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir(parents=True, exist_ok=True)
         output = _run_doctor(tmp_path)
-        assert "Diagnostic code:" in output, (
-            f"Expected 'Diagnostic code:' line in output.\nGot:\n{output}"
+        assert "Telemetry: off" in output, (
+            f"Expected 'Telemetry: off' line by default.\nGot:\n{output}"
         )
-        assert "telemetry: full" in output, (
-            f"Expected '(telemetry: full)' in output.\nGot:\n{output}"
+        assert "Diagnostic code:" not in output, (
+            f"Should NOT print 'Diagnostic code:' without an explicit opt-in.\nGot:\n{output}"
         )
 
     def test_config_full_diagnostics(self, tmp_path):
-        """Explicit diagnostics=full → 'Diagnostic code: ... (telemetry: full)'."""
+        """diagnostics=full alone must NOT opt in; telemetry=true is required."""
+        # diagnostics alone, with no "telemetry": true, must stay off.
         _write_config(tmp_path / ".claude", {"tier": "full", "diagnostics": "full"})
+        output = _run_doctor(tmp_path)
+        assert "Telemetry: off" in output, (
+            f"Expected 'Telemetry: off' — diagnostics alone must not opt in.\nGot:\n{output}"
+        )
+        assert "Diagnostic code:" not in output
+
+        # telemetry=true with no diagnostics key defaults to full (opt-in default).
+        _write_config(tmp_path / ".claude", {"tier": "full", "telemetry": True})
+        output = _run_doctor(tmp_path)
+        assert "Diagnostic code:" in output
+        assert "telemetry: full" in output
+
+        # telemetry=true + explicit diagnostics=full → 'Diagnostic code: ... (telemetry: full)'.
+        _write_config(tmp_path / ".claude", {"tier": "full", "telemetry": True, "diagnostics": "full"})
         output = _run_doctor(tmp_path)
         assert "Diagnostic code:" in output
         assert "telemetry: full" in output
 
     def test_config_minimal_diagnostics(self, tmp_path):
-        """diagnostics=minimal → 'Diagnostic code: ... (telemetry: minimal)'."""
-        _write_config(tmp_path / ".claude", {"tier": "full", "diagnostics": "minimal"})
+        """telemetry=true + diagnostics=minimal → 'Diagnostic code: ... (telemetry: minimal)'."""
+        _write_config(tmp_path / ".claude", {"tier": "full", "telemetry": True, "diagnostics": "minimal"})
         output = _run_doctor(tmp_path)
         assert "Diagnostic code:" in output, (
             f"Expected 'Diagnostic code:' line.\nGot:\n{output}"
@@ -154,8 +171,7 @@ class TestTelemetryLevelOutput:
 
     def test_diagnostic_code_is_8_hex_chars(self, tmp_path):
         """The diagnostic code must be an 8-character lowercase hex string."""
-        claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir(parents=True, exist_ok=True)
+        _write_config(tmp_path / ".claude", {"tier": "full", "telemetry": True})
         output = _run_doctor(tmp_path)
         match = re.search(r"Diagnostic code:\s+([0-9a-f]+)", output)
         assert match, f"Could not find diagnostic code in output:\n{output}"
@@ -166,7 +182,7 @@ class TestTelemetryLevelOutput:
     def test_diagnostic_code_stable_across_runs(self, tmp_path):
         """Running doctor.sh twice in the same env should produce the same code."""
         claude_dir = tmp_path / ".claude"
-        claude_dir.mkdir(parents=True, exist_ok=True)
+        _write_config(claude_dir, {"tier": "full", "telemetry": True})
         out1 = _run_doctor(tmp_path)
         out2 = _run_doctor(tmp_path)
         m1 = re.search(r"Diagnostic code:\s+([0-9a-f]+)", out1)

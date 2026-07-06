@@ -100,6 +100,7 @@ DEFAULT_CONFIG = {
     "full_mode_rate_limits": True,
     "full_mode_timeline": True,
     "gateway_awareness": True,
+    # fork note: override via schedule_url in config
     "schedule_url": "https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json",
     "schedule_cache_hours": 3,
     "external_providers": {
@@ -2371,12 +2372,19 @@ def _get_telemetry_id():
     except Exception:
         return ""
 
-def _telemetry_disabled(config):
-    return config.get("telemetry") is False or os.getenv("STATUSLINE_DISABLE_TELEMETRY") == "1"
+def _telemetry_enabled(config):
+    """Telemetry is opt-in: requires telemetry: true in config.
+
+    STATUSLINE_DISABLE_TELEMETRY=1 is a hard override and always wins, even
+    if the config explicitly opts in.
+    """
+    if os.getenv("STATUSLINE_DISABLE_TELEMETRY") == "1":
+        return False
+    return config.get("telemetry") is True
 
 def maybe_heartbeat(config):
-    """Send a daily heartbeat. Fire-and-forget, never blocks."""
-    if _telemetry_disabled(config):
+    """Send a daily heartbeat. Fire-and-forget, never blocks. Opt-in only."""
+    if not _telemetry_enabled(config):
         return
     try:
         uid = _get_telemetry_id()

@@ -258,7 +258,17 @@ export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # מינימום בין הו�
 
 ### Telemetry &mdash; שקיפות מלאה
 
-**מה נשלח, מתי, ולמה:**
+#### Telemetry (אופט-אין)
+
+**כבוי כברירת מחדל.** שום ping לא נשלח אלא אם בחרתם להפעיל telemetry באופן מפורש.
+
+- **מה נשלח:** מזהה אנונימי אקראי למכונה, שם אירוע (`install`/`heartbeat`/`doctor`), ה-tier שלכם, ומערכת ההפעלה. בהרצות doctor &mdash; גם ספירות pass/warn/fail מצטברות. לפרטים המלאים ראו הטבלה וה-payload למטה.
+- **לאן:** ה-Cloudflare Worker של המתחזק, בכתובת `statusline-telemetry.nadavf.workers.dev`.
+- **ברירת מחדל:** כבוי. המתקין שואל שאלת כן/לא (ברירת מחדל: לא); התקנות לא-אינטראקטיביות (`--quiet`) נשארות כבויות אלא אם מוסיפים `--telemetry`.
+- **הפעלה:** עונים "כן" בהתקנה, מוסיפים `--telemetry` ל-`install.sh`, או מגדירים `"telemetry": true` ב-`~/.claude/statusline-config.json`.
+- **כיבוי:** משאירים את המפתח בחוץ (ברירת המחדל), או `"telemetry": false` במפורש. `STATUSLINE_DISABLE_TELEMETRY=1` הוא מתג-כיבוי קשיח שגובר על הכל, כולל `"telemetry": true`.
+
+**מה נשלח, מתי, ולמה (כשה-telemetry מופעל):**
 
 | אירוע | מתי | TTL |
 |-------|-----|-----|
@@ -292,15 +302,15 @@ export STATUSLINE_NARRATOR_THROTTLE_MIN=5          # מינימום בין הו�
 
 ### רמות פרטיות
 
-**שלוש רמות לבחירה:**
+**שלוש רמות, אופט-אין (דורש `"telemetry": true`):**
 
 | רמה | מה נשלח | מתי |
 |-----|---------|-----|
-| `full` (ברירת מחדל) | סיכום + דוח מלא מסונטז כשבדיקה נכשלת | אוטומטי |
-| `minimal` | סיכום בלבד (כמו `--report` ישן) | אוטומטי |
-| `off` | כלום | &mdash; |
+| `off` (ברירת מחדל) | כלום | &mdash; |
+| `full` (עם `telemetry: true`) | סיכום + דוח מלא מסונטז כשבדיקה נכשלת | אוטומטי |
+| `minimal` (עם `telemetry: true` + `diagnostics: "minimal"`) | סיכום בלבד (כמו `--report` ישן) | אוטומטי |
 
-**קוד אבחון:** בכל הרצת doctor (אלא אם `telemetry: false`) מוצג בתחתית:
+**קוד אבחון:** בכל הרצת doctor שבה telemetry מופעל (`"telemetry": true`) מוצג בתחתית:
 
 <div dir="ltr" align="left">
 
@@ -329,13 +339,16 @@ Telemetry: off — no diagnostics sent.
 ```json
 // ~/.claude/statusline-config.json
 
-// רמה מלאה (ברירת מחדל):
+// כבוי (ברירת מחדל — אין צורך במפתח כלל):
 { "tier": "full" }
 
-// רמה מינימלית (סיכום בלבד):
-{ "tier": "full", "diagnostics": "minimal" }
+// הפעלה, רמה מלאה:
+{ "tier": "full", "telemetry": true }
 
-// ביטול מוחלט:
+// הפעלה, רמה מינימלית (סיכום בלבד):
+{ "tier": "full", "telemetry": true, "diagnostics": "minimal" }
+
+// ביטול מפורש:
 { "tier": "full", "telemetry": false }
 ```
 
@@ -355,7 +368,7 @@ Telemetry: off — no diagnostics sent.
 
 </div>
 
-אחרי שמגדירים `"telemetry": false` &mdash; לא נשלח שום ping, לעולם.
+בברירת המחדל (בלי המפתח `telemetry` כלל) &mdash; לא נשלח שום ping. אחרי שמגדירים `"telemetry": false` במפורש, או מגדירים את משתנה הסביבה `STATUSLINE_DISABLE_TELEMETRY=1` &mdash; גם לא, לעולם.
 
 ---
 
@@ -780,7 +793,17 @@ Run `/narrate` to invoke the narrator manually, bypassing the throttle.
 
 This plugin sends a few kinds of pings. This section documents exactly what is sent, when, and how to stop it.
 
-### What is sent
+### Telemetry (opt-in)
+
+**Off by default.** No ping is sent unless you explicitly opt in.
+
+- **What:** an anonymous, randomly-generated per-machine id, an event name (`install`/`heartbeat`/`doctor`), your statusline tier, and your OS platform. Doctor runs additionally send aggregate pass/warn/fail counts. See the full payloads and tables below for exact detail.
+- **Where:** the maintainer's Cloudflare Worker, at `statusline-telemetry.nadavf.workers.dev`.
+- **Default:** OFF. The installer asks a yes/no question (default **No**); non-interactive installs (`--quiet`) stay off unless you also pass `--telemetry`.
+- **Enable:** answer "yes" at install, pass `--telemetry` to `install.sh` (or `-Telemetry` to `install.ps1`), or set `"telemetry": true` in `~/.claude/statusline-config.json`.
+- **Disable:** leave the key out (the default), or set it explicitly to `"telemetry": false`. `STATUSLINE_DISABLE_TELEMETRY=1` is a hard kill switch that always wins, even over a `"telemetry": true` config.
+
+### What is sent (once enabled)
 
 #### Install ping
 
@@ -805,7 +828,7 @@ Same payload with `"event": "heartbeat"`, once per calendar day per machine. TTL
 
 #### Doctor summary ping
 
-Sent every time `doctor.sh` runs (unless telemetry is off). Aggregate counts only — no file contents, no paths.
+Sent every time `doctor.sh` runs, but only when telemetry is explicitly enabled (`"telemetry": true`). Aggregate counts only — no file contents, no paths.
 
 ```json
 {
@@ -822,7 +845,7 @@ Sent every time `doctor.sh` runs (unless telemetry is off). Aggregate counts onl
 
 #### Doctor full report (on failure, full level only)
 
-When any check fails **and** the diagnostics level is `full` (the default), a sanitized full report is uploaded to `/doctor/submit`. This lets the maintainer pull the report by diagnostic code when a user reports a problem — no manual copy-paste or back-and-forth needed.
+When any check fails **and** the diagnostics level is `full` (the default once you've opted in), a sanitized full report is uploaded to `/doctor/submit`. This lets the maintainer pull the report by diagnostic code when a user reports a problem — no manual copy-paste or back-and-forth needed.
 
 **What sanitization removes before sending:**
 - Home directory paths (`/home/alice/...` → `~/...`)
@@ -836,30 +859,34 @@ TTL: 30 days. After 30 days the report is automatically deleted from the server.
 
 ### Privacy levels
 
-Three levels, configured in `~/.claude/statusline-config.json`:
+Three levels, configured in `~/.claude/statusline-config.json`. Telemetry is
+opt-in, so `full`/`minimal` only take effect once `"telemetry": true` is set:
 
 | Level | What is sent | When |
 |:------|:------------|:-----|
-| `full` (default) | Summary ping always; full sanitized report when any check fails | Automatic |
-| `minimal` | Summary ping only (counts + failed check IDs) | Automatic |
-| `off` | Nothing | Never |
+| `off` (default) | Nothing | Never |
+| `full` (with `telemetry: true`) | Summary ping always; full sanitized report when any check fails | Automatic |
+| `minimal` (with `telemetry: true` + `diagnostics: "minimal"`) | Summary ping only (counts + failed check IDs) | Automatic |
 
 ```json
 // ~/.claude/statusline-config.json
 
-// Full level (default — no key needed):
+// Off (default — no key needed):
 { "tier": "full" }
 
-// Minimal — summary only, no full report:
-{ "tier": "full", "diagnostics": "minimal" }
+// Opt in, full level:
+{ "tier": "full", "telemetry": true }
 
-// Off — no telemetry at all:
+// Opt in, minimal — summary only, no full report:
+{ "tier": "full", "telemetry": true, "diagnostics": "minimal" }
+
+// Explicit off:
 { "tier": "full", "telemetry": false }
 ```
 
 ### Diagnostic code
 
-Every doctor run (when telemetry is not off) prints a stable per-machine code at the end:
+Every doctor run where telemetry is enabled (`"telemetry": true`) prints a stable per-machine code at the end:
 
 ```
 Diagnostic code: abc12345 (telemetry: full — see README to change privacy)
@@ -897,7 +924,7 @@ https://statusline-telemetry.nadavf.workers.dev/stats
 
 ### How to opt out
 
-Set `"telemetry": false` in your config file. No ping will ever be sent again from that machine.
+Telemetry is off by default — you only need this if you previously opted in. Set `"telemetry": false` in your config file (or just remove the key) and no ping will ever be sent again from that machine.
 
 ```json
 // ~/.claude/statusline-config.json

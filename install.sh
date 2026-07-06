@@ -6,7 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="$HOME/.claude/cc-2x-statusline"
 SETTINGS="$HOME/.claude/settings.json"
 CONFIG="$HOME/.claude/statusline-config.json"
-SCHEDULE_URL_DEFAULT="https://raw.githubusercontent.com/Nadav-Fux/claude-2x-statusline/main/schedule.json"
+# Fork-friendly: every raw.githubusercontent/github.com URL in this script is
+# derived from this one slug. Forks only need to change this line.
+REPO_SLUG="Nadav-Fux/claude-2x-statusline"
+REPO_OWNER="${REPO_SLUG%%/*}"
+SCHEDULE_URL_DEFAULT="https://raw.githubusercontent.com/$REPO_SLUG/main/schedule.json"
 SCHEDULE_CACHE_HOURS_DEFAULT="3"
 TELEMETRY_URL="https://statusline-telemetry.nadavf.workers.dev/ping"
 TELEMETRY_ID_FILE="$HOME/.claude/.statusline-telemetry-id"
@@ -32,12 +36,15 @@ DOCTOR_FAILED_IDS=""
 DOCTOR_AVAILABLE=0
 SCHEDULE_URL="$SCHEDULE_URL_DEFAULT"
 SCHEDULE_CACHE_HOURS="$SCHEDULE_CACHE_HOURS_DEFAULT"
-TELEMETRY_ENABLED=1
+# Telemetry is opt-in: off unless the user says yes at the prompt, passes
+# --telemetry, or an existing config already has "telemetry": true.
+TELEMETRY_ENABLED=0
+TELEMETRY_CLI_SET=0
 
 echo ""
 echo "  ╭──────────────────────────────────────────╮"
 echo "  │     claude-2x-statusline installer       │"
-echo "  │     github.com/Nadav-Fux                 │"
+printf '  │     github.com/%-26s│\n' "$REPO_OWNER"
 echo "  ╰──────────────────────────────────────────╯"
 echo ""
 
@@ -54,6 +61,11 @@ parse_args() {
                 ;;
             --quiet)
                 QUIET=1
+                shift
+                ;;
+            --telemetry)
+                TELEMETRY_CLI_SET=1
+                TELEMETRY_ENABLED=1
                 shift
                 ;;
             *)
@@ -99,8 +111,10 @@ load_existing_config() {
     if [ -n "$config_cache" ]; then
         SCHEDULE_CACHE_HOURS="$config_cache"
     fi
-    if [ "$config_telemetry" = "false" ]; then
-        TELEMETRY_ENABLED=0
+    # Preserve a prior opt-in across updates; default (absent/false/anything
+    # else) stays off. Never overrides an explicit --telemetry CLI flag.
+    if [ "$TELEMETRY_CLI_SET" != "1" ] && [ "$config_telemetry" = "true" ]; then
+        TELEMETRY_ENABLED=1
     fi
 
     if [ -n "$config_tier" ]; then
@@ -137,6 +151,22 @@ prompt_for_tier() {
     select_tier "$tier_choice" || select_tier "full"
 }
 
+prompt_for_telemetry() {
+    # A --telemetry flag or a hard opt-out env var already decided this.
+    [ "$TELEMETRY_CLI_SET" = "1" ] && return 0
+    if [ "$QUIET" = "1" ]; then
+        TELEMETRY_ENABLED=0
+        return 0
+    fi
+
+    echo ""
+    read -rp "  Send anonymous usage telemetry to help improve this tool? [y/N]: " telemetry_choice
+    case "$telemetry_choice" in
+        y|Y|yes|YES) TELEMETRY_ENABLED=1 ;;
+        *) TELEMETRY_ENABLED=0 ;;
+    esac
+}
+
 configure_tier() {
     if [ -n "$TIER_CLI" ]; then
         if ! select_tier "$TIER_CLI"; then
@@ -151,6 +181,7 @@ configure_tier() {
     fi
 
     prompt_for_tier
+    prompt_for_telemetry
 }
 
 detect_migration_update() {
@@ -234,8 +265,8 @@ write_config() {
     local config_merge config_result escaped_schedule telemetry_fragment
     escaped_schedule=$(json_escape "$SCHEDULE_URL")
     telemetry_fragment=""
-    if [ "$TELEMETRY_ENABLED" = "0" ]; then
-        telemetry_fragment=',"telemetry":false'
+    if [ "$TELEMETRY_ENABLED" = "1" ]; then
+        telemetry_fragment=',"telemetry":true'
     fi
     config_merge=$(printf '{"tier":"%s","mode":"%s","schedule_url":"%s","schedule_cache_hours":%s%s}' \
         "$TIER" "$MODE" "$escaped_schedule" "$SCHEDULE_CACHE_HOURS" "$telemetry_fragment")
@@ -623,6 +654,14 @@ print_done() {
 }
 
 parse_args "$@"
+
+# Hard kill switch: always wins, even over --telemetry or a prior opt-in
+# preserved from an existing config.
+if [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" = "1" ]; then
+    TELEMETRY_ENABLED=0
+    TELEMETRY_CLI_SET=1
+fi
+
 detect_migration_update
 same_dir_detection
 configure_tier
