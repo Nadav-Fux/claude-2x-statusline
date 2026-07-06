@@ -2,7 +2,7 @@
   "name": "claude-statusline",
   "displayName": "Claude Code Statusline",
   "description": "Peak hours, rate limits with battery bars, context window, and effort level for Claude Code — works in VS Code, Cursor, Windsurf, and Antigravity",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "nvision-digital",
   "engines": {
     "vscode": "^1.85.0"
@@ -37,6 +37,12 @@
     "url": "https://github.com/Nadav-Fux/claude-2x-statusline"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "claudeStatusline.refreshProviderCockpit",
+        "title": "Claude Statusline: Refresh Provider Cockpit"
+      }
+    ],
     "configuration": {
       "title": "Claude Code Statusline",
       "properties": {
