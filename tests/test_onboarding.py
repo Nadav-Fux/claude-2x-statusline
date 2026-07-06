@@ -483,6 +483,16 @@ def test_validate_copilot_ok_when_cache_fresh(tmp_path, monkeypatch):
     assert onboarding.validate_provider("copilot", {}) == "ok"
 
 
+def test_validate_copilot_missing_when_org_config_incomplete_even_with_cache(tmp_path, monkeypatch):
+    (tmp_path / ".claude").mkdir(parents=True)
+    (tmp_path / ".claude" / "statusline-usage-copilot.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    config = {"external_providers": {"copilot": {"mode": "org", "org": "acme"}}}
+
+    assert onboarding.validate_provider("copilot", config) == "missing"
+
+
 def test_validate_copilot_missing_without_gh(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(onboarding.shutil, "which", lambda name: None)

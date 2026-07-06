@@ -389,8 +389,29 @@ def _validate_antigravity(up, config):
         return "unknown"
 
 
-def _validate_copilot():
+def _copilot_config_from(config):
+    if not isinstance(config, dict):
+        return {}
+    external = config.get("external_providers")
+    if isinstance(external, dict) and isinstance(external.get("copilot"), dict):
+        return external.get("copilot") or {}
+    return config
+
+
+def _positive_number(value):
     try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return number == number and number not in (float("inf"), float("-inf")) and number > 0
+
+
+def _validate_copilot(config):
+    try:
+        copilot = _copilot_config_from(config)
+        mode = str(copilot.get("mode") or "individual").strip().lower()
+        if mode == "org" and (not str(copilot.get("org") or "").strip() or not _positive_number(copilot.get("cap"))):
+            return "missing"
         cache = Path.home() / ".claude" / "statusline-usage-copilot.json"
         try:
             if time.time() - cache.stat().st_mtime < _COPILOT_CACHE_FRESH_TTL:
@@ -433,7 +454,7 @@ def validate_provider(provider, config):
         if provider == "antigravity":
             return _validate_antigravity(up, config)
         if provider == "copilot":
-            return _validate_copilot()
+            return _validate_copilot(config)
         if provider == "droid":
             return _validate_droid(up)
     except Exception:
