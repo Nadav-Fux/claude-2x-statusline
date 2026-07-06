@@ -58,13 +58,13 @@ PY
 }
 
 # ── Telemetry heartbeat (daily, fire-and-forget) ──
+# Opt-in: only fires when the config explicitly has "telemetry": true.
+# STATUSLINE_DISABLE_TELEMETRY=1 is a hard override that always wins.
 HEARTBEAT_FILE="$HOME/.claude/.statusline-heartbeat"
-_telemetry_opted_out=0
-if [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" = "1" ]; then
-    _telemetry_opted_out=1
-elif [ -f "$HOME/.claude/statusline-config.json" ] && \
-    grep -q '"telemetry"[[:space:]]*:[[:space:]]*false' "$HOME/.claude/statusline-config.json" 2>/dev/null; then
-    _telemetry_opted_out=1
+_telemetry_opted_out=1
+if [ "${STATUSLINE_DISABLE_TELEMETRY:-0}" != "1" ] && [ -f "$HOME/.claude/statusline-config.json" ] && \
+    grep -q '"telemetry"[[:space:]]*:[[:space:]]*true' "$HOME/.claude/statusline-config.json" 2>/dev/null; then
+    _telemetry_opted_out=0
 fi
 _today=$(date -u +%Y-%m-%d)
 _do_ping=0

@@ -2,8 +2,12 @@
 set -e
 
 INSTALL_DIR="$HOME/.claude/cc-2x-statusline"
-REPO_URL="https://github.com/Nadav-Fux/claude-2x-statusline.git"
-ZIP_URL="https://github.com/Nadav-Fux/claude-2x-statusline/archive/refs/heads/main.zip"
+# Fork-friendly: every github.com URL in this script is derived from this one
+# slug. Forks only need to change this line.
+REPO_SLUG="Nadav-Fux/claude-2x-statusline"
+REPO_NAME="${REPO_SLUG#*/}"
+REPO_URL="https://github.com/$REPO_SLUG.git"
+ZIP_URL="https://github.com/$REPO_SLUG/archive/refs/heads/main.zip"
 TEMP_DIR=""
 
 cleanup() {
@@ -28,8 +32,8 @@ TEMP_DIR=$(mktemp -d)
 
 if command -v git >/dev/null 2>&1; then
     echo "Bootstrapping latest source via git clone..."
-    git clone --depth 1 "$REPO_URL" "$TEMP_DIR/claude-2x-statusline"
-    exec bash "$TEMP_DIR/claude-2x-statusline/install.sh" --update --quiet "$@"
+    git clone --depth 1 "$REPO_URL" "$TEMP_DIR/$REPO_NAME"
+    exec bash "$TEMP_DIR/$REPO_NAME/install.sh" --update --quiet "$@"
 fi
 
 if command -v curl >/dev/null 2>&1; then
@@ -44,7 +48,7 @@ else
 fi
 
 unzip -q "$TEMP_DIR/repo.zip" -d "$TEMP_DIR"
-SOURCE_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name 'claude-2x-statusline-*' | head -n 1)
+SOURCE_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "${REPO_NAME}-*" | head -n 1)
 
 if [ -z "$SOURCE_DIR" ]; then
     echo "Could not unpack update source."

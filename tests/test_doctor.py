@@ -102,9 +102,23 @@ def _run_doctor_report(
     )
 
 
+def _opt_in_to_telemetry(home: Path) -> None:
+    """Telemetry is opt-in: write "telemetry": true so doctor.sh sends pings."""
+    claude_dir = home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "statusline-config.json").write_text('{"telemetry": true}', encoding="utf-8")
+
+
 def test_doctor_report_uses_curl_when_enabled(bash_exe: str, doctor_env) -> None:
     home, bin_dir, marker = doctor_env
 
+    # Telemetry is opt-in: with no config at all, no ping is sent by default.
+    result = _run_doctor_report(bash_exe, home, bin_dir, marker)
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert not _wait_for_marker(marker, timeout=0.2), result.stdout
+
+    # Once the user opts in ("telemetry": true), doctor.sh --report sends the ping.
+    _opt_in_to_telemetry(home)
     result = _run_doctor_report(bash_exe, home, bin_dir, marker)
 
     assert result.returncode == 0, result.stderr or result.stdout
@@ -118,6 +132,8 @@ def test_doctor_report_uses_curl_when_enabled(bash_exe: str, doctor_env) -> None
 
 def test_doctor_report_respects_env_opt_out(bash_exe: str, doctor_env) -> None:
     home, bin_dir, marker = doctor_env
+    # Opt in via config, then verify the hard kill switch still wins.
+    _opt_in_to_telemetry(home)
 
     result = _run_doctor_report(
         bash_exe,

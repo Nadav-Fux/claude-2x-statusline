@@ -1,9 +1,13 @@
 """Tests for heartbeat telemetry logic in engines/python-engine.py.
 
-These tests verify:
-    1. The first heartbeat creates a local anonymous telemetry id and sends one ping.
+Telemetry is opt-in: maybe_heartbeat() only sends a ping when the config has
+"telemetry": true. These tests verify:
+    1. With telemetry opted in, the first heartbeat creates a local anonymous
+       telemetry id and sends one ping.
     2. Existing telemetry ids are reused across heartbeats.
-    3. When telemetry is disabled, no ping is sent and no files are created.
+    3. Without an explicit opt-in (default), no ping is sent and no files are
+       created.
+    4. STATUSLINE_DISABLE_TELEMETRY=1 is a hard override even when opted in.
 """
 import importlib.util
 import json
@@ -84,7 +88,7 @@ def test_first_heartbeat_creates_telemetry_id_and_sends_once(tmp_telemetry_paths
 
     mock_popen = MagicMock()
     with patch("subprocess.Popen", mock_popen):
-        engine.maybe_heartbeat({})
+        engine.maybe_heartbeat({"telemetry": True})
 
     assert mock_popen.call_count == 1, (
         f"Expected 1 heartbeat ping, got {mock_popen.call_count}"
@@ -111,7 +115,7 @@ def test_existing_telemetry_id_is_reused(tmp_telemetry_paths):
 
     mock_popen = MagicMock()
     with patch("subprocess.Popen", mock_popen):
-        engine.maybe_heartbeat({})
+        engine.maybe_heartbeat({"telemetry": True})
 
     assert mock_popen.call_count == 1, (
         f"Expected exactly 1 heartbeat ping, got {mock_popen.call_count}"
@@ -123,7 +127,8 @@ def test_existing_telemetry_id_is_reused(tmp_telemetry_paths):
 
 
 def test_telemetry_disabled_skips_both(tmp_telemetry_paths):
-    """With telemetry=False, no Popen calls and no telemetry files created."""
+    """Telemetry is opt-in: with no config (default) or telemetry=False, no
+    Popen calls and no telemetry files are created."""
     _require_engine()
     _, fake_heartbeat, fake_id = tmp_telemetry_paths
 
@@ -131,6 +136,15 @@ def test_telemetry_disabled_skips_both(tmp_telemetry_paths):
     assert not fake_heartbeat.exists(), "precondition: heartbeat absent"
 
     mock_popen = MagicMock()
+    with patch("subprocess.Popen", mock_popen):
+        engine.maybe_heartbeat({})  # default: no "telemetry": true key at all
+
+    assert mock_popen.call_count == 0, (
+        f"Expected 0 Popen calls by default (opt-in required), got {mock_popen.call_count}"
+    )
+    assert not fake_id.exists(), "TELEMETRY_ID_PATH must NOT be created by default"
+    assert not fake_heartbeat.exists(), "HEARTBEAT_PATH must NOT be created by default"
+
     with patch("subprocess.Popen", mock_popen):
         engine.maybe_heartbeat({"telemetry": False})
 
@@ -142,7 +156,8 @@ def test_telemetry_disabled_skips_both(tmp_telemetry_paths):
 
 
 def test_telemetry_env_var_skips_both(tmp_telemetry_paths, monkeypatch):
-    """With STATUSLINE_DISABLE_TELEMETRY=1, no ping is sent and no files are created."""
+    """STATUSLINE_DISABLE_TELEMETRY=1 is a hard override: no ping is sent and
+    no files are created, even when the config opts in."""
     _require_engine()
     _, fake_heartbeat, fake_id = tmp_telemetry_paths
 
@@ -153,7 +168,7 @@ def test_telemetry_env_var_skips_both(tmp_telemetry_paths, monkeypatch):
 
     mock_popen = MagicMock()
     with patch("subprocess.Popen", mock_popen):
-        engine.maybe_heartbeat({})
+        engine.maybe_heartbeat({"telemetry": True})
 
     assert mock_popen.call_count == 0, (
         f"Expected 0 Popen calls when telemetry env opt-out is set, got {mock_popen.call_count}"

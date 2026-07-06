@@ -11,6 +11,7 @@
 #   doctor.sh --json       diagnose + emit JSON (for tooling)
 #   doctor.sh --fix        diagnose + prompt to fix each fixable issue
 #   doctor.sh --report     diagnose + send anonymous ping to telemetry
+#                          (opt-in; requires "telemetry": true in config)
 #   doctor.sh --explain             list all segments with one-line purposes
 #   doctor.sh --explain <segment>   detailed explanation of a single segment
 #
@@ -521,7 +522,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --json)   MODE="json" ;;
         --fix)    MODE="fix" ;;
-        --report) : ;; # No-op: telemetry is now always-on unless opted out via config
+        --report) : ;; # No-op: telemetry is opt-in via config ("telemetry": true); flag kept for backward compatibility
         --explain)
             # Colors must be set before do_explain; initialize them now.
             if [ ! -t 1 ]; then
@@ -550,14 +551,14 @@ CONFIG="$CLAUDE_DIR/statusline-config.json"
 
 # ── 3-tier privacy / telemetry level ────────────────────────────────────
 # Reads ~/.claude/statusline-config.json (same file used by engines).
-# Decision tree:
-#   telemetry == false           → TELEMETRY_LEVEL=off
-#   diagnostics == "minimal"     → TELEMETRY_LEVEL=minimal
-#   diagnostics == "full" or missing → TELEMETRY_LEVEL=full
+# Opt-in: telemetry is OFF unless explicitly enabled. Decision tree:
+#   telemetry != true                        → TELEMETRY_LEVEL=off (default)
+#   telemetry == true, diagnostics=="minimal" → TELEMETRY_LEVEL=minimal
+#   telemetry == true, diagnostics=="full"/missing → TELEMETRY_LEVEL=full
 _read_telemetry_level() {
     local cfg="$CONFIG"
     if [ ! -f "$cfg" ]; then
-        echo "full"; return
+        echo "off"; return
     fi
     # Try python for reliable JSON parsing.
     # Probe candidates in order; skip WindowsApps stubs (exit 49 / "Microsoft Store").
@@ -580,15 +581,15 @@ import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
         d = json.load(fh)
-    tele = d.get("telemetry", True)
-    if tele is False or str(tele).lower() == "false":
+    tele = d.get("telemetry", False)
+    if tele is not True:
         print("off")
     elif d.get("diagnostics") == "minimal":
         print("minimal")
     else:
         print("full")
 except Exception:
-    print("full")
+    print("off")
 PY
 )
         if [ -n "$_result" ]; then
@@ -596,12 +597,14 @@ PY
         fi
     fi
     # grep fallback (no working python available)
-    if grep -q '"telemetry"[[:space:]]*:[[:space:]]*false' "$cfg" 2>/dev/null; then
-        echo "off"
-    elif grep -q '"diagnostics"[[:space:]]*:[[:space:]]*"minimal"' "$cfg" 2>/dev/null; then
-        echo "minimal"
+    if grep -q '"telemetry"[[:space:]]*:[[:space:]]*true' "$cfg" 2>/dev/null; then
+        if grep -q '"diagnostics"[[:space:]]*:[[:space:]]*"minimal"' "$cfg" 2>/dev/null; then
+            echo "minimal"
+        else
+            echo "full"
+        fi
     else
-        echo "full"
+        echo "off"
     fi
 }
 TELEMETRY_LEVEL=$(_read_telemetry_level)

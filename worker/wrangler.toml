@@ -1,8 +1,11 @@
 name = "statusline-telemetry"
 main = "worker.js"
 compatibility_date = "2024-01-01"
-account_id = "5bf57396a7de9b1331d2ed6093af01c9"
+# Self-hosters: replace with your own Cloudflare account id (`wrangler whoami`).
+account_id = "REPLACE_ME"
 
 [[kv_namespaces]]
 binding = "TELEMETRY"
-id = "5a5df3f52f9946ec981c173d2c6d520d"
+# Self-hosters: replace with your own KV namespace id
+# (`wrangler kv:namespace create TELEMETRY`).
+id = "REPLACE_ME"

@@ -206,7 +206,8 @@ export function deactivate() {
 function maybeHeartbeat() {
   try {
     const config = loadConfig();
-    if ((config as any).telemetry === false) { return; }
+    // Telemetry is opt-in: requires telemetry: true in config (default is off).
+    if ((config as any).telemetry !== true) { return; }
     const today = new Date().toISOString().slice(0, 10);
     if (lastHeartbeatDate === today) { return; }
     try {
