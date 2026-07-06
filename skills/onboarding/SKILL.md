@@ -48,13 +48,16 @@ Present the trio first, then the extras. Never offer to remove Claude.
 
    - **codex** — *Codex CLI · דרוש login*: "הריצו `codex login` בטרמינל אחר, ואז המשיכו."
    - **antigravity** — *Antigravity · דרוש login*: "הריצו `antigravity-usage login` (או פתחו את אפליקציית Antigravity / ה-IDE), ואז המשיכו."
-   - **glm** — *z.ai key*: בקשו מהמשתמש את מפתח ה-z.ai (get it at https://z.ai). **אל תדפיסו את המפתח.** העבירו אותו דרך משתנה סביבה (לא בתוך ה-`-c`) והריצו:
+   - **glm** — *z.ai key*: בקשו מהמשתמש את מפתח ה-z.ai (get it at https://z.ai). **אל תדפיסו את המפתח.** שמירה דרך `store_glm_key` היא ברירת המחדל המומלצת כי hook/render processes בדרך כלל לא טוענים shell rc files, ולכן `ZAI_API_KEY`/`ZHIPU_API_KEY` עלולים לא להופיע בזמן רינדור. העבירו את המפתח דרך משתנה סביבה זמני (לא בתוך ה-`-c`) והריצו:
      ```bash
      ZAI_KEY='PASTE_THE_KEY' python3 -c "import sys, os; sys.path.insert(0, os.path.expanduser('~/.claude/cc-2x-statusline/lib')); from onboarding import store_glm_key; err=store_glm_key(os.path.expanduser('~/.claude/statusline-config.json'), os.environ.get('ZAI_KEY','')); print(err or 'OK — key validated, saved to the OS keychain, plaintext removed from config')"
      ```
      `store_glm_key` validates the key first; on failure it prints an error and
      stores **nothing** (retry or skip). On success the key lives only in the
-     keychain/secret store — never in the config file or chat.
+     keychain/secret store — never in the config file or chat. Resolution order:
+     OS keychain / secret store → `ZAI_API_KEY` → `ZHIPU_API_KEY` →
+     `external_providers.glm.api_key` (legacy/plaintext) →
+     `~/.codex/providers.env`.
    - **copilot** — *GitHub Copilot*: "הריצו `gh auth login`, ואז בחרו מצב: `individual` לרוב המשתמשים, או `org` לבריכת ארגון." במצב `individual` לא צריך לשמור token או cap; במצב `org` בקשו org slug ו-cap חודשי חיובי, ושמרו אותם ב-`external_providers.copilot.org` וב-`external_providers.copilot.cap` יחד עם `mode: "org"` (אפשר גם `pool` להצגה). אם `validate_provider('copilot', cfg)` מחזיר `missing`, חסר `gh` או שחסרים `org`/`cap` למצב org.
    - **droid** — *Factory Droid*: "התקינו/הפעילו את Factory Droid והתחילו session אחד, ואז המשיכו."
 

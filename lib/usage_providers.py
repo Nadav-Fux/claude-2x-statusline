@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,15 @@ EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
 COPILOT_CACHE_TTL = 300
 COPILOT_DEFAULT_SKUS = ("Copilot AI Credits", "Copilot Premium Requests")
+GLM_AUTH_RAW = "raw"
+GLM_AUTH_BEARER = "bearer"
+_GLM_LAST_AUTH_STYLE = None
+
+
+class _GlmBodyParseError(Exception):
+    def __init__(self, status):
+        super().__init__("GLM response body was not JSON")
+        self.status = status
 
 
 def unavailable(provider):
@@ -636,7 +646,7 @@ def parse_glm_quota_response(data, stale_seconds=None):
     return record
 
 
-def _read_provider_env_key():
+def _read_provider_env_key_with_source():
     env_path = Path.home() / ".codex" / "providers.env"
     try:
         for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -645,10 +655,14 @@ def _read_provider_env_key():
                 continue
             value = match.group(2).strip().strip("'\"")
             if value:
-                return value
+                return "providers.env", value
     except Exception:
         pass
-    return ""
+    return "none", ""
+
+
+def _read_provider_env_key():
+    return _read_provider_env_key_with_source()[1]
 
 
 def _keychain_glm_key():
@@ -671,25 +685,72 @@ def _keychain_glm_key():
         return ""
 
 
-def _glm_key(config):
+def _glm_key_with_source(config):
     # Keychain / secret store first (the migrated-off-plaintext home for the key).
     key = _keychain_glm_key()
     if key:
-        return key
-    key = os.environ.get("ZAI_API_KEY") or os.environ.get("ZHIPU_API_KEY")
+        return "keychain", key
+    key = os.environ.get("ZAI_API_KEY")
     if key:
-        return key
+        return "env:ZAI_API_KEY", key
+    key = os.environ.get("ZHIPU_API_KEY")
+    if key:
+        return "env:ZHIPU_API_KEY", key
     if isinstance(config, dict):
         key = str(config.get("api_key") or "").strip()
         if key:
-            return key
-    return _read_provider_env_key()
+            return "config", key
+    return _read_provider_env_key_with_source()
+
+
+def _glm_key(config):
+    return _glm_key_with_source(config)[1]
+
+
+def _glm_provider_config(config, include_api_key=True):
+    if not isinstance(config, dict):
+        return {}
+    external = config.get("external_providers")
+    if isinstance(external, dict) and isinstance(external.get("glm"), dict):
+        glm = dict(external.get("glm") or {})
+    else:
+        glm = dict(config)
+    if not include_api_key:
+        glm.pop("api_key", None)
+    return glm
+
+
+def _normalize_glm_auth_style(value):
+    value = str(value or "").strip().lower()
+    if value == GLM_AUTH_BEARER:
+        return GLM_AUTH_BEARER
+    if value == GLM_AUTH_RAW:
+        return GLM_AUTH_RAW
+    return None
+
+
+def _glm_auth_header(key, auth_style):
+    if auth_style == GLM_AUTH_BEARER:
+        return f"Bearer {key}"
+    return key
+
+
+def _read_glm_cache_payload():
+    try:
+        data = _read_json(_cache_path("glm"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _read_glm_auth_style():
+    return _normalize_glm_auth_style(_read_glm_cache_payload().get("auth_style"))
 
 
 def _read_glm_cache():
     path = _cache_path("glm")
     try:
-        data = _read_json(path)
+        data = _read_glm_cache_payload()
         response = data.get("response") if isinstance(data, dict) else None
         if not isinstance(response, dict):
             return None, None
@@ -699,41 +760,150 @@ def _read_glm_cache():
         return None, None
 
 
-def _fetch_glm_response(config, key):
+def _write_glm_cache(response, auth_style=None):
+    style = _normalize_glm_auth_style(auth_style) or _normalize_glm_auth_style(_GLM_LAST_AUTH_STYLE) or _read_glm_auth_style()
+    payload = {"cached_at": time.time(), "response": response}
+    if style:
+        payload["auth_style"] = style
+    return _write_json(_cache_path("glm"), payload)
+
+
+def _fetch_glm_response_with_meta(config, key, timeout=1.5):
+    global _GLM_LAST_AUTH_STYLE
     base_url = "https://api.z.ai"
     if isinstance(config, dict) and config.get("base_url"):
         base_url = str(config.get("base_url")).rstrip("/")
     url = f"{base_url}{GLM_ENDPOINT}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": key,
-            "Accept-Language": "en-US,en",
-            "Content-Type": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=1.5) as resp:
-        return json.loads(resp.read())
+    first_style = _read_glm_auth_style() or GLM_AUTH_RAW
+    styles = [first_style]
+    if first_style == GLM_AUTH_RAW:
+        styles.append(GLM_AUTH_BEARER)
+
+    last_error = None
+    for style in styles:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": _glm_auth_header(key, style),
+                "Accept-Language": "en-US,en",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status = int(getattr(resp, "status", getattr(resp, "code", 200)) or 200)
+                try:
+                    data = json.loads(resp.read())
+                except Exception as exc:
+                    raise _GlmBodyParseError(status) from exc
+                _GLM_LAST_AUTH_STYLE = style
+                return data, status, style
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if style == GLM_AUTH_RAW and getattr(exc, "code", None) in (401, 403):
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("GLM request did not run")
+
+
+def _fetch_glm_response(config, key):
+    return _fetch_glm_response_with_meta(config, key)[0]
+
+
+def refresh_glm_cache(config=None):
+    """Refresh the GLM quota cache.
+
+    This may do network and keychain work, so callers on the render path should
+    run it only via the detached provider refresher.
+    """
+    try:
+        config = _glm_provider_config(config)
+        key = _glm_key(config)
+        if not key:
+            return False
+        response, _status, auth_style = _fetch_glm_response_with_meta(config, key)
+        record = parse_glm_quota_response(response)
+        if not (isinstance(record, dict) and record.get("available")):
+            return False
+        return _write_glm_cache(response, auth_style=auth_style) is True
+    except Exception:
+        return False
+
+
+def probe_glm_quota(config=None, timeout=3.0):
+    """Read-only GLM diagnostics for doctor/onboarding.
+
+    Returns only redaction-safe metadata: key source, HTTP status, whether the
+    parsed quota record is usable, and a coarse failure class.
+    """
+    result = {"key_source": "none", "http_status": "none", "usable": False, "failure": "no_key"}
+    try:
+        config = _glm_provider_config(config)
+        source, key = _glm_key_with_source(config)
+        result["key_source"] = source
+        if not key:
+            return result
+        try:
+            response, status, _auth_style = _fetch_glm_response_with_meta(config, key, timeout=timeout)
+            result["http_status"] = str(status)
+            record = parse_glm_quota_response(response)
+            if isinstance(record, dict) and record.get("available"):
+                result["usable"] = True
+                result["failure"] = "ok"
+            else:
+                result["failure"] = "parse_fail"
+            return result
+        except _GlmBodyParseError as exc:
+            result["http_status"] = str(getattr(exc, "status", "unknown") or "unknown")
+            result["failure"] = "parse_fail"
+            return result
+        except urllib.error.HTTPError as exc:
+            status = getattr(exc, "code", None)
+            result["http_status"] = str(status or "unknown")
+            result["failure"] = "unauth" if status in (401, 403) else "http"
+            return result
+        except TimeoutError:
+            result["http_status"] = "timeout"
+            result["failure"] = "timeout"
+            return result
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+                result["http_status"] = "timeout"
+                result["failure"] = "timeout"
+            else:
+                result["http_status"] = "network"
+                result["failure"] = "network"
+            return result
+        except Exception as exc:
+            if "timed out" in str(exc).lower():
+                result["http_status"] = "timeout"
+                result["failure"] = "timeout"
+            else:
+                result["http_status"] = "network"
+                result["failure"] = "network"
+            return result
+    except Exception:
+        result["failure"] = "unknown"
+        return result
 
 
 def get_glm_usage(config=None):
+    """GLM quota usage.
+
+    Render path is cache-only. Stale or missing cache kicks off a detached
+    refresh and immediately returns the stale record (or unavailable when no
+    cache exists yet).
+    """
+    cached_response, stale = _read_glm_cache()
+    if stale is None or stale >= GLM_CACHE_TTL:
+        _spawn_provider_refresh("glm", config)
+    if cached_response is None:
+        return unavailable("glm")
     try:
-        key = _glm_key(config)
-        if not key:
-            return unavailable("glm")
-
-        cached_response, stale = _read_glm_cache()
-        if cached_response is not None and stale is not None and stale < GLM_CACHE_TTL:
-            return parse_glm_quota_response(cached_response, stale_seconds=stale)
-
-        try:
-            response = _fetch_glm_response(config, key)
-            _write_json(_cache_path("glm"), {"cached_at": time.time(), "response": response})
-            return parse_glm_quota_response(response, stale_seconds=0)
-        except Exception:
-            if cached_response is not None:
-                return parse_glm_quota_response(cached_response, stale_seconds=stale)
-            return unavailable("glm")
+        return parse_glm_quota_response(cached_response, stale_seconds=stale)
     except Exception:
         return unavailable("glm")
 
@@ -1347,17 +1517,36 @@ def refresh_copilot_cache(config=None):
         return False
 
 
-def _spawn_copilot_refresh(config):
+def _provider_refresh_config(provider, config):
+    if provider == "copilot":
+        return _copilot_provider_config(config)
+    if provider == "glm":
+        return _glm_provider_config(config, include_api_key=False)
+    return {}
+
+
+def _spawn_provider_refresh(provider, config):
+    if provider not in {"copilot", "glm"}:
+        return
     try:
         env = dict(os.environ)
+        try:
+            env["HOME"] = str(Path.home())
+        except Exception:
+            pass
         env["CLAUDE_STATUSLINE_PROVIDER_LIB"] = str(Path(__file__).resolve().parent)
-        env["CLAUDE_STATUSLINE_COPILOT_CONFIG"] = json.dumps(_copilot_provider_config(config))
+        env["CLAUDE_STATUSLINE_REFRESH_PROVIDER"] = provider
+        env["CLAUDE_STATUSLINE_REFRESH_CONFIG"] = json.dumps(_provider_refresh_config(provider, config))
+        if provider == "copilot":
+            env["CLAUDE_STATUSLINE_COPILOT_CONFIG"] = env["CLAUDE_STATUSLINE_REFRESH_CONFIG"]
         code = (
             "import json, os, sys; "
             "sys.path.insert(0, os.environ.get('CLAUDE_STATUSLINE_PROVIDER_LIB', '')); "
             "import usage_providers; "
-            "cfg=json.loads(os.environ.get('CLAUDE_STATUSLINE_COPILOT_CONFIG', '{}')); "
-            "usage_providers.refresh_copilot_cache(cfg)"
+            "provider=os.environ.get('CLAUDE_STATUSLINE_REFRESH_PROVIDER', ''); "
+            "cfg=json.loads(os.environ.get('CLAUDE_STATUSLINE_REFRESH_CONFIG', '{}')); "
+            "usage_providers.refresh_copilot_cache(cfg) if provider == 'copilot' "
+            "else usage_providers.refresh_glm_cache(cfg) if provider == 'glm' else None"
         )
         subprocess.Popen(
             ["python3", "-c", code],
@@ -1369,6 +1558,10 @@ def _spawn_copilot_refresh(config):
         )
     except Exception:
         pass
+
+
+def _spawn_copilot_refresh(config):
+    _spawn_provider_refresh("copilot", config)
 
 
 def get_copilot_usage(config=None):
@@ -1385,7 +1578,7 @@ def get_copilot_usage(config=None):
     except Exception:
         age = None
     if age is None or age > COPILOT_CACHE_TTL:
-        _spawn_copilot_refresh(config)
+        _spawn_provider_refresh("copilot", config)
     record = data.get("record") if isinstance(data, dict) else None
     if not _is_available_record(record):
         return unavailable("copilot")

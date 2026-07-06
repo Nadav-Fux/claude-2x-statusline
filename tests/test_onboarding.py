@@ -309,12 +309,49 @@ def test_glm_key_falls_through_to_env_when_keychain_empty(monkeypatch):
     assert providers._glm_key({"api_key": "cfg-key"}) == "env-key"
 
 
+def test_glm_key_prefers_zai_env_over_zhipu_env(monkeypatch):
+    monkeypatch.setattr(providers, "_keychain_glm_key", lambda: "")
+    monkeypatch.setenv("ZAI_API_KEY", "zai-env-key")
+    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-env-key")
+    assert providers._glm_key({"api_key": "cfg-key"}) == "zai-env-key"
+    assert providers._glm_key_with_source({"api_key": "cfg-key"}) == ("env:ZAI_API_KEY", "zai-env-key")
+
+
+def test_glm_key_falls_through_to_zhipu_env_when_zai_empty(monkeypatch):
+    monkeypatch.setattr(providers, "_keychain_glm_key", lambda: "")
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.setenv("ZHIPU_API_KEY", "zhipu-env-key")
+    assert providers._glm_key({"api_key": "cfg-key"}) == "zhipu-env-key"
+    assert providers._glm_key_with_source({"api_key": "cfg-key"}) == ("env:ZHIPU_API_KEY", "zhipu-env-key")
+
+
 def test_glm_key_falls_through_to_config_when_keychain_and_env_empty(monkeypatch):
     monkeypatch.setattr(providers, "_keychain_glm_key", lambda: "")
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
     monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
     monkeypatch.setattr(providers, "_read_provider_env_key", lambda: "")
     assert providers._glm_key({"api_key": "cfg-key"}) == "cfg-key"
+
+
+def test_glm_key_falls_through_to_providers_env_after_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers, "_keychain_glm_key", lambda: "")
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+    providers_env = tmp_path / ".codex" / "providers.env"
+    providers_env.parent.mkdir(parents=True)
+    providers_env.write_text("export ZHIPU_API_KEY='providers-env-key'\n", encoding="utf-8")
+
+    assert providers._glm_key({}) == "providers-env-key"
+    assert providers._glm_key_with_source({}) == ("providers.env", "providers-env-key")
+
+
+def test_glm_key_source_reports_none_without_any_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers, "_keychain_glm_key", lambda: "")
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+    assert providers._glm_key_with_source({}) == ("none", "")
 
 
 def test_keychain_glm_key_swallows_secret_store_errors(monkeypatch):

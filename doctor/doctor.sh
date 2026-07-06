@@ -1122,7 +1122,149 @@ except Exception:
         0 ""
 }
 
-# ── Check 10: provider auth (only once providers.selected exists) ─────────
+# ── Check 10: GLM diagnostics (selected GLM only, 1h cache) ───────────────
+#
+# Reports only redaction-safe metadata: resolved key source, probe HTTP status,
+# and whether the quota response parsed into a usable GLM record. Never prints
+# the key or its length. WARNs include failure-specific recovery hints.
+check_glm() {
+    [ -f "$CONFIG" ] || return
+    local py
+    py=$(have_python) || py=""
+    [ -n "$py" ] || return
+
+    local state_file="$CLAUDE_DIR/statusline-provider-state.json"
+    local out
+    out=$("$py" - "$CONFIG" "$state_file" "$REPO_ROOT/lib" <<'PY' 2>/dev/null
+import json, os, sys, time
+
+config_path, state_path, lib_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, lib_dir)
+try:
+    import usage_providers
+except Exception:
+    sys.exit(0)
+
+try:
+    with open(config_path, encoding="utf-8") as fh:
+        config = json.load(fh)
+except Exception:
+    config = {}
+
+external = config.get("external_providers") if isinstance(config, dict) else {}
+external = external if isinstance(external, dict) else {}
+providers = config.get("providers") if isinstance(config, dict) else {}
+selected = providers.get("selected") if isinstance(providers, dict) else None
+glm_selected = (
+    (isinstance(selected, list) and "glm" in selected)
+    or (not isinstance(selected, list) and isinstance(external.get("glm"), dict) and external.get("glm", {}).get("enabled") is True)
+)
+if not glm_selected:
+    sys.exit(0)
+
+now = time.time()
+state = {}
+try:
+    with open(state_path, encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    if isinstance(loaded, dict):
+        state = loaded
+except Exception:
+    state = {}
+
+cached = state.get("glm_probe")
+if isinstance(cached, dict) and isinstance(cached.get("checked_at"), (int, float)) and (now - cached["checked_at"]) < 3600:
+    result = dict(cached.get("result") or {})
+else:
+    glm_config = external.get("glm") if isinstance(external.get("glm"), dict) else {}
+    result = usage_providers.probe_glm_quota(glm_config)
+    try:
+        state["glm_probe"] = {"checked_at": now, "result": result}
+        tmp = state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        os.replace(tmp, state_path)
+        try:
+            os.chmod(state_path, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+print("%s\t%s\t%s\t%s" % (
+    result.get("key_source", "none"),
+    result.get("http_status", "unknown"),
+    "true" if result.get("usable") else "false",
+    result.get("failure", "unknown"),
+))
+PY
+)
+    [ -n "$out" ] || return
+
+    local key_source http_status usable failure
+    IFS="$(printf '\t')" read -r key_source http_status usable failure <<EOF
+$out
+EOF
+    [ -n "$key_source" ] || key_source="none"
+    [ -n "$http_status" ] || http_status="unknown"
+    [ -n "$usable" ] || usable="false"
+    [ -n "$failure" ] || failure="unknown"
+
+    local detail
+    detail="Key source: $key_source; HTTP: $http_status; parsed usable: $usable"
+    case "$failure" in
+        ok)
+            add_result ok glm_probe \
+                "GLM quota probe ok" \
+                "$detail" \
+                0 ""
+            ;;
+        no_key)
+            add_result warn glm_probe \
+                "GLM key not found" \
+                "$detail. Fix: run /statusline-onboarding and use the GLM card to save the z.ai key to the OS keychain." \
+                0 ""
+            ;;
+        unauth)
+            add_result warn glm_probe \
+                "GLM key rejected (HTTP $http_status)" \
+                "$detail. Fix: run /statusline-onboarding and re-enter the GLM key." \
+                0 ""
+            ;;
+        parse_fail)
+            add_result warn glm_probe \
+                "GLM quota response was not usable" \
+                "$detail. Fix: report an issue with this doctor output and your z.ai plan type; do not include your key." \
+                0 ""
+            ;;
+        timeout)
+            add_result warn glm_probe \
+                "GLM quota probe timed out" \
+                "$detail. Fix: check network connectivity to api.z.ai and rerun doctor." \
+                0 ""
+            ;;
+        network)
+            add_result warn glm_probe \
+                "GLM quota probe hit a network error" \
+                "$detail. Fix: check network or proxy settings for api.z.ai and rerun doctor." \
+                0 ""
+            ;;
+        http)
+            add_result warn glm_probe \
+                "GLM quota endpoint returned HTTP $http_status" \
+                "$detail. Fix: rerun /statusline-onboarding if the key changed; otherwise report this HTTP status." \
+                0 ""
+            ;;
+        *)
+            add_result warn glm_probe \
+                "GLM quota probe could not complete" \
+                "$detail. Fix: rerun doctor; if it repeats, report an issue with this output." \
+                0 ""
+            ;;
+    esac
+}
+
+# ── Check 11: provider auth (only once providers.selected exists) ─────────
 #
 # Reads statusline-config.json. If a providers.selected array is present, it
 # probes each selected provider's auth via lib/onboarding.validate_provider and
@@ -1188,9 +1330,11 @@ else:
         except Exception:
             results[p] = "unknown"
     try:
+        state["checked_at"] = now
+        state["providers"] = results
         tmp = state_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"checked_at": now, "providers": results}, fh)
+            json.dump(state, fh)
         os.replace(tmp, state_path)
         try:
             os.chmod(state_path, 0o600)
@@ -1226,7 +1370,7 @@ EOF
     fi
 }
 
-# ── Check 11: CLAUDE.md length (Boris Cherny / Anthropic best practice) ───
+# ── Check 12: CLAUDE.md length (Boris Cherny / Anthropic best practice) ───
 # A CLAUDE.md much longer than ~60 lines (200 is the hard ceiling) causes the
 # model to deprioritize rules near the bottom. Warn only when a file is over
 # the 200-line ceiling; stay silent otherwise. Robust to missing/unreadable
@@ -1274,6 +1418,7 @@ check_execution
 check_origin
 check_redundant_commands
 check_narrator_hook
+check_glm
 check_providers_auth
 check_claude_md_size
 
