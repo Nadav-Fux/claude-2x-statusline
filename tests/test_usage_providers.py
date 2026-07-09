@@ -102,6 +102,31 @@ def test_codex_prefers_paid_plan_over_newer_free(tmp_path, monkeypatch):
     assert "7d" in row["text"] and "84%" in row["text"]
 
 
+def test_codex_windowed_snapshot_beats_newer_tokens_only_same_plan(tmp_path, monkeypatch):
+    # A resumed/idle session can leave a team rollout with a fresher mtime whose
+    # last event is tokens-only (rate_limits present but primary/secondary null).
+    # The scan must upgrade that placeholder with the older WINDOWED team
+    # snapshot instead of rendering a bar-less row.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [
+            ("free", "codex_rollout_token_count_30d.jsonl", now - 60),
+            ("team-idle", "codex_rollout_team_tokens_only.jsonl", now - 600),
+            ("team-real", "codex_rollout_team_snapshot.jsonl", now - 7200),
+        ],
+    )
+
+    record = providers.get_codex_usage({})
+
+    assert record["plan"] == "team"
+    assert record["five_hour"]["used_pct"] == 100
+    assert record["weekly"]["used_pct"] == 84
+    # stale reflects the windowed snapshot actually selected.
+    assert record["stale_seconds"] >= 7200
+
+
 def test_codex_plan_pin_selects_free(tmp_path, monkeypatch):
     # An explicit external_providers.codex.plan pin overrides the paid-first rule.
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))

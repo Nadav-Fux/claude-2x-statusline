@@ -612,8 +612,15 @@ def _codex_rollout_snapshots(scan_limit=CODEX_ROLLOUT_SCAN_LIMIT):
     file that snapshot came from, so selection can honor the SELECTED snapshot's
     age rather than the newest file's.
     """
+    # A resumed/idle session can have a fresher mtime than the last real turn
+    # and end on a tokens-only event (no rate-limit windows). Per plan, keep the
+    # newest WINDOWED snapshot; a window-less one is only a placeholder that a
+    # later (older) windowed file for the same plan upgrades in place.
+    def _has_windows(record):
+        return bool(record.get("five_hour") or record.get("weekly"))
+
     ordered = []
-    seen_plans = set()
+    by_plan = {}
     now = time.time()
     for mtime, _, path in _codex_rollout_files()[:scan_limit]:
         event = _last_codex_token_count_event(path)
@@ -624,11 +631,13 @@ def _codex_rollout_snapshots(scan_limit=CODEX_ROLLOUT_SCAN_LIMIT):
         if not record.get("available"):
             continue
         plan_key = record.get("plan")
-        if plan_key in seen_plans:
-            continue
-        seen_plans.add(plan_key)
-        ordered.append(record)
-        if len(seen_plans) >= 2:
+        idx = by_plan.get(plan_key)
+        if idx is None:
+            by_plan[plan_key] = len(ordered)
+            ordered.append(record)
+        elif _has_windows(record) and not _has_windows(ordered[idx]):
+            ordered[idx] = record
+        if len(by_plan) >= 2 and all(_has_windows(r) for r in ordered):
             break
     return ordered
 

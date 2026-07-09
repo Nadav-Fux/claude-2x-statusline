@@ -112,6 +112,28 @@ test('codex prefers paid plan over newer free', () => {
   assert.match(row.text, /84%/);
 });
 
+test('codex windowed snapshot beats newer tokens-only same plan', () => {
+  // A resumed/idle session can leave a team rollout with a fresher mtime whose
+  // last event is tokens-only (rate_limits present but primary/secondary null).
+  // The scan must upgrade that placeholder with the older WINDOWED team
+  // snapshot instead of rendering a bar-less row.
+  const now = Date.now() / 1000;
+  const record = withCodexHome(
+    [
+      ['free', 'codex_rollout_token_count_30d.jsonl', now - 60],
+      ['team-idle', 'codex_rollout_team_tokens_only.jsonl', now - 600],
+      ['team-real', 'codex_rollout_team_snapshot.jsonl', now - 7200],
+    ],
+    () => providers.getCodexUsage({}),
+  );
+
+  assert.equal(record.plan, 'team');
+  assert.equal(record.five_hour.used_pct, 100);
+  assert.equal(record.weekly.used_pct, 84);
+  // stale reflects the windowed snapshot actually selected.
+  assert.ok(record.stale_seconds >= 7200);
+});
+
 test('codex plan pin selects free', () => {
   const now = Date.now() / 1000;
   const record = withCodexHome(
