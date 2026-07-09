@@ -105,25 +105,17 @@ test('codex prefers paid plan over newer free', () => {
   // stale reflects the SELECTED (team) snapshot's file age, not the newest file.
   assert.ok(record.stale_seconds >= 3600);
 
-  // all_plans surfaces BOTH detected plans: paid (team) first, free second with
-  // its own 30d window. Selection/top-level shape is unchanged for old readers.
-  assert.deepEqual(record.all_plans.map(p => p.plan), ['team', 'free']);
-  assert.equal(record.all_plans[0].five_hour.used_pct, 100);
-  assert.equal(record.all_plans[1].five_hour.label, '30d');
+  // Default config does NOT surface all_plans: one Codex subscription, one row.
+  assert.equal(record.all_plans, undefined);
 
-  // The row now renders one line per plan (via subRows), each exactly like a
-  // single Codex row. First = team (5h/7d), second = free (30d).
+  // The row renders a single line for the selected (team) plan.
   const row = providers.formatProviderRowParts(record, now, { labelWidth: 5 });
-  const subTexts = row.subRows.map(sub => sub.text);
-  assert.equal(subTexts.length, 2);
-  assert.match(subTexts[0], /team/);
-  assert.match(subTexts[0], /5h/);
-  assert.match(subTexts[0], /100%/);
-  assert.match(subTexts[0], /7d/);
-  assert.match(subTexts[0], /84%/);
-  assert.match(subTexts[1], /free/);
-  assert.match(subTexts[1], /30d/);
-  assert.match(subTexts[1], /6%/);
+  assert.equal(row.subRows, undefined);
+  assert.match(row.text, /team/);
+  assert.match(row.text, /5h/);
+  assert.match(row.text, /100%/);
+  assert.match(row.text, /7d/);
+  assert.match(row.text, /84%/);
 });
 
 test('codex windowed snapshot beats newer tokens-only same plan', () => {
@@ -162,27 +154,51 @@ test('codex plan pin selects free', () => {
   assert.equal(record.five_hour.used_pct, 6);
   assert.equal(record.five_hour.label, '30d');
   assert.equal(record.weekly, null);
-  // A pin is an explicit filter: all_plans holds ONLY the pinned plan's record.
-  assert.deepEqual(record.all_plans.map(p => p.plan), ['free']);
-  assert.equal(record.all_plans[0].five_hour.label, '30d');
+  // Default config (show_all_plans unset) does NOT surface all_plans.
+  assert.equal(record.all_plans, undefined);
 });
 
 test('codex all_plans ages out stale team', () => {
   // The owner switched off team >7 days ago (stale); free is current. The stale
   // team ages out of all_plans and — no fresh paid plan left — selection falls
   // back through the unchanged rules to the newest overall (free).
+  // show_all_plans is opted in so all_plans is still populated for this check.
   const now = Date.now() / 1000;
   const record = withCodexHome(
     [
       ['team', 'codex_rollout_team_snapshot.jsonl', now - 8 * 86400],
       ['free', 'codex_rollout_token_count_30d.jsonl', now - 60],
     ],
-    () => providers.getCodexUsage({}),
+    () => providers.getCodexUsage({ external_providers: { codex: { show_all_plans: true } } }),
   );
 
   assert.equal(record.plan, 'free');
   assert.equal(record.five_hour.label, '30d');
   assert.deepEqual(record.all_plans.map(p => p.plan), ['free']);
+});
+
+test('codex show_all_plans opt-in renders one row per plan', () => {
+  // Interleaved free+team fixtures with show_all_plans explicitly opted in: the
+  // record carries both plans, and the rendered row fans out to two sub-rows
+  // (team+5h, free+30d) — the opt-in multi-plan path.
+  const now = Date.now() / 1000;
+  const record = withCodexHome(
+    [
+      ['team', 'codex_rollout_team_snapshot.jsonl', now - 3600],
+      ['free', 'codex_rollout_token_count_30d.jsonl', now - 60],
+    ],
+    () => providers.getCodexUsage({ external_providers: { codex: { show_all_plans: true } } }),
+  );
+
+  assert.deepEqual(record.all_plans.map(p => p.plan), ['team', 'free']);
+
+  const row = providers.formatProviderRowParts(record, now, { labelWidth: 5 });
+  const subTexts = row.subRows.map(sub => sub.text);
+  assert.equal(subTexts.length, 2);
+  assert.match(subTexts[0], /team/);
+  assert.match(subTexts[0], /5h/);
+  assert.match(subTexts[1], /free/);
+  assert.match(subTexts[1], /30d/);
 });
 
 test('codex all_plans renders one row per plan', () => {

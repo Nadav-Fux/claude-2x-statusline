@@ -694,6 +694,23 @@ def _codex_plan_pin(config):
     return str(plan).strip().lower() if plan else ""
 
 
+def _codex_show_all_plans(config):
+    """The configured show_all_plans flag (external_providers.codex.show_all_plans).
+
+    Accepts either the codex provider block ({"show_all_plans": true}) as passed
+    by collect_external_usage, or a full config carrying external_providers.codex.
+    Default is falsy: Codex renders a single row for the SELECTED plan.
+    """
+    if not isinstance(config, dict):
+        return False
+    flag = config.get("show_all_plans")
+    if not flag:
+        external = config.get("external_providers")
+        if isinstance(external, dict) and isinstance(external.get("codex"), dict):
+            flag = external["codex"].get("show_all_plans")
+    return bool(flag)
+
+
 def _select_codex_snapshot(ordered, config):
     """Pick one snapshot from the per-plan scan.
 
@@ -760,7 +777,12 @@ def get_codex_usage(config=None):
         if record is None:
             return unavailable("codex")
         record = dict(record)
-        record["all_plans"] = _codex_all_plans(ordered, config)
+        # Opt-in: only attach all_plans (and thus render one row per plan) when
+        # the owner explicitly asks for it. Default renders a single row for the
+        # SELECTED plan (pin > newest paid > newest overall), matching one Codex
+        # subscription per row.
+        if _codex_show_all_plans(config):
+            record["all_plans"] = _codex_all_plans(ordered, config)
         _write_cached_record("codex", record)
         return record
     except Exception:

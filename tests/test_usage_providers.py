@@ -97,21 +97,14 @@ def test_codex_prefers_paid_plan_over_newer_free(tmp_path, monkeypatch):
     # stale reflects the SELECTED (team) snapshot's file age, not the newest file.
     assert record["stale_seconds"] >= 3600
 
-    # all_plans surfaces BOTH detected plans: paid (team) first, free second with
-    # its own 30d window. Selection/top-level shape is unchanged for old readers.
-    all_plans = record["all_plans"]
-    assert [p["plan"] for p in all_plans] == ["team", "free"]
-    assert all_plans[0]["five_hour"]["used_pct"] == 100
-    assert all_plans[1]["five_hour"]["label"] == "30d"
+    # Default config does NOT surface all_plans: one Codex subscription, one row.
+    assert "all_plans" not in record
 
-    # The row now renders one line per plan (via sub_rows), each exactly like a
-    # single Codex row. First = team (5h/7d), second = free (30d).
+    # The row renders a single line for the selected (team) plan.
     row = providers.format_provider_row_parts(record, now, label_width=5)
-    sub_texts = [sub["text"] for sub in row["sub_rows"]]
-    assert len(sub_texts) == 2
-    assert "team" in sub_texts[0] and "5h" in sub_texts[0] and "100%" in sub_texts[0]
-    assert "7d" in sub_texts[0] and "84%" in sub_texts[0]
-    assert "free" in sub_texts[1] and "30d" in sub_texts[1] and "6%" in sub_texts[1]
+    assert row.get("sub_rows") is None
+    assert "team" in row["text"] and "5h" in row["text"] and "100%" in row["text"]
+    assert "7d" in row["text"] and "84%" in row["text"]
 
 
 def test_codex_windowed_snapshot_beats_newer_tokens_only_same_plan(tmp_path, monkeypatch):
@@ -157,15 +150,15 @@ def test_codex_plan_pin_selects_free(tmp_path, monkeypatch):
     assert record["five_hour"]["used_pct"] == 6
     assert record["five_hour"]["label"] == "30d"
     assert record["weekly"] is None
-    # A pin is an explicit filter: all_plans holds ONLY the pinned plan's record.
-    assert [p["plan"] for p in record["all_plans"]] == ["free"]
-    assert record["all_plans"][0]["five_hour"]["label"] == "30d"
+    # Default config (show_all_plans unset) does NOT surface all_plans.
+    assert "all_plans" not in record
 
 
 def test_codex_all_plans_ages_out_stale_team(tmp_path, monkeypatch):
     # The owner switched off team >7 days ago (stale snapshot); free is current.
     # The stale team plan ages out of all_plans, and — no fresh paid plan left —
     # selection falls back through the unchanged rules to the newest overall (free).
+    # show_all_plans is opted in so all_plans is still populated for this check.
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     now = time.time()
     _install_codex_rollouts(
@@ -176,11 +169,36 @@ def test_codex_all_plans_ages_out_stale_team(tmp_path, monkeypatch):
         ],
     )
 
-    record = providers.get_codex_usage({})
+    record = providers.get_codex_usage({"external_providers": {"codex": {"show_all_plans": True}}})
 
     assert record["plan"] == "free"
     assert record["five_hour"]["label"] == "30d"
     assert [p["plan"] for p in record["all_plans"]] == ["free"]
+
+
+def test_codex_show_all_plans_opt_in_renders_one_row_per_plan(tmp_path, monkeypatch):
+    # Interleaved free+team fixtures with show_all_plans explicitly opted in:
+    # the record carries both plans, and the rendered row fans out to two
+    # sub-rows (team+5h, free+30d) — the opt-in multi-plan path.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [
+            ("team", "codex_rollout_team_snapshot.jsonl", now - 3600),
+            ("free", "codex_rollout_token_count_30d.jsonl", now - 60),
+        ],
+    )
+
+    record = providers.get_codex_usage({"external_providers": {"codex": {"show_all_plans": True}}})
+
+    assert [p["plan"] for p in record["all_plans"]] == ["team", "free"]
+
+    row = providers.format_provider_row_parts(record, now, label_width=5)
+    sub_texts = [sub["text"] for sub in row["sub_rows"]]
+    assert len(sub_texts) == 2
+    assert "team" in sub_texts[0] and "5h" in sub_texts[0]
+    assert "free" in sub_texts[1] and "30d" in sub_texts[1]
 
 
 def test_codex_all_plans_renders_one_row_per_plan(tmp_path, monkeypatch):
