@@ -367,7 +367,7 @@ def test_antigravity_cli_snapshot_prepends_prompt_credits():
 
     metrics = providers._map_antigravity_snapshot(snapshot)
 
-    assert metrics[0] == {"label": "cr", "used_pct": 99, "resets_at": None}
+    assert metrics[0] == {"label": "credits", "used_pct": 99, "resets_at": None}
     assert [(metric["label"], metric["used_pct"]) for metric in metrics[1:]] == [("Gemini", 60)]
 
 
@@ -375,7 +375,7 @@ def test_antigravity_cli_snapshot_credits_only_and_derived_from_remaining():
     # Credits alone (no model quotas) still render; usedPercentage absent falls
     # back to 1 - remainingPercentage; junk credits are ignored.
     only = providers._map_antigravity_snapshot({"models": [], "promptCredits": {"remainingPercentage": 0.25}})
-    assert only == [{"label": "cr", "used_pct": 75, "resets_at": None}]
+    assert only == [{"label": "credits", "used_pct": 75, "resets_at": None}]
     assert providers._map_antigravity_snapshot({"models": [], "promptCredits": {"usedPercentage": "junk"}}) is None
 
 

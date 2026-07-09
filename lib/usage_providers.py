@@ -1365,7 +1365,7 @@ def _antigravity_credits_metric(credits):
         used = float(used)
     except (TypeError, ValueError):
         return None
-    return {"label": "cr", "used_pct": max(0, min(100, round(used * 100))), "resets_at": None}
+    return {"label": "credits", "used_pct": max(0, min(100, round(used * 100))), "resets_at": None}
 
 
 def _map_antigravity_snapshot(snapshot):

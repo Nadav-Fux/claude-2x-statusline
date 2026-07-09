@@ -375,7 +375,7 @@ test('antigravity CLI snapshot prepends prompt credits', () => {
 
   const metrics = providers.mapAntigravitySnapshot(snapshot);
 
-  assert.deepEqual(metrics[0], { label: 'cr', used_pct: 99, resets_at: null });
+  assert.deepEqual(metrics[0], { label: 'credits', used_pct: 99, resets_at: null });
   assert.deepEqual(metrics.slice(1).map(metric => [metric.label, metric.used_pct]), [['Gemini', 60]]);
 });
 
@@ -383,7 +383,7 @@ test('antigravity CLI snapshot credits only and derived from remaining', () => {
   // Credits alone (no model quotas) still render; usedPercentage absent falls
   // back to 1 - remainingPercentage; junk credits are ignored.
   const only = providers.mapAntigravitySnapshot({ models: [], promptCredits: { remainingPercentage: 0.25 } });
-  assert.deepEqual(only, [{ label: 'cr', used_pct: 75, resets_at: null }]);
+  assert.deepEqual(only, [{ label: 'credits', used_pct: 75, resets_at: null }]);
   assert.equal(providers.mapAntigravitySnapshot({ models: [], promptCredits: { usedPercentage: 'junk' } }), null);
 });
 
