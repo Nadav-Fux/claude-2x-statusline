@@ -197,6 +197,67 @@ test('antigravity model parser maps model-group metrics', () => {
   assert.deepEqual(record.metrics.map(metric => [metric.label, metric.used_pct]), [['Flash', 23], ['Pro', 67], ['Opus', 41]]);
 });
 
+test('antigravity CLI snapshot groups current lineup by family', () => {
+  // Real `antigravity-usage quota --json` shape: 8 models across the current
+  // Gemini/Claude/GPT-OSS lineup. Groups must be dynamic by family (not the old
+  // hardcoded Flash/Pro/Opus trio) so GPT-OSS and Claude Sonnet are never
+  // dropped, used_pct is the MAX (most-constrained) member per family, and
+  // resets_at picks the earliest resetTime among members tied on that max.
+  const snapshot = JSON.parse(fs.readFileSync(path.join(fixtures, 'antigravity_quota_response.json'), 'utf8'));
+
+  const metrics = providers.mapAntigravitySnapshot(snapshot);
+
+  assert.deepEqual(metrics.map(metric => [metric.label, metric.used_pct]), [
+    ['Gemini', 60],
+    ['Opus', 90],
+    ['Sonnet', 45],
+    ['GPT', 3],
+  ]);
+  // Gemini's max (60%) is tied between "Flash (High)" and "Pro (High)"; the
+  // earlier of their two resetTimes wins ("Pro (High)" resets at noon UTC).
+  assert.deepEqual(metrics.map(metric => metric.resets_at), [1783598400, 1783627200, 1783648800, 1783587600]);
+
+  const record = { ...providers.unavailable('antigravity'), available: true, label: 'AGY', display: 'compact', metrics };
+  const row = providers.formatProviderRowParts(record, 1_000);
+  for (const [label, pct] of [['Gemini', 60], ['Opus', 90], ['Sonnet', 45], ['GPT', 3]]) {
+    assert.match(row.text, new RegExp(`${label} ${pct}%`));
+  }
+});
+
+test('antigravity CLI snapshot skips autocomplete-only models', () => {
+  const snapshot = {
+    models: [
+      { label: 'Gemini 3.5 Flash (Autocomplete)', modelId: 'gemini-ac', remainingPercentage: 0.1, isAutocompleteOnly: true },
+      { label: 'Gemini 3.5 Flash (Low)', modelId: 'gemini-flash-low', remainingPercentage: 0.7 },
+    ],
+  };
+
+  const metrics = providers.mapAntigravitySnapshot(snapshot);
+
+  assert.deepEqual(metrics.map(metric => [metric.label, metric.used_pct]), [['Gemini', 30]]);
+});
+
+test('antigravity CLI snapshot old lineup falls back to first word', () => {
+  // Backward compatibility: if the CLI ever reverts to the old bare
+  // Flash/Pro/Opus labels (no "Gemini" prefix), the family rules must still
+  // produce sensible, non-dropped groups via the first-word fallback.
+  const snapshot = {
+    models: [
+      { label: 'Flash', modelId: 'flash', remainingPercentage: 0.8 },
+      { label: 'Pro', modelId: 'pro', remainingPercentage: 0.6 },
+      { label: 'Opus', modelId: 'opus', remainingPercentage: 0.4 },
+    ],
+  };
+
+  const metrics = providers.mapAntigravitySnapshot(snapshot);
+
+  assert.deepEqual(metrics.map(metric => [metric.label, metric.used_pct]), [
+    ['Opus', 60],
+    ['Flash', 20],
+    ['Pro', 40],
+  ]);
+});
+
 test('antigravity parser returns unavailable for junk rows', () => {
   const record = providers.parseAntigravityItemTable([
     { key: 'antigravity.usage', value: 'not json' },

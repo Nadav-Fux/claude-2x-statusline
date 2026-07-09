@@ -179,6 +179,73 @@ def test_antigravity_model_parser_maps_model_group_metrics():
     assert providers.parse_antigravity_models({"hello": "world"}) is None
 
 
+def test_antigravity_cli_snapshot_groups_current_lineup_by_family():
+    """Real `antigravity-usage quota --json` shape: 8 models across the current
+    Gemini/Claude/GPT-OSS lineup. Groups must be dynamic by family (not the old
+    hardcoded Flash/Pro/Opus trio) so GPT-OSS and Claude Sonnet are never dropped,
+    used_pct is the MAX (most-constrained) member per family, and resets_at picks
+    the earliest resetTime among members tied on that max.
+    """
+    snapshot = json.loads((FIXTURES / "antigravity_quota_response.json").read_text(encoding="utf-8"))
+
+    metrics = providers._map_antigravity_snapshot(snapshot)
+
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [
+        ("Gemini", 60),
+        ("Opus", 90),
+        ("Sonnet", 45),
+        ("GPT", 3),
+    ]
+    # Gemini's max (60%) is tied between "Flash (High)" and "Pro (High)"; the
+    # earlier of their two resetTimes wins ("Pro (High)" resets at noon UTC).
+    assert [metric["resets_at"] for metric in metrics] == [1783598400, 1783627200, 1783648800, 1783587600]
+
+    record = providers.unavailable("antigravity")
+    record.update({"available": True, "label": "AGY", "display": "compact", "metrics": metrics})
+    row = providers.format_provider_row_parts(record, 1_000)
+    for label, pct in (("Gemini", 60), ("Opus", 90), ("Sonnet", 45), ("GPT", 3)):
+        assert f"{label} {pct}%" in row["text"]
+
+
+def test_antigravity_cli_snapshot_skips_autocomplete_only_models():
+    snapshot = {
+        "models": [
+            {
+                "label": "Gemini 3.5 Flash (Autocomplete)",
+                "modelId": "gemini-ac",
+                "remainingPercentage": 0.1,
+                "isAutocompleteOnly": True,
+            },
+            {"label": "Gemini 3.5 Flash (Low)", "modelId": "gemini-flash-low", "remainingPercentage": 0.7},
+        ]
+    }
+
+    metrics = providers._map_antigravity_snapshot(snapshot)
+
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Gemini", 30)]
+
+
+def test_antigravity_cli_snapshot_old_lineup_falls_back_to_first_word():
+    """Backward compatibility: if the CLI ever reverts to the old bare
+    Flash/Pro/Opus labels (no "Gemini" prefix), the family rules must still
+    produce sensible, non-dropped groups via the first-word fallback."""
+    snapshot = {
+        "models": [
+            {"label": "Flash", "modelId": "flash", "remainingPercentage": 0.8},
+            {"label": "Pro", "modelId": "pro", "remainingPercentage": 0.6},
+            {"label": "Opus", "modelId": "opus", "remainingPercentage": 0.4},
+        ]
+    }
+
+    metrics = providers._map_antigravity_snapshot(snapshot)
+
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [
+        ("Opus", 60),
+        ("Flash", 20),
+        ("Pro", 40),
+    ]
+
+
 def test_provider_row_parts_omit_past_reset_countdown():
     row = providers.format_provider_row_parts(
         {

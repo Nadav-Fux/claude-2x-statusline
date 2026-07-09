@@ -1224,38 +1224,70 @@ def _find_antigravity_windows(value, path_parts=None):
     return found
 
 
+_ANTIGRAVITY_FAMILY_ORDER = {"Gemini": 0, "Opus": 1, "Sonnet": 2, "GPT": 3}
+
+
+def _antigravity_model_family(model):
+    """Classify one `antigravity-usage` models[] entry into a display family.
+
+    Known families (Gemini/Opus/Sonnet/GPT) are detected from the label/modelId
+    text; anything else falls back to the label's first word (capitalized) so a
+    future Antigravity lineup change is grouped instead of silently dropped.
+    This also keeps old lineups (bare "Flash"/"Pro" labels) working: they don't
+    match a known keyword, so they fall back to their own first word.
+    """
+    label = str((model or {}).get("label") or "").strip()
+    model_id = str((model or {}).get("modelId") or "").strip()
+    hint = f"{label} {model_id}".lower()
+    if "gemini" in hint:
+        return "Gemini"
+    if "opus" in hint:
+        return "Opus"
+    if "sonnet" in hint:
+        return "Sonnet"
+    if "gpt" in hint:
+        return "GPT"
+    basis = label or model_id
+    words = basis.split()
+    return words[0].capitalize() if words else "Model"
+
+
 def _map_antigravity_snapshot(snapshot):
-    """Map an `antigravity-usage quota --json` snapshot (models[].remainingPercentage
-    is a 0..1 fraction) into Opus/Pro/Flash compact metrics."""
+    """Map an `antigravity-usage quota --json` snapshot into per-model-family
+    compact metrics (models[].remainingPercentage is a 0..1 fraction).
+
+    Models are grouped dynamically by family (Gemini/Opus/Sonnet/GPT/...) rather
+    than a hardcoded whitelist, so lineup changes (e.g. GPT-OSS, Claude Sonnet)
+    are never dropped. Within a group, used_pct is the MAX used_pct across member
+    models (the most-constrained variant); resets_at is that member's resetTime,
+    or the earliest one among members tied on used_pct.
+    """
     if not isinstance(snapshot, dict):
         return None
     models = snapshot.get("models") if isinstance(snapshot.get("models"), list) else []
-    pick = {"Opus": None, "Pro": None, "Flash": None}
+    groups = {}
     for m in models:
         if not isinstance(m, dict) or m.get("isAutocompleteOnly"):
-            continue
-        ident = f"{m.get('label', '')} {m.get('modelId', '')}".lower()
-        if "opus" in ident or "claude" in ident or "sonnet" in ident:
-            group = "Opus"
-        elif "pro" in ident:
-            group = "Pro"
-        elif "flash" in ident:
-            group = "Flash"
-        else:
-            continue
-        if pick[group] is not None:
             continue
         try:
             frac = float(m.get("remainingPercentage"))
         except (TypeError, ValueError):
             continue
+        family = _antigravity_model_family(m)
+        used_pct = max(0, min(100, round((1 - frac) * 100)))
         reset = _parse_iso_seconds(m.get("resetTime"))
-        pick[group] = {
-            "label": group,
-            "used_pct": max(0, min(100, round((1 - frac) * 100))),
-            "resets_at": int(reset) if reset else None,
-        }
-    metrics = [pick[g] for g in ("Opus", "Pro", "Flash") if pick[g]]
+        reset = int(reset) if reset else None
+        existing = groups.get(family)
+        if existing is None or used_pct > existing["used_pct"] or (
+            used_pct == existing["used_pct"]
+            and reset is not None
+            and (existing["resets_at"] is None or reset < existing["resets_at"])
+        ):
+            groups[family] = {"label": family, "used_pct": used_pct, "resets_at": reset}
+    if not groups:
+        return None
+    ordered = sorted(groups, key=lambda name: (_ANTIGRAVITY_FAMILY_ORDER.get(name, 99), name))
+    metrics = [groups[name] for name in ordered]
     return metrics or None
 
 
