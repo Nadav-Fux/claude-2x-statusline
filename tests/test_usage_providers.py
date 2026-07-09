@@ -57,6 +57,88 @@ def test_codex_window_label_maps_minutes_to_honest_labels():
     assert providers._codex_window_label("bad", "5h") == "5h"
 
 
+def _install_codex_rollouts(home, entries):
+    """Write rollout fixtures into a monkeypatched ~/.codex/sessions tree.
+
+    ``entries`` is a list of (name, fixture_file, mtime) tuples; each fixture is
+    copied to sessions/2026/07/09/rollout-<name>.jsonl and stamped with mtime so
+    the scan's newest-first ordering is deterministic.
+    """
+    base = home / ".codex" / "sessions" / "2026" / "07" / "09"
+    base.mkdir(parents=True, exist_ok=True)
+    for name, fixture, mtime in entries:
+        dest = base / f"rollout-{name}.jsonl"
+        dest.write_text((FIXTURES / fixture).read_text(encoding="utf-8"), encoding="utf-8")
+        os.utime(dest, (mtime, mtime))
+
+
+def test_codex_prefers_paid_plan_over_newer_free(tmp_path, monkeypatch):
+    # Two apps share ~/.codex: the newest rollout is a FREE account (30d 6%),
+    # an older one is the paid TEAM account (5h 100%, weekly 84%). Default config
+    # must surface the paid limits, not the harmless free window.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [
+            ("team", "codex_rollout_team_snapshot.jsonl", now - 3600),
+            ("free", "codex_rollout_token_count_30d.jsonl", now - 60),
+        ],
+    )
+
+    record = providers.get_codex_usage({})
+
+    assert record["available"] is True
+    assert record["plan"] == "team"
+    assert record["five_hour"]["used_pct"] == 100
+    assert record["five_hour"]["label"] == "5h"
+    assert record["weekly"]["used_pct"] == 84
+    assert record["weekly"]["label"] == "7d"
+    # stale reflects the SELECTED (team) snapshot's file age, not the newest file.
+    assert record["stale_seconds"] >= 3600
+
+    row = providers.format_provider_row_parts(record, now, label_width=5)
+    assert "5h" in row["text"] and "100%" in row["text"]
+    assert "7d" in row["text"] and "84%" in row["text"]
+
+
+def test_codex_plan_pin_selects_free(tmp_path, monkeypatch):
+    # An explicit external_providers.codex.plan pin overrides the paid-first rule.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [
+            ("team", "codex_rollout_team_snapshot.jsonl", now - 60),
+            ("free", "codex_rollout_token_count_30d.jsonl", now - 3600),
+        ],
+    )
+
+    record = providers.get_codex_usage({"external_providers": {"codex": {"plan": "free"}}})
+
+    assert record["plan"] == "free"
+    assert record["five_hour"]["used_pct"] == 6
+    assert record["five_hour"]["label"] == "30d"
+    assert record["weekly"] is None
+
+
+def test_codex_only_free_selected_unchanged(tmp_path, monkeypatch):
+    # Single free account present: default config keeps selecting it (newest overall).
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [("free", "codex_rollout_token_count_30d.jsonl", now - 120)],
+    )
+
+    record = providers.get_codex_usage({})
+
+    assert record["plan"] == "free"
+    assert record["five_hour"]["used_pct"] == 6
+    assert record["five_hour"]["label"] == "30d"
+    assert record["weekly"] is None
+
+
 def test_glm_fixture_maps_quota_limits():
     data = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
 

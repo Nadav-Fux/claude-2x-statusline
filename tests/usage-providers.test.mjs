@@ -58,6 +58,89 @@ test('codex window label maps minutes to honest labels', () => {
   assert.equal(providers.codexWindowLabel('bad', '5h'), '5h');
 });
 
+function installCodexRollouts(home, entries) {
+  const base = path.join(home, '.codex', 'sessions', '2026', '07', '09');
+  fs.mkdirSync(base, { recursive: true });
+  for (const [name, fixture, mtime] of entries) {
+    const dest = path.join(base, `rollout-${name}.jsonl`);
+    fs.writeFileSync(dest, fs.readFileSync(path.join(fixtures, fixture), 'utf8'));
+    fs.utimesSync(dest, mtime, mtime);
+  }
+}
+
+function withCodexHome(entries, fn) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-codex-'));
+  const oldHome = process.env.HOME;
+  const oldUserProfile = process.env.USERPROFILE;
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    installCodexRollouts(home, entries);
+    return fn();
+  } finally {
+    if (oldHome == null) delete process.env.HOME; else process.env.HOME = oldHome;
+    if (oldUserProfile == null) delete process.env.USERPROFILE; else process.env.USERPROFILE = oldUserProfile;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('codex prefers paid plan over newer free', () => {
+  // Newest rollout is a FREE account (30d 6%); an older one is the paid TEAM
+  // account (5h 100%, weekly 84%). Default config must surface the paid limits.
+  const now = Date.now() / 1000;
+  const record = withCodexHome(
+    [
+      ['team', 'codex_rollout_team_snapshot.jsonl', now - 3600],
+      ['free', 'codex_rollout_token_count_30d.jsonl', now - 60],
+    ],
+    () => providers.getCodexUsage({}),
+  );
+
+  assert.equal(record.available, true);
+  assert.equal(record.plan, 'team');
+  assert.equal(record.five_hour.used_pct, 100);
+  assert.equal(record.five_hour.label, '5h');
+  assert.equal(record.weekly.used_pct, 84);
+  assert.equal(record.weekly.label, '7d');
+  // stale reflects the SELECTED (team) snapshot's file age, not the newest file.
+  assert.ok(record.stale_seconds >= 3600);
+
+  const row = providers.formatProviderRowParts(record, now, { labelWidth: 5 });
+  assert.match(row.text, /5h/);
+  assert.match(row.text, /100%/);
+  assert.match(row.text, /7d/);
+  assert.match(row.text, /84%/);
+});
+
+test('codex plan pin selects free', () => {
+  const now = Date.now() / 1000;
+  const record = withCodexHome(
+    [
+      ['team', 'codex_rollout_team_snapshot.jsonl', now - 60],
+      ['free', 'codex_rollout_token_count_30d.jsonl', now - 3600],
+    ],
+    () => providers.getCodexUsage({ external_providers: { codex: { plan: 'free' } } }),
+  );
+
+  assert.equal(record.plan, 'free');
+  assert.equal(record.five_hour.used_pct, 6);
+  assert.equal(record.five_hour.label, '30d');
+  assert.equal(record.weekly, null);
+});
+
+test('codex only-free selected unchanged', () => {
+  const now = Date.now() / 1000;
+  const record = withCodexHome(
+    [['free', 'codex_rollout_token_count_30d.jsonl', now - 120]],
+    () => providers.getCodexUsage({}),
+  );
+
+  assert.equal(record.plan, 'free');
+  assert.equal(record.five_hour.used_pct, 6);
+  assert.equal(record.five_hour.label, '30d');
+  assert.equal(record.weekly, null);
+});
+
 test('glm fixture maps quota limits', () => {
   const data = JSON.parse(fs.readFileSync(path.join(fixtures, 'glm_quota_response.json'), 'utf8'));
 

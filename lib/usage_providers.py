@@ -22,6 +22,7 @@ PROVIDERS = {
 }
 
 LOCAL_CACHE_TTL = 45
+CODEX_ROLLOUT_SCAN_LIMIT = 40
 GLM_CACHE_TTL = 60
 EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
@@ -556,32 +557,37 @@ def parse_codex_token_count_line(line, stale_seconds=None, now=None):
         return unavailable("codex")
 
 
-def _newest_codex_rollout():
+def _codex_rollout_files():
+    """All rollout-*.jsonl paths under ~/.codex/sessions, newest mtime first.
+
+    A single glob + stat (mirrors the legacy _newest_codex_rollout mechanism) so
+    the multi-account scan reuses one directory listing and never reads files it
+    will not consider.
+    """
     sessions = Path.home() / ".codex" / "sessions"
     try:
-        files = list(sessions.glob("*/*/*/rollout-*.jsonl"))
+        paths = list(sessions.glob("*/*/*/rollout-*.jsonl"))
     except Exception:
-        return None
-    if not files:
-        return None
+        return []
+    entries = []
+    for path in paths:
+        try:
+            entries.append((path.stat().st_mtime, str(path), path))
+        except Exception:
+            continue
+    entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return entries
+
+
+def _newest_codex_rollout():
+    entries = _codex_rollout_files()
+    return entries[0][2] if entries else None
+
+
+def _last_codex_token_count_event(path):
+    last_event = None
     try:
-        return max(files, key=lambda p: (p.stat().st_mtime, str(p)))
-    except Exception:
-        return None
-
-
-def get_codex_usage(config=None):
-    try:
-        cached = _read_cached_record("codex", LOCAL_CACHE_TTL)
-        if cached:
-            return cached
-
-        rollout = _newest_codex_rollout()
-        if rollout is None:
-            return unavailable("codex")
-
-        last_event = None
-        with rollout.open(encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             for line in f:
                 try:
                     event = json.loads(line)
@@ -590,11 +596,90 @@ def get_codex_usage(config=None):
                 payload = event.get("payload") if isinstance(event, dict) else None
                 if isinstance(payload, dict) and payload.get("type") == "token_count":
                     last_event = event
-        if last_event is None:
-            return unavailable("codex")
+    except Exception:
+        return None
+    return last_event
 
-        stale = max(0, int(time.time() - rollout.stat().st_mtime))
-        record = normalize_codex_token_count_event(last_event, stale_seconds=stale)
+
+def _codex_rollout_snapshots(scan_limit=CODEX_ROLLOUT_SCAN_LIMIT):
+    """Newest available rate_limits snapshot per plan_type, newest first.
+
+    Two Codex apps (e.g. Desktop on a free account + CLI on a paid team account)
+    write into the same sessions tree, so the newest file globally can belong to
+    either. This walks the newest rollouts (bounded by scan_limit) and keeps the
+    newest available snapshot for each distinct plan_type, stopping early once
+    >=2 plan_types are captured. Each record's stale_seconds is the age of the
+    file that snapshot came from, so selection can honor the SELECTED snapshot's
+    age rather than the newest file's.
+    """
+    ordered = []
+    seen_plans = set()
+    now = time.time()
+    for mtime, _, path in _codex_rollout_files()[:scan_limit]:
+        event = _last_codex_token_count_event(path)
+        if event is None:
+            continue
+        stale = max(0, int(now - mtime))
+        record = normalize_codex_token_count_event(event, stale_seconds=stale)
+        if not record.get("available"):
+            continue
+        plan_key = record.get("plan")
+        if plan_key in seen_plans:
+            continue
+        seen_plans.add(plan_key)
+        ordered.append(record)
+        if len(seen_plans) >= 2:
+            break
+    return ordered
+
+
+def _codex_plan_pin(config):
+    """The configured plan pin (external_providers.codex.plan), lowercased.
+
+    Accepts either the codex provider block ({"plan": "team"}) as passed by
+    collect_external_usage, or a full config carrying external_providers.codex.
+    """
+    if not isinstance(config, dict):
+        return ""
+    plan = config.get("plan")
+    if not plan:
+        external = config.get("external_providers")
+        if isinstance(external, dict) and isinstance(external.get("codex"), dict):
+            plan = external["codex"].get("plan")
+    return str(plan).strip().lower() if plan else ""
+
+
+def _select_codex_snapshot(ordered, config):
+    """Pick one snapshot from the per-plan scan.
+
+    a) a configured plan pin wins (its newest snapshot; else newest overall),
+    b) otherwise the newest PAID snapshot (plan present and != "free"),
+    c) otherwise the newest overall.
+    """
+    if not ordered:
+        return None
+    pin = _codex_plan_pin(config)
+    if pin:
+        for record in ordered:
+            if str(record.get("plan") or "").strip().lower() == pin:
+                return record
+        return ordered[0]
+    for record in ordered:
+        plan = str(record.get("plan") or "").strip().lower()
+        if plan and plan != "free":
+            return record
+    return ordered[0]
+
+
+def get_codex_usage(config=None):
+    try:
+        cached = _read_cached_record("codex", LOCAL_CACHE_TTL)
+        if cached:
+            return cached
+
+        record = _select_codex_snapshot(_codex_rollout_snapshots(), config)
+        if record is None:
+            return unavailable("codex")
         _write_cached_record("codex", record)
         return record
     except Exception:
