@@ -341,6 +341,30 @@ test('antigravity CLI snapshot old lineup falls back to first word', () => {
   ]);
 });
 
+test('antigravity CLI snapshot prepends prompt credits', () => {
+  // promptCredits is the binding constraint (models can all read 100% free
+  // while the monthly pool runs dry) — it must render as the FIRST metric.
+  const snapshot = {
+    models: [
+      { label: 'Gemini 3.5 Flash (High)', modelId: 'g35f', remainingPercentage: 0.4, resetTime: '2026-07-10T01:27:05Z' },
+    ],
+    promptCredits: { available: 500, monthly: 50000, usedPercentage: 0.99, remainingPercentage: 0.01 },
+  };
+
+  const metrics = providers.mapAntigravitySnapshot(snapshot);
+
+  assert.deepEqual(metrics[0], { label: 'cr', used_pct: 99, resets_at: null });
+  assert.deepEqual(metrics.slice(1).map(metric => [metric.label, metric.used_pct]), [['Gemini', 60]]);
+});
+
+test('antigravity CLI snapshot credits only and derived from remaining', () => {
+  // Credits alone (no model quotas) still render; usedPercentage absent falls
+  // back to 1 - remainingPercentage; junk credits are ignored.
+  const only = providers.mapAntigravitySnapshot({ models: [], promptCredits: { remainingPercentage: 0.25 } });
+  assert.deepEqual(only, [{ label: 'cr', used_pct: 75, resets_at: null }]);
+  assert.equal(providers.mapAntigravitySnapshot({ models: [], promptCredits: { usedPercentage: 'junk' } }), null);
+});
+
 test('antigravity parser returns unavailable for junk rows', () => {
   const record = providers.parseAntigravityItemTable([
     { key: 'antigravity.usage', value: 'not json' },

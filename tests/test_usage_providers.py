@@ -328,6 +328,32 @@ def test_antigravity_cli_snapshot_old_lineup_falls_back_to_first_word():
     ]
 
 
+def test_antigravity_cli_snapshot_prepends_prompt_credits():
+    """promptCredits is the binding constraint (models can all read 100% free
+    while the monthly pool runs dry) — it must render as the FIRST metric."""
+    snapshot = {
+        "models": [
+            {"label": "Gemini 3.5 Flash (High)", "modelId": "g35f", "remainingPercentage": 0.4,
+             "resetTime": "2026-07-10T01:27:05Z"},
+        ],
+        "promptCredits": {"available": 500, "monthly": 50000,
+                          "usedPercentage": 0.99, "remainingPercentage": 0.01},
+    }
+
+    metrics = providers._map_antigravity_snapshot(snapshot)
+
+    assert metrics[0] == {"label": "cr", "used_pct": 99, "resets_at": None}
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics[1:]] == [("Gemini", 60)]
+
+
+def test_antigravity_cli_snapshot_credits_only_and_derived_from_remaining():
+    # Credits alone (no model quotas) still render; usedPercentage absent falls
+    # back to 1 - remainingPercentage; junk credits are ignored.
+    only = providers._map_antigravity_snapshot({"models": [], "promptCredits": {"remainingPercentage": 0.25}})
+    assert only == [{"label": "cr", "used_pct": 75, "resets_at": None}]
+    assert providers._map_antigravity_snapshot({"models": [], "promptCredits": {"usedPercentage": "junk"}}) is None
+
+
 def test_provider_row_parts_omit_past_reset_countdown():
     row = providers.format_provider_row_parts(
         {

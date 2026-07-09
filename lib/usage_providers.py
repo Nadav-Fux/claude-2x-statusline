@@ -1337,6 +1337,28 @@ def _antigravity_model_family(model):
     return words[0].capitalize() if words else "Model"
 
 
+def _antigravity_credits_metric(credits):
+    """Monthly prompt-credits pool from `antigravity-usage` (local method only).
+
+    Credits are the binding constraint: every model can read 100% free while
+    the credit pool runs dry, so this renders first. The payload carries no
+    reset timestamp for the pool, so resets_at stays None.
+    """
+    if not isinstance(credits, dict):
+        return None
+    used = credits.get("usedPercentage")
+    if used is None and credits.get("remainingPercentage") is not None:
+        try:
+            used = 1.0 - float(credits.get("remainingPercentage"))
+        except (TypeError, ValueError):
+            return None
+    try:
+        used = float(used)
+    except (TypeError, ValueError):
+        return None
+    return {"label": "cr", "used_pct": max(0, min(100, round(used * 100))), "resets_at": None}
+
+
 def _map_antigravity_snapshot(snapshot):
     """Map an `antigravity-usage quota --json` snapshot into per-model-family
     compact metrics (models[].remainingPercentage is a 0..1 fraction).
@@ -1369,10 +1391,13 @@ def _map_antigravity_snapshot(snapshot):
             and (existing["resets_at"] is None or reset < existing["resets_at"])
         ):
             groups[family] = {"label": family, "used_pct": used_pct, "resets_at": reset}
+    credits = _antigravity_credits_metric(snapshot.get("promptCredits"))
     if not groups:
-        return None
+        return [credits] if credits else None
     ordered = sorted(groups, key=lambda name: (_ANTIGRAVITY_FAMILY_ORDER.get(name, 99), name))
     metrics = [groups[name] for name in ordered]
+    if credits:
+        metrics.insert(0, credits)
     return metrics or None
 
 
