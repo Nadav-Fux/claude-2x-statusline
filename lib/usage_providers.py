@@ -23,6 +23,9 @@ PROVIDERS = {
 
 LOCAL_CACHE_TTL = 45
 CODEX_ROLLOUT_SCAN_LIMIT = 40
+# A Codex plan the owner stopped using ages out of the surfaced list naturally:
+# only plans whose newest snapshot is at most this old appear in ``all_plans``.
+CODEX_PLAN_MAX_AGE_SECONDS = 7 * 86400
 GLM_CACHE_TTL = 60
 EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
@@ -331,6 +334,39 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
     display = "compact" if record.get("display") == "compact" else "bars"
     stale_seconds = record.get("stale_seconds")
     stale = stale_seconds is not None and _number_or_zero(stale_seconds) > 600
+
+    # Codex surfaces EVERY detected plan (free + paid). When the record carries an
+    # ``all_plans`` list, render one row per plan — each formatted exactly like a
+    # single Codex row (label, plan chip, windows/bars, reset, stale marker) — via
+    # the same sub_rows seam the engines already iterate. Absent/empty all_plans
+    # falls back to the single record below, so old caches keep rendering one line.
+    all_plans = record.get("all_plans")
+    if isinstance(all_plans, list) and all_plans:
+        sub_rows = []
+        for plan_record in all_plans:
+            sub = format_provider_row_parts(
+                plan_record, now_sec, label_width, format_duration, format_clock
+            )
+            if sub is None:
+                continue
+            nested = sub.get("sub_rows")
+            if isinstance(nested, list) and nested:
+                sub_rows.extend(nested)
+            else:
+                sub_rows.append(sub)
+        if len(sub_rows) == 1:
+            return sub_rows[0]
+        if sub_rows:
+            multi = {
+                "label": label,
+                "display": "codex_multi",
+                "parts": parts,
+                "sub_rows": sub_rows,
+                "stale": stale,
+                "stale_text": " ·stale" if stale else "",
+            }
+            multi["text"] = "\n".join(sub["text"] for sub in sub_rows)
+            return multi
 
     # Antigravity per-model two-row layout: when the record carries metrics_5h /
     # metrics_weekly lists (Opus/Pro/Flash), emit two compact rows \u2014 a 5-hour row
@@ -680,15 +716,51 @@ def _select_codex_snapshot(ordered, config):
     return ordered[0]
 
 
+def _codex_plan_is_fresh(record):
+    """True when a plan snapshot is recent enough to surface (<= 7 days old)."""
+    age = record.get("stale_seconds") if isinstance(record, dict) else None
+    return age is None or _number_or_zero(age) <= CODEX_PLAN_MAX_AGE_SECONDS
+
+
+def _codex_all_plans(ordered, config):
+    """Every detected plan to surface, newest-first within group.
+
+    Order: paid plans first (by recency), then free/unknown (by recency) — the
+    scan already yields one record per plan newest-first, so a stable partition
+    preserves recency within each group. Plans older than
+    ``CODEX_PLAN_MAX_AGE_SECONDS`` age out. A configured plan pin is an explicit
+    filter: only that plan's record is returned.
+    """
+    fresh = [record for record in ordered if _codex_plan_is_fresh(record)]
+    pin = _codex_plan_pin(config)
+    if pin:
+        return [r for r in fresh if str(r.get("plan") or "").strip().lower() == pin]
+
+    def _is_paid(record):
+        plan = str(record.get("plan") or "").strip().lower()
+        return bool(plan) and plan != "free"
+
+    paid = [r for r in fresh if _is_paid(r)]
+    rest = [r for r in fresh if not _is_paid(r)]
+    return paid + rest
+
+
 def get_codex_usage(config=None):
     try:
         cached = _read_cached_record("codex", LOCAL_CACHE_TTL)
         if cached:
             return cached
 
-        record = _select_codex_snapshot(_codex_rollout_snapshots(), config)
+        ordered = _codex_rollout_snapshots()
+        # A plan the owner abandoned >7 days ago no longer competes for selection
+        # (it has aged out); when every plan is stale, keep the legacy behavior of
+        # still surfacing the best of them rather than vanishing.
+        fresh = [record for record in ordered if _codex_plan_is_fresh(record)]
+        record = _select_codex_snapshot(fresh or ordered, config)
         if record is None:
             return unavailable("codex")
+        record = dict(record)
+        record["all_plans"] = _codex_all_plans(ordered, config)
         _write_cached_record("codex", record)
         return record
     except Exception:

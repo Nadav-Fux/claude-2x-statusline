@@ -97,9 +97,21 @@ def test_codex_prefers_paid_plan_over_newer_free(tmp_path, monkeypatch):
     # stale reflects the SELECTED (team) snapshot's file age, not the newest file.
     assert record["stale_seconds"] >= 3600
 
+    # all_plans surfaces BOTH detected plans: paid (team) first, free second with
+    # its own 30d window. Selection/top-level shape is unchanged for old readers.
+    all_plans = record["all_plans"]
+    assert [p["plan"] for p in all_plans] == ["team", "free"]
+    assert all_plans[0]["five_hour"]["used_pct"] == 100
+    assert all_plans[1]["five_hour"]["label"] == "30d"
+
+    # The row now renders one line per plan (via sub_rows), each exactly like a
+    # single Codex row. First = team (5h/7d), second = free (30d).
     row = providers.format_provider_row_parts(record, now, label_width=5)
-    assert "5h" in row["text"] and "100%" in row["text"]
-    assert "7d" in row["text"] and "84%" in row["text"]
+    sub_texts = [sub["text"] for sub in row["sub_rows"]]
+    assert len(sub_texts) == 2
+    assert "team" in sub_texts[0] and "5h" in sub_texts[0] and "100%" in sub_texts[0]
+    assert "7d" in sub_texts[0] and "84%" in sub_texts[0]
+    assert "free" in sub_texts[1] and "30d" in sub_texts[1] and "6%" in sub_texts[1]
 
 
 def test_codex_windowed_snapshot_beats_newer_tokens_only_same_plan(tmp_path, monkeypatch):
@@ -145,6 +157,54 @@ def test_codex_plan_pin_selects_free(tmp_path, monkeypatch):
     assert record["five_hour"]["used_pct"] == 6
     assert record["five_hour"]["label"] == "30d"
     assert record["weekly"] is None
+    # A pin is an explicit filter: all_plans holds ONLY the pinned plan's record.
+    assert [p["plan"] for p in record["all_plans"]] == ["free"]
+    assert record["all_plans"][0]["five_hour"]["label"] == "30d"
+
+
+def test_codex_all_plans_ages_out_stale_team(tmp_path, monkeypatch):
+    # The owner switched off team >7 days ago (stale snapshot); free is current.
+    # The stale team plan ages out of all_plans, and — no fresh paid plan left —
+    # selection falls back through the unchanged rules to the newest overall (free).
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [
+            ("team", "codex_rollout_team_snapshot.jsonl", now - 8 * 86400),
+            ("free", "codex_rollout_token_count_30d.jsonl", now - 60),
+        ],
+    )
+
+    record = providers.get_codex_usage({})
+
+    assert record["plan"] == "free"
+    assert record["five_hour"]["label"] == "30d"
+    assert [p["plan"] for p in record["all_plans"]] == ["free"]
+
+
+def test_codex_all_plans_renders_one_row_per_plan(tmp_path, monkeypatch):
+    # Engine-level seam: format_provider_row_parts on a record carrying all_plans
+    # of 2 yields two rendered rows (sub_rows) — team (5h) then free (30d).
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    team = providers.parse_codex_token_count_line(
+        (FIXTURES / "codex_rollout_team_snapshot.jsonl").read_text(encoding="utf-8").strip()
+    )
+    free = providers.parse_codex_token_count_line(
+        (FIXTURES / "codex_rollout_token_count_30d.jsonl").read_text(encoding="utf-8").strip()
+    )
+    record = dict(team)
+    record["all_plans"] = [team, free]
+
+    row = providers.format_provider_row_parts(record, 1_000, label_width=5)
+    texts = [sub["text"] for sub in row["sub_rows"]]
+    assert len(texts) == 2
+    assert "team" in texts[0] and "5h" in texts[0]
+    assert "free" in texts[1] and "30d" in texts[1]
+    # Absent all_plans still renders the single record as one row (old caches).
+    single = providers.format_provider_row_parts(team, 1_000, label_width=5)
+    assert single.get("sub_rows") is None
+    assert "team" in single["text"] and "5h" in single["text"]
 
 
 def test_codex_only_free_selected_unchanged(tmp_path, monkeypatch):
