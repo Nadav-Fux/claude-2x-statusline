@@ -1459,65 +1459,44 @@ def _find_antigravity_windows(value, path_parts=None):
     return found
 
 
-_ANTIGRAVITY_FAMILY_ORDER = {"Gemini": 0, "Opus": 1, "Sonnet": 2, "GPT": 3}
+_ANTIGRAVITY_POOL_ORDER = {"Gemini": 0, "Claude+GPT": 1}
 
 
-def _antigravity_model_family(model):
-    """Classify one `antigravity-usage` models[] entry into a display family.
+def _antigravity_pool(model):
+    """Classify one `antigravity-usage` models[] entry into Antigravity's real
+    quota pool.
 
-    Known families (Gemini/Opus/Sonnet/GPT) are detected from the label/modelId
-    text; anything else falls back to the label's first word (capitalized) so a
-    future Antigravity lineup change is grouped instead of silently dropped.
-    This also keeps old lineups (bare "Flash"/"Pro" labels) working: they don't
-    match a known keyword, so they fall back to their own first word.
+    Antigravity's actual quota structure is TWO pools that each share a single
+    5-hour + weekly limit: "Gemini Models" and "Claude and GPT models" (Opus,
+    Sonnet, and GPT all share ONE pool — they are not independent). Detection is
+    by label/modelId keyword: "gemini", "flash", or "pro" land in the Gemini
+    pool (the flash/pro terms keep old bare-label lineups, e.g. a bare "Flash"
+    or "Pro" label with no "Gemini" prefix, in the right pool); everything else
+    falls into the Claude+GPT pool.
     """
     label = str((model or {}).get("label") or "").strip()
     model_id = str((model or {}).get("modelId") or "").strip()
     hint = f"{label} {model_id}".lower()
-    if "gemini" in hint:
+    if "gemini" in hint or "flash" in hint or "pro" in hint:
         return "Gemini"
-    if "opus" in hint:
-        return "Opus"
-    if "sonnet" in hint:
-        return "Sonnet"
-    if "gpt" in hint:
-        return "GPT"
-    basis = label or model_id
-    words = basis.split()
-    return words[0].capitalize() if words else "Model"
-
-
-def _antigravity_credits_metric(credits):
-    """Monthly prompt-credits pool from `antigravity-usage` (local method only).
-
-    Credits are the binding constraint: every model can read 100% free while
-    the credit pool runs dry, so this renders first. The payload carries no
-    reset timestamp for the pool, so resets_at stays None.
-    """
-    if not isinstance(credits, dict):
-        return None
-    used = credits.get("usedPercentage")
-    if used is None and credits.get("remainingPercentage") is not None:
-        try:
-            used = 1.0 - float(credits.get("remainingPercentage"))
-        except (TypeError, ValueError):
-            return None
-    try:
-        used = float(used)
-    except (TypeError, ValueError):
-        return None
-    return {"label": "credits", "used_pct": max(0, min(100, round(used * 100))), "resets_at": None}
+    return "Claude+GPT"
 
 
 def _map_antigravity_snapshot(snapshot):
-    """Map an `antigravity-usage quota --json` snapshot into per-model-family
-    compact metrics (models[].remainingPercentage is a 0..1 fraction).
+    """Map an `antigravity-usage quota --json` snapshot into Antigravity's two
+    real quota pools (models[].remainingPercentage is a 0..1 fraction).
 
-    Models are grouped dynamically by family (Gemini/Opus/Sonnet/GPT/...) rather
-    than a hardcoded whitelist, so lineup changes (e.g. GPT-OSS, Claude Sonnet)
-    are never dropped. Within a group, used_pct is the MAX used_pct across member
-    models (the most-constrained variant); resets_at is that member's resetTime,
-    or the earliest one among members tied on used_pct.
+    models[].remainingPercentage measures only the 5-hour dimension of each
+    pool (the CLI's raw quotaInfo carries just remainingFraction + resetTime,
+    and every resetTime observed is a ~5h boundary); weekly data is not
+    obtainable from this CLI, so these metrics stay 5h-only and no weekly
+    figure is fabricated.
+
+    Within a pool, used_pct is the MAX used_pct across member models (the
+    worst case — equivalent to the pool's min remaining, matching the CLI's
+    own --all pooling behavior); resets_at is that member's resetTime, or the
+    earliest one among members tied on used_pct. Order: Gemini first, then
+    Claude+GPT.
     """
     if not isinstance(snapshot, dict):
         return None
@@ -1530,25 +1509,21 @@ def _map_antigravity_snapshot(snapshot):
             frac = float(m.get("remainingPercentage"))
         except (TypeError, ValueError):
             continue
-        family = _antigravity_model_family(m)
+        pool = _antigravity_pool(m)
         used_pct = max(0, min(100, round((1 - frac) * 100)))
         reset = _parse_iso_seconds(m.get("resetTime"))
         reset = int(reset) if reset else None
-        existing = groups.get(family)
+        existing = groups.get(pool)
         if existing is None or used_pct > existing["used_pct"] or (
             used_pct == existing["used_pct"]
             and reset is not None
             and (existing["resets_at"] is None or reset < existing["resets_at"])
         ):
-            groups[family] = {"label": family, "used_pct": used_pct, "resets_at": reset}
-    credits = _antigravity_credits_metric(snapshot.get("promptCredits"))
+            groups[pool] = {"label": pool, "used_pct": used_pct, "resets_at": reset}
     if not groups:
-        return [credits] if credits else None
-    ordered = sorted(groups, key=lambda name: (_ANTIGRAVITY_FAMILY_ORDER.get(name, 99), name))
-    metrics = [groups[name] for name in ordered]
-    if credits:
-        metrics.insert(0, credits)
-    return metrics or None
+        return None
+    ordered = sorted(groups, key=lambda name: _ANTIGRAVITY_POOL_ORDER.get(name, 99))
+    return [groups[name] for name in ordered]
 
 
 def get_antigravity_usage(config=None):

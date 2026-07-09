@@ -440,11 +440,12 @@ def test_antigravity_model_parser_maps_model_group_metrics():
     assert providers.parse_antigravity_models({"hello": "world"}) is None
 
 
-def test_antigravity_cli_snapshot_groups_current_lineup_by_family():
+def test_antigravity_cli_snapshot_groups_current_lineup_into_two_pools():
     """Real `antigravity-usage quota --json` shape: 8 models across the current
-    Gemini/Claude/GPT-OSS lineup. Groups must be dynamic by family (not the old
-    hardcoded Flash/Pro/Opus trio) so GPT-OSS and Claude Sonnet are never dropped,
-    used_pct is the MAX (most-constrained) member per family, and resets_at picks
+    Gemini/Claude/GPT-OSS lineup. Antigravity's real quota structure is TWO
+    pools ("Gemini Models" and "Claude and GPT models") that each share ONE
+    5-hour + weekly limit — Opus/Sonnet/GPT are NOT independent pools. Within a
+    pool, used_pct is the MAX (most-constrained) member, and resets_at picks
     the earliest resetTime among members tied on that max.
     """
     snapshot = json.loads((FIXTURES / "antigravity_quota_response.json").read_text(encoding="utf-8"))
@@ -453,18 +454,17 @@ def test_antigravity_cli_snapshot_groups_current_lineup_by_family():
 
     assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [
         ("Gemini", 60),
-        ("Opus", 90),
-        ("Sonnet", 45),
-        ("GPT", 3),
+        ("Claude+GPT", 90),
     ]
     # Gemini's max (60%) is tied between "Flash (High)" and "Pro (High)"; the
     # earlier of their two resetTimes wins ("Pro (High)" resets at noon UTC).
-    assert [metric["resets_at"] for metric in metrics] == [1783598400, 1783627200, 1783648800, 1783587600]
+    # Claude+GPT's max (90%) is "Claude Opus 4.6 (Thinking)" alone, no tie.
+    assert [metric["resets_at"] for metric in metrics] == [1783598400, 1783627200]
 
     record = providers.unavailable("antigravity")
     record.update({"available": True, "label": "AGY", "display": "compact", "metrics": metrics})
     row = providers.format_provider_row_parts(record, 1_000)
-    for label, pct in (("Gemini", 60), ("Opus", 90), ("Sonnet", 45), ("GPT", 3)):
+    for label, pct in (("Gemini", 60), ("Claude+GPT", 90)):
         assert f"{label} {pct}%" in row["text"]
 
 
@@ -486,51 +486,20 @@ def test_antigravity_cli_snapshot_skips_autocomplete_only_models():
     assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Gemini", 30)]
 
 
-def test_antigravity_cli_snapshot_old_lineup_falls_back_to_first_word():
+def test_antigravity_cli_snapshot_old_lineup_lands_in_gemini_pool():
     """Backward compatibility: if the CLI ever reverts to the old bare
-    Flash/Pro/Opus labels (no "Gemini" prefix), the family rules must still
-    produce sensible, non-dropped groups via the first-word fallback."""
+    Flash/Pro labels (no "Gemini" prefix), the flash/pro keyword match must
+    still route them into the Gemini pool instead of a spurious own pool."""
     snapshot = {
         "models": [
             {"label": "Flash", "modelId": "flash", "remainingPercentage": 0.8},
             {"label": "Pro", "modelId": "pro", "remainingPercentage": 0.6},
-            {"label": "Opus", "modelId": "opus", "remainingPercentage": 0.4},
         ]
     }
 
     metrics = providers._map_antigravity_snapshot(snapshot)
 
-    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [
-        ("Opus", 60),
-        ("Flash", 20),
-        ("Pro", 40),
-    ]
-
-
-def test_antigravity_cli_snapshot_prepends_prompt_credits():
-    """promptCredits is the binding constraint (models can all read 100% free
-    while the monthly pool runs dry) — it must render as the FIRST metric."""
-    snapshot = {
-        "models": [
-            {"label": "Gemini 3.5 Flash (High)", "modelId": "g35f", "remainingPercentage": 0.4,
-             "resetTime": "2026-07-10T01:27:05Z"},
-        ],
-        "promptCredits": {"available": 500, "monthly": 50000,
-                          "usedPercentage": 0.99, "remainingPercentage": 0.01},
-    }
-
-    metrics = providers._map_antigravity_snapshot(snapshot)
-
-    assert metrics[0] == {"label": "credits", "used_pct": 99, "resets_at": None}
-    assert [(metric["label"], metric["used_pct"]) for metric in metrics[1:]] == [("Gemini", 60)]
-
-
-def test_antigravity_cli_snapshot_credits_only_and_derived_from_remaining():
-    # Credits alone (no model quotas) still render; usedPercentage absent falls
-    # back to 1 - remainingPercentage; junk credits are ignored.
-    only = providers._map_antigravity_snapshot({"models": [], "promptCredits": {"remainingPercentage": 0.25}})
-    assert only == [{"label": "credits", "used_pct": 75, "resets_at": None}]
-    assert providers._map_antigravity_snapshot({"models": [], "promptCredits": {"usedPercentage": "junk"}}) is None
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Gemini", 40)]
 
 
 def test_provider_row_parts_omit_past_reset_countdown():
