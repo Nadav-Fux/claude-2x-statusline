@@ -26,6 +26,38 @@ test('codex fixture maps rate limits', () => {
   assert.equal(record.plan, 'team');
 });
 
+test('codex new-schema 30d single window', () => {
+  // New Codex CLI schema: primary is a 30-day window, secondary is null, and the
+  // wrapper carries limit_id/credits/individual_limit/rate_limit_reached_type.
+  const line = fs.readFileSync(path.join(fixtures, 'codex_rollout_token_count_30d.jsonl'), 'utf8').trim();
+
+  const record = providers.parseCodexTokenCountLine(line);
+
+  assert.equal(record.available, true);
+  assert.equal(record.five_hour.used_pct, 6);
+  assert.equal(record.five_hour.resets_at, 1786214766);
+  assert.equal(record.five_hour.label, '30d'); // 43200 minutes -> honest 30d label
+  assert.equal(record.weekly, null); // secondary null -> no weekly window
+  assert.equal(record.plan, 'free');
+
+  const row = providers.formatProviderRowParts(record, 1_000, { labelWidth: 5 });
+  const windowParts = row.parts.filter(part => part.kind === 'window');
+  assert.equal(windowParts.length, 1);
+  assert.equal(windowParts[0].label, '30d');
+  assert.equal(windowParts[0].pct, 6);
+  assert.match(row.text, /30d/);
+  assert.doesNotMatch(row.text, /7d/);
+});
+
+test('codex window label maps minutes to honest labels', () => {
+  assert.equal(providers.codexWindowLabel(300, '5h'), '5h');
+  assert.equal(providers.codexWindowLabel(10080, '7d'), '7d');
+  assert.equal(providers.codexWindowLabel(43200, '7d'), '30d');
+  assert.equal(providers.codexWindowLabel(720, '5h'), '12h');
+  assert.equal(providers.codexWindowLabel(null, '7d'), '7d');
+  assert.equal(providers.codexWindowLabel('bad', '5h'), '5h');
+});
+
 test('glm fixture maps quota limits', () => {
   const data = JSON.parse(fs.readFileSync(path.join(fixtures, 'glm_quota_response.json'), 'utf8'));
 

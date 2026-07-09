@@ -74,16 +74,21 @@ def _usage_window(used_pct, resets_at, label=None):
 
 
 def _codex_window_label(window_minutes, fallback):
+    # Honest window label from the Codex rate-limit window size. Sub-day windows
+    # read in hours ("5h"), day-or-longer windows in days ("7d", "30d"). This
+    # keeps 300->"5h", 10080->"7d", 43200->"30d" (a 30-day window must never be
+    # mislabelled "7d"). Half-up rounding matches the node twin's Math.round.
+    if window_minutes is None:
+        return fallback
     try:
         mins = float(window_minutes)
     except (TypeError, ValueError):
         return fallback
-    if mins <= 360:
-        return "5h"
-    if mins >= 10080:
-        return "7d"
-    hours = mins / 60.0
-    return f"{int(hours) if hours.is_integer() else round(hours, 1)}h"
+    if mins < 1440:
+        hours = mins / 60.0
+        return f"{int(hours) if hours.is_integer() else int(hours + 0.5)}h"
+    days = mins / 1440.0
+    return f"{int(days) if days.is_integer() else int(days + 0.5)}d"
 
 
 def _number_or_zero(value):
