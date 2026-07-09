@@ -239,6 +239,87 @@ test('codex only-free selected unchanged', () => {
   assert.equal(record.weekly, null);
 });
 
+test('healCodexRecord zeroes an elapsed window', () => {
+  // Direct unit test of the healing helper: an elapsed five_hour window (its
+  // resets_at is in the past) is provably reset — no newer rollout for this
+  // plan exists, so recorded usage since the reset is zero. The still-future
+  // weekly window is untouched.
+  const now = 1_000_000;
+  const record = {
+    provider: 'codex',
+    available: true,
+    five_hour: { used_pct: 100, resets_at: now - 100, label: '5h' },
+    weekly: { used_pct: 84, resets_at: now + 500_000, label: '7d' },
+    plan: 'team',
+  };
+
+  const healed = providers.healCodexRecord(record, now);
+
+  assert.deepEqual(healed.five_hour, { used_pct: 0, resets_at: null, label: '5h' });
+  assert.deepEqual(healed.weekly, { used_pct: 84, resets_at: now + 500_000, label: '7d' });
+  // The helper does not mutate its input.
+  assert.equal(record.five_hour.used_pct, 100);
+});
+
+test('codex getCodexUsage heals an elapsed five_hour window', () => {
+  // End-to-end (fresh build, no cache yet): the team snapshot's 5h window
+  // reset long ago (resets_at 1700000000). Absent any newer team rollout,
+  // getCodexUsage must render 0% instead of the frozen 100% snapshot.
+  const now = Date.now() / 1000;
+  const record = withCodexHome(
+    [['team', 'codex_rollout_team_elapsed.jsonl', now - 60]],
+    () => providers.getCodexUsage({}),
+  );
+
+  assert.equal(record.plan, 'team');
+  assert.deepEqual(record.five_hour, { used_pct: 0, resets_at: null, label: '5h' });
+  assert.equal(record.weekly.used_pct, 84);
+  assert.equal(record.weekly.resets_at, 4102444800);
+  assert.equal(record.weekly.label, '7d');
+});
+
+test('codex getCodexUsage heals a cache hit', () => {
+  // A cache written while the window still looked hot (or written by an older
+  // binary, pre-healing) must still render healed when read back within TTL:
+  // the elapsed-window proof depends on wall-clock time at READ time, not at
+  // write time.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-codex-cache-'));
+  const oldHome = process.env.HOME;
+  const oldUserProfile = process.env.USERPROFILE;
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    const cacheDir = path.join(home, '.claude');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'statusline-usage-codex.json'),
+      JSON.stringify({
+        cached_at: Date.now() / 1000,
+        record: {
+          provider: 'codex',
+          label: 'Codex',
+          available: true,
+          five_hour: { used_pct: 100, resets_at: 1700000000, label: '5h' },
+          weekly: { used_pct: 84, resets_at: 4102444800, label: '7d' },
+          plan: 'team',
+          tokens: null,
+          stale_seconds: 0,
+        },
+      }),
+    );
+
+    const record = providers.getCodexUsage({});
+
+    assert.deepEqual(record.five_hour, { used_pct: 0, resets_at: null, label: '5h' });
+    assert.equal(record.weekly.used_pct, 84);
+    assert.equal(record.weekly.resets_at, 4102444800);
+  } finally {
+    if (oldHome == null) delete process.env.HOME; else process.env.HOME = oldHome;
+    if (oldUserProfile == null) delete process.env.USERPROFILE; else process.env.USERPROFILE = oldUserProfile;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('glm fixture maps quota limits', () => {
   const data = JSON.parse(fs.readFileSync(path.join(fixtures, 'glm_quota_response.json'), 'utf8'));
 

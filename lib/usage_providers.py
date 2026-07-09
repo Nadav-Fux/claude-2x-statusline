@@ -762,11 +762,57 @@ def _codex_all_plans(ordered, config):
     return paid + rest
 
 
+def _heal_codex_window(window, now):
+    """A codex window whose reset time has already passed is provably stale.
+
+    Codex usage comes only from local rollout logs, so a snapshot freezes
+    between sessions. Once ``resets_at`` is in the past, the window has
+    demonstrably reset, and the absence of any newer rollout for this plan
+    proves zero recorded usage since — so render 0%, not a frozen (often
+    100%) reading, instead of misleading the owner into thinking the window
+    is still hot.
+    """
+    if not isinstance(window, dict):
+        return window
+    resets_at = window.get("resets_at")
+    if isinstance(resets_at, bool) or not isinstance(resets_at, (int, float)):
+        return window
+    if resets_at > now:
+        return window
+    healed = {"used_pct": 0.0, "resets_at": None}
+    label = window.get("label")
+    if label:
+        healed["label"] = label
+    return healed
+
+
+def _heal_codex_record(record, now=None):
+    """Self-heal any elapsed five_hour/weekly window on a single codex record.
+
+    Applied to freshly-built records (before caching) AND to cache hits (after
+    ``_read_cached_record`` returns), so a cached record read up to
+    ``LOCAL_CACHE_TTL`` seconds later still renders healed. Also walks
+    ``all_plans`` so every per-plan row gets the same treatment. Idempotent and
+    cheap, so calling it twice on the same record is harmless.
+    """
+    if not isinstance(record, dict):
+        return record
+    now = time.time() if now is None else now
+    healed = dict(record)
+    for key in ("five_hour", "weekly"):
+        if key in healed:
+            healed[key] = _heal_codex_window(healed.get(key), now)
+    all_plans = healed.get("all_plans")
+    if isinstance(all_plans, list):
+        healed["all_plans"] = [_heal_codex_record(r, now) for r in all_plans]
+    return healed
+
+
 def get_codex_usage(config=None):
     try:
         cached = _read_cached_record("codex", LOCAL_CACHE_TTL)
         if cached:
-            return cached
+            return _heal_codex_record(cached)
 
         ordered = _codex_rollout_snapshots()
         # A plan the owner abandoned >7 days ago no longer competes for selection
@@ -783,6 +829,7 @@ def get_codex_usage(config=None):
         # subscription per row.
         if _codex_show_all_plans(config):
             record["all_plans"] = _codex_all_plans(ordered, config)
+        record = _heal_codex_record(record)
         _write_cached_record("codex", record)
         return record
     except Exception:

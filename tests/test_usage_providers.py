@@ -242,6 +242,82 @@ def test_codex_only_free_selected_unchanged(tmp_path, monkeypatch):
     assert record["weekly"] is None
 
 
+def test_heal_codex_record_zeroes_an_elapsed_window():
+    # Direct unit test of the healing helper: an elapsed five_hour window (its
+    # resets_at is in the past) is provably reset — no newer rollout for this
+    # plan exists, so recorded usage since the reset is zero. The still-future
+    # weekly window is untouched.
+    now = 1_000_000
+    record = {
+        "provider": "codex",
+        "available": True,
+        "five_hour": {"used_pct": 100, "resets_at": now - 100, "label": "5h"},
+        "weekly": {"used_pct": 84, "resets_at": now + 500_000, "label": "7d"},
+        "plan": "team",
+    }
+
+    healed = providers._heal_codex_record(record, now)
+
+    assert healed["five_hour"] == {"used_pct": 0.0, "resets_at": None, "label": "5h"}
+    assert healed["weekly"] == {"used_pct": 84, "resets_at": now + 500_000, "label": "7d"}
+    # The helper does not mutate its input.
+    assert record["five_hour"]["used_pct"] == 100
+
+
+def test_codex_get_usage_heals_an_elapsed_five_hour_window(tmp_path, monkeypatch):
+    # End-to-end (fresh build, no cache yet): the team snapshot's 5h window
+    # reset long ago (resets_at 1700000000). Absent any newer team rollout,
+    # get_codex_usage must render 0% instead of the frozen 100% snapshot.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    now = time.time()
+    _install_codex_rollouts(
+        tmp_path,
+        [("team", "codex_rollout_team_elapsed.jsonl", now - 60)],
+    )
+
+    record = providers.get_codex_usage({})
+
+    assert record["plan"] == "team"
+    assert record["five_hour"] == {"used_pct": 0.0, "resets_at": None, "label": "5h"}
+    assert record["weekly"]["used_pct"] == 84
+    assert record["weekly"]["resets_at"] == 4102444800
+    assert record["weekly"]["label"] == "7d"
+
+
+def test_codex_get_usage_heals_a_cache_hit(tmp_path, monkeypatch):
+    # A cache written while the window still looked hot (or written by an older
+    # binary, pre-healing) must still render healed when read back within TTL:
+    # the elapsed-window proof depends on wall-clock time at READ time, not at
+    # write time.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    cache_dir = tmp_path / ".claude"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "statusline-usage-codex.json").write_text(
+        json.dumps(
+            {
+                "cached_at": time.time(),
+                "record": {
+                    "provider": "codex",
+                    "label": "Codex",
+                    "available": True,
+                    "five_hour": {"used_pct": 100, "resets_at": 1700000000, "label": "5h"},
+                    "weekly": {"used_pct": 84, "resets_at": 4102444800, "label": "7d"},
+                    "plan": "team",
+                    "tokens": None,
+                    "stale_seconds": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = providers.get_codex_usage({})
+
+    assert record["five_hour"] == {"used_pct": 0.0, "resets_at": None, "label": "5h"}
+    assert record["weekly"]["used_pct"] == 84
+    assert record["weekly"]["resets_at"] == 4102444800
+
+
 def test_glm_fixture_maps_quota_limits():
     data = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
 
