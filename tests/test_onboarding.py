@@ -56,7 +56,9 @@ def test_migrate_respects_enabled_true_externals_in_canonical_order():
         }
     }
     engine.migrate_providers(config)
-    assert config["providers"]["selected"] == ["claude", "codex", "glm", "antigravity"]
+    # Canonical order is codex -> droid -> antigravity -> glm -> copilot (GLM +
+    # Copilot sit last since the cockpit merges them into one combined row).
+    assert config["providers"]["selected"] == ["claude", "codex", "antigravity", "glm"]
 
 
 def test_migrate_ignores_top_level_enabled_and_uses_per_provider_flag():

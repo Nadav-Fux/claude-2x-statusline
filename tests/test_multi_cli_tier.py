@@ -382,3 +382,181 @@ def test_python_multi_cli_tier_clean_line1_external_rows_and_bottom_banner(tmp_p
     # Reset is now an absolute end-time clock (\u27f3 5:20am / \u27f3 13/1 7:06pm), not a
     # duration (\u27f3 3h 58m). Codex's weekly window resets far out -> date + time.
     assert re.search(r"\u27f3 \d+/\d+ \d", codex_line)
+
+
+# \u2500\u2500 GLM + Copilot combined bottom row \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+def _write_copilot_usage_cache(home: Path) -> None:
+    (home / ".claude" / "statusline-usage-copilot.json").write_text(
+        json.dumps(
+            {
+                "cached_at": time.time(),
+                "record": {
+                    "provider": "copilot",
+                    "label": "Copilot",
+                    "available": True,
+                    "display": "bars",
+                    "five_hour": {"label": "2152 left", "used_pct": 28, "resets_at": 4_075_000_000},
+                    "plan": "business",
+                    "source": "gh-billing",
+                    "used": 848.0,
+                    "cap": 3000,
+                    "pool": 0,
+                    "remaining": 2152.0,
+                    "stale_seconds": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_antigravity_usage_cache(home: Path) -> None:
+    # source="quota-summary" is required for get_antigravity_usage to return this
+    # cache directly (skipping the antigravity-usage CLI subprocess entirely) —
+    # see lib/usage_providers.get_antigravity_usage step 1. Without it the reader
+    # falls through to actually invoking the real `antigravity-usage` binary if
+    # one happens to be installed on the host, which would make this test
+    # non-hermetic.
+    (home / ".claude" / "statusline-usage-antigravity.json").write_text(
+        json.dumps(
+            {
+                "cached_at": time.time(),
+                "record": {
+                    "provider": "antigravity",
+                    "label": "AGY",
+                    "available": True,
+                    "display": "bars",
+                    "five_hour": {"label": "5h", "used_pct": 10, "resets_at": 4_076_000_000},
+                    "weekly": {"label": "wk", "used_pct": 22, "resets_at": 4_077_000_000},
+                    "plan": "gemini",
+                    "source": "quota-summary",
+                    "stale_seconds": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_python_multi_cli_glm_and_copilot_combine_into_one_bottom_row_after_codex_and_antigravity(tmp_path):
+    """Provider row order is now codex -> antigravity -> (glm+copilot combined),
+    with GLM + Copilot sharing ONE row at the bottom (where Copilot alone used
+    to sit)."""
+    home = tmp_path / "home"
+    _write_config(
+        home,
+        {
+            "tier": "multi-cli",
+            "schedule_url": "",
+            "schedule_cache_hours": 999,
+            "external_providers": {
+                "enabled": True,
+                "codex": {"enabled": True},
+                "glm": {"enabled": True, "api_key": "test-key"},
+                "antigravity": {"enabled": True},
+                "copilot": {"enabled": True},
+                "droid": {"enabled": False},
+            },
+        },
+    )
+    _write_cached_schedule(home)
+    _write_usage_cache(home)
+    _write_external_usage_caches(home)
+    _write_copilot_usage_cache(home)
+    _write_antigravity_usage_cache(home)
+
+    proc = _run_engine(home, _stdin())
+
+    assert proc.returncode == 0, proc.stderr
+    plain_lines = _strip_ansi(proc.stdout).splitlines()
+
+    codex_idx = next(i for i, line in enumerate(plain_lines) if "Codex" in line)
+    agy_idx = next(i for i, line in enumerate(plain_lines) if "AGY" in line)
+    combined_idx = next(i for i, line in enumerate(plain_lines) if "GLM" in line and "Copilot" in line)
+    assert codex_idx < agy_idx < combined_idx
+
+    # Exactly one row carries GLM, and it's the same row that carries Copilot.
+    # (Filtering on "tok" excludes any unrelated "GLM" substring match, e.g. a
+    # foreign-gateway note when ANTHROPIC_BASE_URL points at z.ai.)
+    assert sum(1 for line in plain_lines if "GLM" in line and "tok" in line) == 1
+    assert sum(1 for line in plain_lines if "Copilot" in line) == 1
+
+    combined_line = plain_lines[combined_idx]
+    # GLM first, then Copilot, joined by the dim ' \u00b7 ' separator style already
+    # used between metrics inside a compact row.
+    assert re.search(r"GLM.*\u00b7\s*Copilot", combined_line)
+    assert "5h 3%" in combined_line and "tok 9%" in combined_line
+    assert "2152 left 28%" in combined_line
+    # Copilot renders COMPACT inside the combined row (no bar), even though its
+    # native form has one.
+    assert "\u25b0" not in combined_line and "\u25b1" not in combined_line
+
+
+def test_python_multi_cli_glm_only_renders_alone_compact_in_bottom_slot(tmp_path):
+    """When Copilot isn't enabled, GLM renders alone exactly like its normal
+    compact row \u2014 no combining, no bar."""
+    home = tmp_path / "home"
+    _write_config(
+        home,
+        {
+            "tier": "multi-cli",
+            "schedule_url": "",
+            "schedule_cache_hours": 999,
+            "external_providers": {
+                "enabled": True,
+                "codex": {"enabled": False},
+                "glm": {"enabled": True, "api_key": "test-key"},
+                "droid": {"enabled": False},
+            },
+        },
+    )
+    _write_cached_schedule(home)
+    _write_usage_cache(home)
+    _write_external_usage_caches(home)
+
+    proc = _run_engine(home, _stdin())
+
+    assert proc.returncode == 0, proc.stderr
+    plain_lines = _strip_ansi(proc.stdout).splitlines()
+    # Filtering on "tok" picks the real GLM row, not a foreign-gateway note
+    # (ANTHROPIC_BASE_URL points at z.ai, which also renders the text "GLM").
+    glm_line = next((line for line in plain_lines if "GLM" in line and "tok" in line), "")
+    assert glm_line
+    assert "Copilot" not in glm_line
+    assert "5h 3%" in glm_line and "tok 9%" in glm_line
+    assert "\u25b0" not in glm_line and "\u25b1" not in glm_line
+
+
+def test_python_multi_cli_copilot_only_renders_alone_with_bar_in_bottom_slot(tmp_path):
+    """When GLM isn't enabled, Copilot renders alone in its own native bar
+    form \u2014 no combining, no forced-compact."""
+    home = tmp_path / "home"
+    _write_config(
+        home,
+        {
+            "tier": "multi-cli",
+            "schedule_url": "",
+            "schedule_cache_hours": 999,
+            "external_providers": {
+                "enabled": True,
+                "codex": {"enabled": False},
+                "glm": {"enabled": False},
+                "copilot": {"enabled": True},
+                "droid": {"enabled": False},
+            },
+        },
+    )
+    _write_cached_schedule(home)
+    _write_usage_cache(home)
+    _write_copilot_usage_cache(home)
+
+    proc = _run_engine(home, _stdin())
+
+    assert proc.returncode == 0, proc.stderr
+    plain_lines = _strip_ansi(proc.stdout).splitlines()
+    copilot_line = next((line for line in plain_lines if "Copilot" in line), "")
+    assert copilot_line
+    assert "GLM" not in copilot_line
+    assert "2152 left" in copilot_line
+    assert "\u25b0" in copilot_line or "\u25b1" in copilot_line

@@ -18,9 +18,11 @@ from pathlib import Path
 
 
 # Canonical external-provider order (claude is the implicit rate-limit line, not
-# an external row). Kept in sync with engines/python-engine.py
-# _EXTERNAL_PROVIDER_ORDER.
-_EXTERNAL_PROVIDER_ORDER = ("codex", "glm", "droid", "antigravity", "copilot")
+# an external row). GLM and Copilot sit adjacent at the end: the multi-cli/full
+# cockpit merges them into ONE combined bottom row whenever both are
+# enabled/selected. Kept in sync with lib/usage_providers.EXTERNAL_PROVIDER_ORDER
+# and engines/python-engine.py _EXTERNAL_PROVIDER_ORDER.
+_EXTERNAL_PROVIDER_ORDER = ("codex", "droid", "antigravity", "glm", "copilot")
 _ALL_PROVIDERS = ("claude",) + _EXTERNAL_PROVIDER_ORDER
 
 

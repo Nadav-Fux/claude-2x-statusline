@@ -430,6 +430,86 @@ test('compact provider row parts render metrics without bars while bars records 
   assert.match(bars.text, /[\u25b0\u25b1]/);
 });
 
+// \u2500\u2500 formatCombinedGlmCopilotRow (GLM + Copilot merged bottom row) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+const COMBINE_GLM_RECORD = {
+  provider: 'glm',
+  label: 'GLM',
+  available: true,
+  display: 'compact',
+  metrics: [
+    { label: '5h', used_pct: 0, resets_at: 1_000 + 39 * 60 },
+    { label: 'tok', used_pct: 8, resets_at: 1_000 + 90 * 60 },
+  ],
+  plan: 'lite',
+  stale_seconds: 0,
+};
+
+const COMBINE_COPILOT_RECORD = {
+  provider: 'copilot',
+  label: 'Copilot',
+  available: true,
+  display: 'bars',
+  five_hour: { label: '2152 left', used_pct: 28, resets_at: 1_000 + 200 * 60 },
+  plan: 'business',
+  stale_seconds: 0,
+};
+
+test('external provider order places GLM and Copilot adjacent at the end', () => {
+  // codex -> droid -> antigravity -> (glm, copilot) \u2014 GLM and Copilot sit last
+  // and adjacent because the cockpit merges them into one combined row.
+  assert.deepEqual(providers.EXTERNAL_PROVIDER_ORDER, ['codex', 'droid', 'antigravity', 'glm', 'copilot']);
+});
+
+test('combined GLM+Copilot row joins both GLM-first with the dim separator style', () => {
+  const row = providers.formatCombinedGlmCopilotRow(COMBINE_GLM_RECORD, COMBINE_COPILOT_RECORD, 1_000);
+
+  assert.equal(row.display, 'combined');
+  assert.equal(row.segments.length, 2);
+  assert.equal(row.segments[0].display, 'compact'); // GLM renders unchanged
+  assert.equal(row.segments[1].display, 'compact'); // Copilot forced compact here
+
+  const { text } = row;
+  assert.ok(text.indexOf('GLM') < text.indexOf('Copilot'));
+  assert.match(text, /GLM lite  5h 0% \u00b7 tok 8%/);
+  assert.match(text, /Copilot business  2152 left 28%/);
+  // GLM and Copilot are joined with the same plain ' \u00b7 ' separator style
+  // already used between metrics inside a single compact row.
+  assert.match(text, / \u00b7 Copilot/);
+  // Copilot renders COMPACT here \u2014 no bar \u2014 even though its native form has one.
+  assert.doesNotMatch(text, /[\u25b0\u25b1]/);
+});
+
+test('combined GLM+Copilot row: GLM only falls back to its native compact row', () => {
+  const row = providers.formatCombinedGlmCopilotRow(COMBINE_GLM_RECORD, null, 1_000);
+  assert.equal(row.display, 'compact');
+  assert.equal(row.segments, undefined);
+  assert.match(row.text, /5h 0%/);
+  assert.match(row.text, /tok 8%/);
+});
+
+test('combined GLM+Copilot row: Copilot only falls back to its native bars row', () => {
+  const row = providers.formatCombinedGlmCopilotRow(null, COMBINE_COPILOT_RECORD, 1_000);
+  assert.equal(row.display, 'bars');
+  assert.equal(row.segments, undefined);
+  assert.match(row.text, /2152 left/);
+  assert.match(row.text, /[\u25b0\u25b1]/);
+});
+
+test('combined GLM+Copilot row: unavailable Copilot falls back to GLM alone', () => {
+  const row = providers.formatCombinedGlmCopilotRow(COMBINE_GLM_RECORD, providers.unavailable('copilot'), 1_000);
+  assert.equal(row.display, 'compact');
+  assert.doesNotMatch(row.text, /Copilot/);
+});
+
+test('combined GLM+Copilot row: returns null when neither is available', () => {
+  assert.equal(providers.formatCombinedGlmCopilotRow(null, null, 1_000), null);
+  assert.equal(
+    providers.formatCombinedGlmCopilotRow(providers.unavailable('glm'), providers.unavailable('copilot'), 1_000),
+    null,
+  );
+});
+
 test('provider row parts include reset countdown and stale marker', () => {
   const row = providers.formatProviderRowParts({
     provider: 'codex',

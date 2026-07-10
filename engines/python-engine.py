@@ -217,8 +217,12 @@ def build_release_notice(schedule):
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 # Canonical external-provider render order (claude is the rate-limit line, not
-# an external row, so it is not in this tuple).
-_EXTERNAL_PROVIDER_ORDER = ("codex", "glm", "droid", "antigravity", "copilot")
+# an external row, so it is not in this tuple). GLM and Copilot sit adjacent at
+# the end: the multi-cli/full cockpit merges them into ONE combined bottom row
+# (see build_external_usage_lines) whenever both are enabled/selected. Single
+# source of truth is lib/usage_providers.EXTERNAL_PROVIDER_ORDER; kept in sync
+# with lib/onboarding.py's copy and the node-engine.js/usage_providers.js twins.
+_EXTERNAL_PROVIDER_ORDER = _usage_providers.EXTERNAL_PROVIDER_ORDER
 
 
 def migrate_providers(config):
@@ -1814,6 +1818,17 @@ def _render_degraded_provider_row(provider, label_width, render_width):
 
 
 def _render_external_provider_parts(row):
+    if row and row.get("display") == "combined":
+        # GLM + Copilot merged into one bottom-slot row (see
+        # lib.usage_providers.format_combined_glm_copilot_row): render each
+        # segment through this same function and join with the same dim ' · '
+        # separator used between metrics inside a single compact row.
+        segments = [_render_external_provider_parts(segment) for segment in row.get("segments") or []]
+        segments = [segment for segment in segments if segment]
+        if not segments:
+            return ""
+        return f" {DIM}·{RST} ".join(segments)
+
     if row and row.get("display") == "compact":
         label_part = next((part for part in row.get("parts") or [] if part.get("kind") == "label"), {})
         plan = f"{DIM} {label_part.get('plan')}{RST}" if label_part.get("plan") else ""
@@ -1975,17 +1990,31 @@ def build_external_usage_lines(ctx):
         except Exception:
             pass
 
-    def _render_available(record, label_width):
+    def _rows_to_lines(row):
         out = []
-        row = _usage_providers.format_provider_row_parts(
-            record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
-        )
         if not row:
             return out
         sub_rows = row.get("sub_rows") if isinstance(row.get("sub_rows"), list) and row.get("sub_rows") else [row]
         for sub in sub_rows:
             out.append(render_dashboard_line([_render_external_provider_parts(sub)], ctx.get("render_width", 0)))
         return out
+
+    def _render_available(record, label_width):
+        row = _usage_providers.format_provider_row_parts(
+            record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
+        )
+        return _rows_to_lines(row)
+
+    def _render_available_combined(glm_record, copilot_record, label_width):
+        # GLM + Copilot share one bottom-slot row — see
+        # lib.usage_providers.format_combined_glm_copilot_row. When only one
+        # side has data it falls back to that provider's own native row (bars
+        # for Copilot, compact for GLM), so an absent/degraded partner never
+        # blanks the other's rendering.
+        row = _usage_providers.format_combined_glm_copilot_row(
+            glm_record, copilot_record, now_sec, label_width, fmt_duration, _format_clock
+        )
+        return _rows_to_lines(row)
 
     if has_selection:
         # Selection path: render every selected provider IN ORDER. A selected
@@ -2008,15 +2037,33 @@ def build_external_usage_lines(ctx):
             + [len(_provider_degraded_label(p)) for p in degraded],
             default=0,
         )
+        # GLM + Copilot combine into ONE row only when BOTH are selected AND
+        # both have usable data — selection order still decides which
+        # providers show; this only changes how two of them are laid out once
+        # both are showing. The merged row renders at whichever of the two
+        # comes first in the selection order, and the other slot is skipped.
+        combine_glm_copilot = "glm" in available_providers and "copilot" in available_providers
+        combined_rendered = False
         lines = []
         for provider in only:
-            record = record_by_provider.get(provider)
-            rendered = []
-            if record is not None:
+            if combine_glm_copilot and provider in ("glm", "copilot"):
+                if combined_rendered:
+                    continue
+                combined_rendered = True
                 try:
-                    rendered = _render_available(record, label_width)
+                    rendered = _render_available_combined(
+                        record_by_provider.get("glm"), record_by_provider.get("copilot"), label_width
+                    )
                 except Exception:
                     rendered = []
+            else:
+                record = record_by_provider.get(provider)
+                rendered = []
+                if record is not None:
+                    try:
+                        rendered = _render_available(record, label_width)
+                    except Exception:
+                        rendered = []
             if rendered:
                 lines.extend(rendered)
             elif show_unavailable:
@@ -2025,19 +2072,30 @@ def build_external_usage_lines(ctx):
                 )
         return "\n".join(lines)
 
-    # Legacy path — byte-for-byte unchanged (no providers block present).
+    # Legacy path — GLM + Copilot now combine into ONE bottom row when both are
+    # enabled and available; otherwise byte-for-byte unchanged.
     label_width = max((len(label) for _, label in candidates), default=0)
+    candidate_by_provider = {record.get("provider"): record for record, _ in candidates}
+    combine_glm_copilot = "glm" in candidate_by_provider and "copilot" in candidate_by_provider
+    combined_rendered = False
     lines = []
     for record, _ in candidates:
+        provider = record.get("provider")
         try:
-            row = _usage_providers.format_provider_row_parts(
-                record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
-            )
-            if not row:
-                continue
-            sub_rows = row.get("sub_rows") if isinstance(row.get("sub_rows"), list) and row.get("sub_rows") else [row]
-            for sub in sub_rows:
-                lines.append(render_dashboard_line([_render_external_provider_parts(sub)], ctx.get("render_width", 0)))
+            if combine_glm_copilot and provider in ("glm", "copilot"):
+                if combined_rendered:
+                    continue
+                combined_rendered = True
+                row = _usage_providers.format_combined_glm_copilot_row(
+                    candidate_by_provider.get("glm"),
+                    candidate_by_provider.get("copilot"),
+                    now_sec, label_width, fmt_duration, _format_clock,
+                )
+            else:
+                row = _usage_providers.format_provider_row_parts(
+                    record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
+                )
+            lines.extend(_rows_to_lines(row))
         except Exception:
             pass
     return "\n".join(lines)

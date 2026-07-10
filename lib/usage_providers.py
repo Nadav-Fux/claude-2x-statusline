@@ -26,6 +26,14 @@ PROVIDERS = {
     "copilot": ("Copilot", "api"),
 }
 
+# Canonical external-provider fetch/render order. GLM and Copilot sit adjacent
+# at the end because the multi-cli/full cockpit merges them into ONE combined
+# bottom row (see format_combined_glm_copilot_row) whenever both are
+# enabled/selected. Kept in sync with _EXTERNAL_PROVIDER_ORDER in
+# engines/python-engine.py + lib/onboarding.py, and the matching literal
+# iteration order in lib/usage_providers.js.
+EXTERNAL_PROVIDER_ORDER = ("codex", "droid", "antigravity", "glm", "copilot")
+
 LOCAL_CACHE_TTL = 45
 CODEX_ROLLOUT_SCAN_LIMIT = 40
 # A Codex plan the owner stopped using ages out of the surfaced list naturally:
@@ -451,6 +459,55 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
     return row
 
 
+def format_combined_glm_copilot_row(glm_record, copilot_record, now_sec=None, label_width=0, format_duration=None, format_clock=None):
+    """Merge GLM + Copilot into ONE bottom-slot row (both share the cockpit's
+    last row instead of two separate lines).
+
+    When both providers have usable data: GLM renders exactly like its normal
+    compact row, then Copilot is forced into the SAME compact formatting (label
+    + plan chip + its one metric, e.g. "2152 left 28%" \u2014 no bar) and the two
+    are joined with the same dim ' \u00b7 ' separator already used between metrics
+    inside a compact row.
+
+    When only one side has usable data, that provider renders ALONE in its own
+    native form \u2014 Copilot keeps its bar, GLM stays compact \u2014 so a
+    disabled/unavailable partner never blanks or reshapes the other's row.
+    Returns None when neither side has data.
+    """
+    glm_row = (
+        format_provider_row_parts(glm_record, now_sec, label_width, format_duration, format_clock)
+        if isinstance(glm_record, dict)
+        else None
+    )
+    copilot_row = (
+        format_provider_row_parts(copilot_record, now_sec, label_width, format_duration, format_clock)
+        if isinstance(copilot_record, dict)
+        else None
+    )
+
+    if not (glm_row and copilot_row):
+        return glm_row or copilot_row
+
+    copilot_compact_source = dict(copilot_record)
+    copilot_compact_source["display"] = "compact"
+    copilot_compact_row = (
+        format_provider_row_parts(copilot_compact_source, now_sec, label_width, format_duration, format_clock)
+        or copilot_row
+    )
+
+    segments = [glm_row, copilot_compact_row]
+    stale = bool(glm_row.get("stale") or copilot_compact_row.get("stale"))
+    row = {
+        "label": glm_row.get("label", ""),
+        "display": "combined",
+        "segments": segments,
+        "stale": stale,
+        "stale_text": glm_row.get("stale_text") or copilot_compact_row.get("stale_text") or "",
+    }
+    row["text"] = " \u00b7 ".join(segment.get("text", "") for segment in segments)
+    return row
+
+
 def _parse_iso_seconds(value):
     if not value:
         return None
@@ -537,7 +594,7 @@ def read_cached_external_usage(config, only=None):
                 return []
             providers_iter = [
                 p
-                for p in ("codex", "glm", "droid", "antigravity", "copilot")
+                for p in EXTERNAL_PROVIDER_ORDER
                 if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
             ]
 
@@ -2667,7 +2724,7 @@ def collect_external_usage(config, only=None):
             return []
         providers_iter = [
             p
-            for p in ("codex", "glm", "droid", "antigravity", "copilot")
+            for p in EXTERNAL_PROVIDER_ORDER
             if isinstance(external.get(p), dict) and external.get(p).get("enabled") is True
         ]
 

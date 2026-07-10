@@ -122,6 +122,57 @@ function writeExternalUsageCaches(home) {
   );
 }
 
+function writeCopilotUsageCache(home) {
+  fs.writeFileSync(
+    path.join(home, '.claude', 'statusline-usage-copilot.json'),
+    JSON.stringify({
+      cached_at: Date.now() / 1000,
+      record: {
+        provider: 'copilot',
+        label: 'Copilot',
+        available: true,
+        display: 'bars',
+        five_hour: { label: '2152 left', used_pct: 28, resets_at: 4_075_000_000 },
+        plan: 'business',
+        source: 'gh-billing',
+        used: 848.0,
+        cap: 3000,
+        pool: 0,
+        remaining: 2152.0,
+        stale_seconds: 0,
+      },
+    }),
+    'utf8',
+  );
+}
+
+function writeAntigravityUsageCache(home) {
+  // source: 'quota-summary' is required for getAntigravityUsage to return this
+  // cache directly (skipping the antigravity-usage CLI subprocess entirely) —
+  // see lib/usage_providers.js getAntigravityUsage step 1. Without it the
+  // reader falls through to actually invoking the real `antigravity-usage`
+  // binary if one happens to be installed on the host, which would make this
+  // test non-hermetic.
+  fs.writeFileSync(
+    path.join(home, '.claude', 'statusline-usage-antigravity.json'),
+    JSON.stringify({
+      cached_at: Date.now() / 1000,
+      record: {
+        provider: 'antigravity',
+        label: 'AGY',
+        available: true,
+        display: 'bars',
+        five_hour: { label: '5h', used_pct: 10, resets_at: 4_076_000_000 },
+        weekly: { label: 'wk', used_pct: 22, resets_at: 4_077_000_000 },
+        plan: 'gemini',
+        source: 'quota-summary',
+        stale_seconds: 0,
+      },
+    }),
+    'utf8',
+  );
+}
+
 function runNodeEngine({ input, home, env = {}, args = [] }) {
   return spawnSync(process.execPath, [nodeEnginePath, ...args], {
     cwd: repoRoot,
@@ -534,6 +585,148 @@ test('node multi-cli tier has a clean line 1, Codex+GLM rows (no Droid) and a bo
     // Reset is now an absolute end-time clock, not a duration; the weekly
     // window resets far out so it renders date + time.
     assert.match(codexLine, /\u27f3 \d+\/\d+ \d/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node multi-cli GLM+Copilot combine into one bottom row after Codex and AGY', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, {
+      tier: 'multi-cli',
+      schedule_url: '',
+      schedule_cache_hours: 999,
+      external_providers: {
+        enabled: true,
+        codex: { enabled: true },
+        glm: { enabled: true, api_key: 'test-key' },
+        antigravity: { enabled: true },
+        copilot: { enabled: true },
+        droid: { enabled: false },
+      },
+    });
+    writeCachedSchedule(home);
+    writeUsageCache(home);
+    writeExternalUsageCaches(home);
+    writeCopilotUsageCache(home);
+    writeAntigravityUsageCache(home);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const plainLines = stripAnsi(result.stdout).split(/\r?\n/);
+
+    const codexIdx = plainLines.findIndex(line => line.includes('Codex'));
+    const agyIdx = plainLines.findIndex(line => line.includes('AGY'));
+    const combinedIdx = plainLines.findIndex(line => line.includes('GLM') && line.includes('Copilot'));
+    assert.ok(codexIdx >= 0 && agyIdx >= 0 && combinedIdx >= 0, stripAnsi(result.stdout));
+    assert.ok(codexIdx < agyIdx && agyIdx < combinedIdx, stripAnsi(result.stdout));
+
+    // Exactly one row carries GLM, and it's the same row that carries Copilot.
+    assert.equal(plainLines.filter(line => line.includes('GLM') && line.includes('tok')).length, 1);
+    assert.equal(plainLines.filter(line => line.includes('Copilot')).length, 1);
+
+    const combinedLine = plainLines[combinedIdx];
+    assert.ok(combinedLine.indexOf('GLM') < combinedLine.indexOf('Copilot'));
+    assert.match(combinedLine, /5h 3%/);
+    assert.match(combinedLine, /tok 9%/);
+    assert.match(combinedLine, /2152 left 28%/);
+    // Copilot renders COMPACT inside the combined row (no bar).
+    assert.doesNotMatch(combinedLine, /[▰▱]/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node multi-cli GLM-only renders alone compact in the bottom slot', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, {
+      tier: 'multi-cli',
+      schedule_url: '',
+      schedule_cache_hours: 999,
+      external_providers: {
+        enabled: true,
+        codex: { enabled: false },
+        glm: { enabled: true, api_key: 'test-key' },
+        droid: { enabled: false },
+      },
+    });
+    writeCachedSchedule(home);
+    writeUsageCache(home);
+    writeExternalUsageCaches(home);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const plainLines = stripAnsi(result.stdout).split(/\r?\n/);
+    const glmLine = plainLines.find(line => line.includes('GLM') && line.includes('tok'));
+    assert.ok(glmLine, stripAnsi(result.stdout));
+    assert.doesNotMatch(glmLine, /Copilot/);
+    assert.match(glmLine, /5h 3%/);
+    assert.match(glmLine, /tok 9%/);
+    assert.doesNotMatch(glmLine, /[▰▱]/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node multi-cli Copilot-only renders alone with a bar in the bottom slot', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, {
+      tier: 'multi-cli',
+      schedule_url: '',
+      schedule_cache_hours: 999,
+      external_providers: {
+        enabled: true,
+        codex: { enabled: false },
+        glm: { enabled: false },
+        copilot: { enabled: true },
+        droid: { enabled: false },
+      },
+    });
+    writeCachedSchedule(home);
+    writeUsageCache(home);
+    writeCopilotUsageCache(home);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const plainLines = stripAnsi(result.stdout).split(/\r?\n/);
+    const copilotLine = plainLines.find(line => line.includes('Copilot'));
+    assert.ok(copilotLine, stripAnsi(result.stdout));
+    assert.doesNotMatch(copilotLine, /GLM/);
+    assert.match(copilotLine, /2152 left/);
+    assert.match(copilotLine, /[▰▱]/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

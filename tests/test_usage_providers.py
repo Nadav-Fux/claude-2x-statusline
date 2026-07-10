@@ -1374,6 +1374,91 @@ def test_copilot_missing_cache_is_unavailable(tmp_path, monkeypatch):
     assert record["available"] is False
 
 
+# ── format_combined_glm_copilot_row (GLM + Copilot merged bottom row) ────────
+
+_COMBINE_GLM_RECORD = {
+    "provider": "glm",
+    "label": "GLM",
+    "available": True,
+    "display": "compact",
+    "metrics": [
+        {"label": "5h", "used_pct": 0, "resets_at": 1_000 + 39 * 60},
+        {"label": "tok", "used_pct": 8, "resets_at": 1_000 + 90 * 60},
+    ],
+    "plan": "lite",
+    "stale_seconds": 0,
+}
+
+_COMBINE_COPILOT_RECORD = {
+    "provider": "copilot",
+    "label": "Copilot",
+    "available": True,
+    "display": "bars",
+    "five_hour": {"label": "2152 left", "used_pct": 28, "resets_at": 1_000 + 200 * 60},
+    "plan": "business",
+    "stale_seconds": 0,
+}
+
+
+def test_external_provider_order_places_glm_and_copilot_adjacent_at_the_end():
+    # codex -> droid -> antigravity -> (glm, copilot) — GLM and Copilot sit
+    # last and adjacent because the cockpit merges them into one combined row.
+    assert providers.EXTERNAL_PROVIDER_ORDER == ("codex", "droid", "antigravity", "glm", "copilot")
+
+
+def test_combined_glm_copilot_row_joins_both_glm_first_with_dim_separator_style():
+    row = providers.format_combined_glm_copilot_row(_COMBINE_GLM_RECORD, _COMBINE_COPILOT_RECORD, 1_000)
+
+    assert row["display"] == "combined"
+    assert len(row["segments"]) == 2
+    assert row["segments"][0]["display"] == "compact"  # GLM renders unchanged
+    assert row["segments"][1]["display"] == "compact"  # Copilot forced compact here
+
+    text = row["text"]
+    assert text.index("GLM") < text.index("Copilot")
+    assert "GLM lite  5h 0% · tok 8%" in text
+    assert "Copilot business  2152 left 28%" in text
+    # GLM and Copilot are joined with the same plain ' · ' separator style
+    # already used between metrics inside a single compact row.
+    assert " · Copilot" in text
+    # Copilot renders COMPACT here — no bar — even though its native form has one.
+    assert "▰" not in text
+    assert "▱" not in text
+
+
+def test_combined_glm_copilot_row_glm_only_falls_back_to_its_native_compact_row():
+    row = providers.format_combined_glm_copilot_row(_COMBINE_GLM_RECORD, None, 1_000)
+    assert row["display"] == "compact"
+    assert "segments" not in row
+    assert "5h 0%" in row["text"] and "tok 8%" in row["text"]
+
+
+def test_combined_glm_copilot_row_copilot_only_falls_back_to_its_native_bars_row():
+    row = providers.format_combined_glm_copilot_row(None, _COMBINE_COPILOT_RECORD, 1_000)
+    assert row["display"] == "bars"
+    assert "segments" not in row
+    assert "2152 left" in row["text"]
+    assert "▰" in row["text"] or "▱" in row["text"]
+
+
+def test_combined_glm_copilot_row_unavailable_copilot_falls_back_to_glm_alone():
+    row = providers.format_combined_glm_copilot_row(
+        _COMBINE_GLM_RECORD, providers.unavailable("copilot"), 1_000
+    )
+    assert row["display"] == "compact"
+    assert "Copilot" not in row["text"]
+
+
+def test_combined_glm_copilot_row_returns_none_when_neither_available():
+    assert providers.format_combined_glm_copilot_row(None, None, 1_000) is None
+    assert (
+        providers.format_combined_glm_copilot_row(
+            providers.unavailable("glm"), providers.unavailable("copilot"), 1_000
+        )
+        is None
+    )
+
+
 def test_providers_gracefully_unavailable_without_home_data(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.delenv("ZAI_API_KEY", raising=False)

@@ -984,6 +984,18 @@ function buildRateLimitsLine(ctx) {
 }
 
 function renderExternalProviderParts(row) {
+  if (row && row.display === 'combined') {
+    // GLM + Copilot merged into one bottom-slot row (see
+    // usageProviders.formatCombinedGlmCopilotRow): render each segment through
+    // this same function and join with the same dim ' · ' separator used
+    // between metrics inside a single compact row.
+    const segments = (row.segments || [])
+      .map(segment => renderExternalProviderParts(segment))
+      .filter(Boolean);
+    if (!segments.length) return '';
+    return segments.join(` ${DIM}·${RST} `);
+  }
+
   if (row && row.display === 'compact') {
     const labelPart = (row.parts || []).find(part => part.kind === 'label') || {};
     const label = `${WHITE}${labelPart.label || ''}${RST}${labelPart.plan ? `${DIM} ${labelPart.plan}${RST}` : ''}`;
@@ -1072,10 +1084,26 @@ async function buildExternalUsageLines(ctx) {
     if (!Number.isFinite(ms)) return '';
     return formatReset(new Date(ms).toISOString(), style);
   };
+  // GLM + Copilot now combine into ONE bottom row when both are enabled and
+  // available; otherwise each candidate renders exactly as before.
+  const candidateByProvider = {};
+  for (const { record } of candidates) candidateByProvider[record.provider] = record;
+  const combineGlmCopilot = Boolean(candidateByProvider.glm && candidateByProvider.copilot);
+  let combinedRendered = false;
   const lines = [];
   for (const { record } of candidates) {
+    const provider = record.provider;
     try {
-      const row = usageProviders.formatProviderRowParts(record, nowSec, { labelWidth, formatDuration: fmtDur, formatClock });
+      let row;
+      if (combineGlmCopilot && (provider === 'glm' || provider === 'copilot')) {
+        if (combinedRendered) continue;
+        combinedRendered = true;
+        row = usageProviders.formatCombinedGlmCopilotRow(
+          candidateByProvider.glm, candidateByProvider.copilot, nowSec, { labelWidth, formatDuration: fmtDur, formatClock },
+        );
+      } else {
+        row = usageProviders.formatProviderRowParts(record, nowSec, { labelWidth, formatDuration: fmtDur, formatClock });
+      }
       if (!row) continue;
       const subRows = Array.isArray(row.subRows) && row.subRows.length ? row.subRows : [row];
       for (const sub of subRows) {
