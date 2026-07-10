@@ -5,7 +5,10 @@ Every public provider reader returns a normalized record and never raises.
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -27,6 +30,13 @@ CODEX_ROLLOUT_SCAN_LIMIT = 40
 # only plans whose newest snapshot is at most this old appear in ``all_plans``.
 CODEX_PLAN_MAX_AGE_SECONDS = 7 * 86400
 GLM_CACHE_TTL = 60
+# A live `codex app-server` rate-limit snapshot stays authoritative this long
+# before the detached refresher is asked to pull a fresh one. Matches the GLM
+# background-refresh cadence (get path is cache-only for the live record).
+CODEX_LIVE_TTL = 120
+# Hard ceiling on the whole app-server exchange (spawn -> initialize ->
+# account/rateLimits/read). The child is always killed when this elapses.
+CODEX_APP_SERVER_TIMEOUT = 10.0
 EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
 COPILOT_CACHE_TTL = 300
@@ -808,10 +818,299 @@ def _heal_codex_record(record, now=None):
     return healed
 
 
-def get_codex_usage(config=None):
+def _codex_bin(config):
+    """The codex binary to spawn (config override wins, else PATH ``codex``)."""
+    if isinstance(config, dict):
+        for key in ("bin", "codex_bin"):
+            value = config.get(key)
+            if value:
+                return str(value)
+    return "codex"
+
+
+def _read_codex_live_cache():
+    """The cached codex record + its age, but ONLY when it is a live app-server
+    snapshot (``source == "app-server"``).
+
+    The rollout fallback and the live refresher share one cache file; the
+    ``source`` tag is how the render path tells a live snapshot apart from a
+    frozen rollout snapshot. Returns ``(record, age_seconds)`` or ``(None, None)``.
+    """
+    path = _cache_path("codex")
     try:
+        age = max(0, int(time.time() - path.stat().st_mtime))
+    except Exception:
+        return None, None
+    data = _read_json(path)
+    record = data.get("record") if isinstance(data, dict) else None
+    if not isinstance(record, dict) or record.get("source") != "app-server":
+        return None, None
+    if record.get("available") is not True:
+        return None, None
+    return record, age
+
+
+def _kill_codex_proc(proc):
+    """Best-effort teardown of the app-server child and its process group.
+
+    The child is spawned in its own session (``start_new_session``), so killing
+    the group reaps any helper it forked. Never raises.
+    """
+    if proc is None:
+        return
+    try:
+        if proc.stdin and not proc.stdin.closed:
+            proc.stdin.close()
+    except Exception:
+        pass
+    try:
+        if proc.poll() is None:
+            killed = False
+            if hasattr(os, "killpg") and proc.pid:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    killed = True
+                except Exception:
+                    killed = False
+            if not killed:
+                proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def _codex_app_server_exchange(binary, timeout=CODEX_APP_SERVER_TIMEOUT):
+    """Run the read-only ``codex app-server`` handshake and return
+    ``(account_result, rate_limits_result)`` (each the full JSON-RPC ``result``
+    object, or None).
+
+    Protocol: newline-delimited JSON-RPC 2.0 over stdio — ``initialize`` request,
+    ``initialized`` notification, then ``account/read`` and
+    ``account/rateLimits/read`` reads. NEVER starts a thread/turn, so no model is
+    ever invoked. Any server->client request (e.g. an approval ask) is
+    auto-denied. The child is always killed via try/finally. Returns
+    ``(None, None)`` on any failure or timeout.
+    """
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            [binary, "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+        )
+    except Exception:
+        return None, None
+
+    deadline = time.time() + max(1.0, float(timeout))
+    results = {}
+    lock = threading.Lock()
+
+    def _reader():
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except Exception:
+                    continue
+                mid = msg.get("id")
+                if mid is not None and ("result" in msg or "error" in msg):
+                    with lock:
+                        results[mid] = msg
+                elif mid is not None and msg.get("method"):
+                    # Server -> client request (approval ask): auto-deny so the
+                    # server never blocks on us. We never run a turn, so this is
+                    # belt-and-suspenders.
+                    try:
+                        proc.stdin.write(
+                            json.dumps({"jsonrpc": "2.0", "id": mid, "result": {"decision": "denied"}}) + "\n"
+                        )
+                        proc.stdin.flush()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+
+    def _send(obj):
+        proc.stdin.write(json.dumps(obj) + "\n")
+        proc.stdin.flush()
+
+    def _wait(mid):
+        while time.time() < deadline:
+            with lock:
+                if mid in results:
+                    return results[mid]
+            if proc.poll() is not None:
+                # Child exited; drain whatever the reader captured.
+                with lock:
+                    return results.get(mid)
+            time.sleep(0.02)
+        return None
+
+    try:
+        _send({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "claude-2x-statusline",
+                    "title": "claude-2x-statusline",
+                    "version": "1.0.0",
+                },
+                "capabilities": {
+                    "experimentalApi": False,
+                    "requestAttestation": False,
+                    "optOutNotificationMethods": [],
+                },
+            },
+        })
+        if _wait(1) is None:
+            return None, None
+        _send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        _send({"jsonrpc": "2.0", "id": 2, "method": "account/read", "params": {}})
+        _send({"jsonrpc": "2.0", "id": 3, "method": "account/rateLimits/read", "params": {}})
+        account_msg = _wait(2)
+        rate_msg = _wait(3)
+        account = account_msg.get("result") if isinstance(account_msg, dict) else None
+        rate = rate_msg.get("result") if isinstance(rate_msg, dict) else None
+        return account, rate
+    except Exception:
+        return None, None
+    finally:
+        _kill_codex_proc(proc)
+
+
+def normalize_codex_rate_limits(account_result, rate_result, stale_seconds=0):
+    """Normalize an ``account/rateLimits/read`` result into the standard codex
+    record (same shape the rollout path produces).
+
+    ``primary`` -> five_hour, ``secondary`` -> weekly, both via ``_usage_window``
+    + ``_codex_window_label`` (windowDurationMins gives the honest 5h/7d/30d
+    label). ``planType`` comes from the account read when present (authoritative
+    for the logged-in account), else from the rate-limit snapshot. Tags
+    ``source: "app-server"`` so the render path can tell it apart from a rollout
+    snapshot.
+    """
+    result = rate_result if isinstance(rate_result, dict) else {}
+    snapshot = result.get("rateLimits") if isinstance(result.get("rateLimits"), dict) else None
+    by_id = result.get("rateLimitsByLimitId")
+    if isinstance(by_id, dict) and isinstance(by_id.get("codex"), dict):
+        snapshot = by_id.get("codex")
+    if not isinstance(snapshot, dict):
+        return unavailable("codex")
+
+    primary = snapshot.get("primary") if isinstance(snapshot.get("primary"), dict) else {}
+    secondary = snapshot.get("secondary") if isinstance(snapshot.get("secondary"), dict) else {}
+    five_hour = _usage_window(
+        primary.get("usedPercent"),
+        primary.get("resetsAt"),
+        _codex_window_label(primary.get("windowDurationMins"), "5h"),
+    )
+    weekly = _usage_window(
+        secondary.get("usedPercent"),
+        secondary.get("resetsAt"),
+        _codex_window_label(secondary.get("windowDurationMins"), "7d"),
+    )
+
+    plan = snapshot.get("planType")
+    account = account_result.get("account") if isinstance(account_result, dict) else None
+    if isinstance(account, dict) and account.get("planType"):
+        plan = account.get("planType")
+
+    record = unavailable("codex")
+    record.update(
+        {
+            "available": bool(five_hour or weekly),
+            "five_hour": five_hour,
+            "weekly": weekly,
+            "plan": plan,
+            "source": "app-server",
+            "stale_seconds": stale_seconds,
+        }
+    )
+    return record
+
+
+def refresh_codex_cache(config=None):
+    """Refresh the Codex usage cache from a LIVE ``codex app-server`` snapshot.
+
+    Spawns ``codex app-server``, performs the read-only initialize +
+    account/rateLimits/read handshake (never a model turn), normalizes the live
+    rate limits into the standard codex record, and writes it via the standard
+    cache writer. Never-clobber: a missing binary, a broken protocol, an offline
+    machine, or a logged-out account all return False and leave the last good
+    cache untouched. Meant to run ONLY in the detached background refresher,
+    never on the render path.
+    """
+    try:
+        binary = _codex_bin(config)
+        account, rate = _codex_app_server_exchange(binary, CODEX_APP_SERVER_TIMEOUT)
+        if rate is None:
+            return False
+        record = normalize_codex_rate_limits(account, rate, stale_seconds=0)
+        if not (isinstance(record, dict) and record.get("available")):
+            return False
+        record = _heal_codex_record(record)
+        _write_cached_record("codex", record)
+        return True
+    except Exception:
+        return False
+
+
+def get_codex_usage(config=None):
+    """Codex usage — prefer a fresh live app-server snapshot, fall back to the
+    rollout scan.
+
+    The live snapshot (``source: "app-server"``, written by the detached
+    ``refresh_codex_cache``) describes only the CURRENTLY AUTHENTICATED account.
+    It is preferred when the config wants that account's plan; a ``plan`` pin
+    that selects a DIFFERENT plan than the live account, or ``show_all_plans``
+    (which needs every plan the rollouts have seen), falls back to the rollout
+    scan exactly as today. The elapsed-window self-heal stays on both paths.
+    """
+    try:
+        live, live_age = _read_codex_live_cache()
+        pin = _codex_plan_pin(config)
+        show_all = _codex_show_all_plans(config)
+        live_plan = str(live.get("plan") or "").strip().lower() if isinstance(live, dict) else ""
+        # The pin is satisfied by live data only when it matches the live
+        # account's plan (or there is no pin at all).
+        pin_matches_live = (not pin) or (bool(live_plan) and pin == live_plan)
+        want_live = not show_all
+
+        if want_live:
+            if live is None:
+                # No live snapshot yet (cold start / codex offline / logged out):
+                # warm the cache in the background and render from rollouts now.
+                _spawn_provider_refresh("codex", config)
+            elif pin_matches_live:
+                if live_age is not None and live_age >= CODEX_LIVE_TTL:
+                    _spawn_provider_refresh("codex", config)
+                record = dict(live)
+                record["stale_seconds"] = live_age
+                return _heal_codex_record(record)
+            # else: live account's plan != the pinned plan — keep the (still
+            # valid) live snapshot untouched and answer the pin from rollouts.
+
+        # ── Rollout fallback (self-healing, exactly as today) ─────────────────
         cached = _read_cached_record("codex", LOCAL_CACHE_TTL)
-        if cached:
+        # A live snapshot in the shared cache is not a rollout answer: never let
+        # it satisfy the fallback (e.g. a pin/show_all render that needs rollout
+        # data), or it would render the wrong account/plan.
+        if cached and cached.get("source") != "app-server":
             return _heal_codex_record(cached)
 
         ordered = _codex_rollout_snapshots()
@@ -827,10 +1126,15 @@ def get_codex_usage(config=None):
         # the owner explicitly asks for it. Default renders a single row for the
         # SELECTED plan (pin > newest paid > newest overall), matching one Codex
         # subscription per row.
-        if _codex_show_all_plans(config):
+        if show_all:
             record["all_plans"] = _codex_all_plans(ordered, config)
         record = _heal_codex_record(record)
-        _write_cached_record("codex", record)
+        # Never clobber a still-fresh live snapshot with a rollout record: when a
+        # pin selects a different plan than the live account (or show_all_plans
+        # wants every plan) we render from rollouts, but the live cache must
+        # survive so the next render keeps comparing against the real account.
+        if live is None or (live_age is not None and live_age >= CODEX_LIVE_TTL):
+            _write_cached_record("codex", record)
         return record
     except Exception:
         return unavailable("codex")
@@ -1789,16 +2093,51 @@ def refresh_copilot_cache(config=None):
         return False
 
 
+def _codex_refresh_config(config):
+    """Redaction-safe config for the detached codex refresher: just an optional
+    binary override. Codex app-server carries its own on-disk auth, so no token
+    ever crosses argv or the environment.
+    """
+    cfg = {}
+    if isinstance(config, dict):
+        block = config
+        external = config.get("external_providers")
+        if isinstance(external, dict) and isinstance(external.get("codex"), dict):
+            block = external.get("codex")
+        if isinstance(block, dict) and block.get("bin"):
+            cfg["bin"] = str(block.get("bin"))
+    return cfg
+
+
 def _provider_refresh_config(provider, config):
     if provider == "copilot":
         return _copilot_provider_config(config)
     if provider == "glm":
         return _glm_provider_config(config, include_api_key=False)
+    if provider == "codex":
+        return _codex_refresh_config(config)
     return {}
 
 
+def _codex_live_refresh_viable(config):
+    """True only when a live app-server refresh can plausibly succeed: the codex
+    binary is resolvable AND the account is logged in (``~/.codex/auth.json``
+    exists). Gating here keeps the render path from spawning a doomed refresher
+    for a missing/logged-out codex, and keeps the rollout-only tests hermetic (a
+    temp HOME has no auth.json). Never-clobber: the rollout fallback stays in play.
+    """
+    if shutil.which(_codex_bin(_codex_refresh_config(config))) is None:
+        return False
+    try:
+        return (Path.home() / ".codex" / "auth.json").is_file()
+    except Exception:
+        return False
+
+
 def _spawn_provider_refresh(provider, config):
-    if provider not in {"copilot", "glm"}:
+    if provider not in {"copilot", "glm", "codex"}:
+        return
+    if provider == "codex" and not _codex_live_refresh_viable(config):
         return
     try:
         env = dict(os.environ)
@@ -1818,7 +2157,8 @@ def _spawn_provider_refresh(provider, config):
             "provider=os.environ.get('CLAUDE_STATUSLINE_REFRESH_PROVIDER', ''); "
             "cfg=json.loads(os.environ.get('CLAUDE_STATUSLINE_REFRESH_CONFIG', '{}')); "
             "usage_providers.refresh_copilot_cache(cfg) if provider == 'copilot' "
-            "else usage_providers.refresh_glm_cache(cfg) if provider == 'glm' else None"
+            "else usage_providers.refresh_glm_cache(cfg) if provider == 'glm' "
+            "else usage_providers.refresh_codex_cache(cfg) if provider == 'codex' else None"
         )
         subprocess.Popen(
             ["python3", "-c", code],

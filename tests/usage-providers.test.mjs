@@ -320,6 +320,57 @@ test('codex getCodexUsage heals a cache hit', () => {
   }
 });
 
+test('codex getCodexUsage prefers a fresh live app-server cache over rollouts', () => {
+  // The Node twin is cache-read-only: it must render the live snapshot the
+  // Python refresher wrote (source: 'app-server'), preferring it over a frozen
+  // rollout on disk, and never spawn app-server itself.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-codex-live-'));
+  const oldHome = process.env.HOME;
+  const oldUserProfile = process.env.USERPROFILE;
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    const now = Math.floor(Date.now() / 1000);
+
+    // A frozen rollout that would read 100% used ...
+    const sessions = path.join(home, '.codex', 'sessions', '2026', '07', '09');
+    fs.mkdirSync(sessions, { recursive: true });
+    const rollout = path.join(sessions, 'rollout-team.jsonl');
+    fs.copyFileSync(path.join(repoRoot, 'tests', 'fixtures', 'codex_rollout_team_snapshot.jsonl'), rollout);
+
+    // ... but a fresh live app-server snapshot says 10% / 2%.
+    const cacheDir = path.join(home, '.claude');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'statusline-usage-codex.json'),
+      JSON.stringify({
+        cached_at: Date.now() / 1000,
+        record: {
+          provider: 'codex',
+          label: 'Codex',
+          available: true,
+          five_hour: { used_pct: 10, resets_at: now + 3600, label: '5h' },
+          weekly: { used_pct: 2, resets_at: now + 7 * 86400, label: '7d' },
+          plan: 'team',
+          source: 'app-server',
+          stale_seconds: 0,
+        },
+      }),
+    );
+
+    const record = providers.getCodexUsage({});
+
+    assert.equal(record.source, 'app-server');
+    assert.equal(record.five_hour.used_pct, 10);
+    assert.equal(record.weekly.used_pct, 2);
+    assert.equal(record.plan, 'team');
+  } finally {
+    if (oldHome == null) delete process.env.HOME; else process.env.HOME = oldHome;
+    if (oldUserProfile == null) delete process.env.USERPROFILE; else process.env.USERPROFILE = oldUserProfile;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('glm fixture maps quota limits', () => {
   const data = JSON.parse(fs.readFileSync(path.join(fixtures, 'glm_quota_response.json'), 'utf8'));
 

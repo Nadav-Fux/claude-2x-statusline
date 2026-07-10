@@ -318,6 +318,267 @@ def test_codex_get_usage_heals_a_cache_hit(tmp_path, monkeypatch):
     assert record["weekly"]["resets_at"] == 4102444800
 
 
+# ── Live `codex app-server` refresh (Phase 2) ────────────────────────────────
+
+
+def _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2, now=None):
+    """Canned account/read + account/rateLimits/read results shaped like the real
+    app-server protocol (usedPercent / windowDurationMins / resetsAt)."""
+    now = int(now if now is not None else time.time())
+    account = {
+        "account": {"type": "chatgpt", "email": "redacted@example.com", "planType": plan},
+        "requiresOpenaiAuth": True,
+    }
+    snapshot = {
+        "limitId": "codex",
+        "limitName": None,
+        "primary": {"usedPercent": primary_pct, "windowDurationMins": 300, "resetsAt": now + 3600},
+        "secondary": {"usedPercent": secondary_pct, "windowDurationMins": 10080, "resetsAt": now + 7 * 86400},
+        "planType": plan,
+    }
+    rate = {"rateLimits": dict(snapshot), "rateLimitsByLimitId": {"codex": dict(snapshot)}}
+    return account, rate
+
+
+def _write_codex_live_cache(home, record, age_seconds=0):
+    cache_dir = home / ".claude"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / "statusline-usage-codex.json"
+    path.write_text(json.dumps({"cached_at": time.time(), "record": record}), encoding="utf-8")
+    if age_seconds:
+        stamp = time.time() - age_seconds
+        os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_normalize_codex_rate_limits_maps_app_server_snapshot():
+    now = 1783654055
+    account, rate = _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2, now=now)
+
+    record = providers.normalize_codex_rate_limits(account, rate, stale_seconds=0)
+
+    assert record["available"] is True
+    assert record["source"] == "app-server"
+    assert record["plan"] == "team"
+    assert record["five_hour"]["used_pct"] == 10
+    assert record["five_hour"]["label"] == "5h"
+    assert record["five_hour"]["resets_at"] == now + 3600
+    assert record["weekly"]["used_pct"] == 2
+    assert record["weekly"]["label"] == "7d"
+    assert record["weekly"]["resets_at"] == now + 7 * 86400
+    assert record["stale_seconds"] == 0
+
+
+def test_refresh_codex_cache_writes_live_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    account, rate = _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2)
+    monkeypatch.setattr(providers, "_codex_app_server_exchange", lambda *a, **k: (account, rate))
+
+    assert providers.refresh_codex_cache({}) is True
+
+    data = json.loads((tmp_path / ".claude" / "statusline-usage-codex.json").read_text(encoding="utf-8"))
+    record = data["record"]
+    assert record["source"] == "app-server"
+    assert record["available"] is True
+    assert record["plan"] == "team"
+    assert record["five_hour"]["used_pct"] == 10
+    assert record["weekly"]["used_pct"] == 2
+
+
+def test_codex_app_server_exchange_speaks_jsonrpc(tmp_path, monkeypatch):
+    # Exercises the real protocol framing against a faked subprocess: initialize
+    # request, initialized notification, then account/read + rateLimits reads.
+    now = int(time.time())
+    responses = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"userAgent": "x", "codexHome": str(tmp_path)}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"account": {"type": "chatgpt", "planType": "team"}}}),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"rateLimits": {
+            "limitId": "codex",
+            "primary": {"usedPercent": 10, "windowDurationMins": 300, "resetsAt": now + 3600},
+            "secondary": {"usedPercent": 2, "windowDurationMins": 10080, "resetsAt": now + 7 * 86400},
+            "planType": "team",
+        }}}),
+    ]
+
+    class _FakeStdin:
+        def __init__(self):
+            self.closed = False
+            self.writes = []
+
+        def write(self, s):
+            self.writes.append(s)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    instances = []
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs):
+            self.pid = None
+            self.stdin = _FakeStdin()
+            self.stdout = iter(responses)
+            self._alive = True
+            instances.append(self)
+
+        def poll(self):
+            return None if self._alive else 0
+
+        def kill(self):
+            self._alive = False
+
+        def wait(self, timeout=None):
+            self._alive = False
+            return 0
+
+    monkeypatch.setattr(providers.subprocess, "Popen", _FakePopen)
+
+    account, rate = providers._codex_app_server_exchange("codex", timeout=5)
+
+    assert account["account"]["planType"] == "team"
+    record = providers.normalize_codex_rate_limits(account, rate)
+    assert record["available"] is True
+    assert record["source"] == "app-server"
+    assert record["five_hour"]["used_pct"] == 10
+    assert record["weekly"]["used_pct"] == 2
+
+    sent = "".join(instances[0].stdin.writes)
+    assert '"method": "initialize"' in sent
+    assert '"method": "initialized"' in sent
+    assert '"method": "account/rateLimits/read"' in sent
+    # Every frame is newline-delimited (no Content-Length framing).
+    assert instances[0].stdin.writes[0].endswith("\n")
+
+
+def test_codex_get_usage_prefers_fresh_live_cache_over_rollouts(tmp_path, monkeypatch):
+    # A frozen rollout on disk says 100% used, but a fresh live snapshot says 10%.
+    # The render path must prefer the live truth.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers, "_spawn_provider_refresh", lambda *a, **k: None)
+    now = time.time()
+    _install_codex_rollouts(tmp_path, [("team", "codex_rollout_team_snapshot.jsonl", now - 60)])
+    account, rate = _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2, now=now)
+    live = providers.normalize_codex_rate_limits(account, rate, stale_seconds=0)
+    _write_codex_live_cache(tmp_path, live, age_seconds=5)
+
+    record = providers.get_codex_usage({})
+
+    assert record["source"] == "app-server"
+    assert record["five_hour"]["used_pct"] == 10
+    assert record["weekly"]["used_pct"] == 2
+    assert record["stale_seconds"] == 5
+
+
+def test_codex_stale_live_cache_renders_and_spawns_refresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    spawns = []
+    monkeypatch.setattr(providers, "_spawn_provider_refresh", lambda provider, config: spawns.append(provider))
+    now = time.time()
+    account, rate = _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2, now=now)
+    live = providers.normalize_codex_rate_limits(account, rate, stale_seconds=0)
+    _write_codex_live_cache(tmp_path, live, age_seconds=200)  # > CODEX_LIVE_TTL
+
+    record = providers.get_codex_usage({})
+
+    assert record["source"] == "app-server"
+    assert record["five_hour"]["used_pct"] == 10
+    assert record["stale_seconds"] >= providers.CODEX_LIVE_TTL
+    assert spawns == ["codex"]
+
+
+def test_refresh_codex_cache_failure_falls_back_to_rollouts(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    # Broken protocol / offline: refresh writes nothing (never-clobber).
+    monkeypatch.setattr(providers, "_codex_app_server_exchange", lambda *a, **k: (None, None))
+    assert providers.refresh_codex_cache({}) is False
+    assert not (tmp_path / ".claude" / "statusline-usage-codex.json").exists()
+
+    # The render path still answers from the rollout scan exactly as today.
+    monkeypatch.setattr(providers, "_spawn_provider_refresh", lambda *a, **k: None)
+    now = time.time()
+    _install_codex_rollouts(tmp_path, [("team", "codex_rollout_team_snapshot.jsonl", now - 60)])
+
+    record = providers.get_codex_usage({})
+
+    assert record["available"] is True
+    assert record["plan"] == "team"
+    assert record["source"] == "local-jsonl"
+
+
+def test_refresh_codex_cache_never_clobbers_last_good_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    account, rate = _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2)
+    good = providers.normalize_codex_rate_limits(account, rate, stale_seconds=0)
+    path = _write_codex_live_cache(tmp_path, good)
+    before = path.read_text(encoding="utf-8")
+
+    # The next refresh fails mid-protocol: the last good cache must survive.
+    monkeypatch.setattr(providers, "_codex_app_server_exchange", lambda *a, **k: (None, None))
+    assert providers.refresh_codex_cache({}) is False
+
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_codex_live_pin_mismatch_falls_back_to_rollouts_without_clobber(tmp_path, monkeypatch):
+    # Live account is TEAM, but the config pins FREE — a plan only the rollouts
+    # know. Render from rollouts, keep the (still fresh) live snapshot intact, and
+    # do not spawn a pointless live refresh for the mismatched pin.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    spawns = []
+    monkeypatch.setattr(providers, "_spawn_provider_refresh", lambda provider, config: spawns.append(provider))
+    now = time.time()
+    account, rate = _codex_app_server_results(plan="team", primary_pct=10, secondary_pct=2, now=now)
+    live = providers.normalize_codex_rate_limits(account, rate, stale_seconds=0)
+    live_path = _write_codex_live_cache(tmp_path, live, age_seconds=5)
+    live_before = live_path.read_text(encoding="utf-8")
+    _install_codex_rollouts(tmp_path, [("free", "codex_rollout_token_count_30d.jsonl", now - 60)])
+
+    record = providers.get_codex_usage({"external_providers": {"codex": {"plan": "free"}}})
+
+    assert record["plan"] == "free"
+    assert record["source"] == "local-jsonl"
+    assert live_path.read_text(encoding="utf-8") == live_before
+    assert spawns == []
+
+
+def test_spawn_codex_refresh_skips_when_logged_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers.shutil, "which", lambda *a, **k: "/usr/bin/codex")
+    popens = []
+    monkeypatch.setattr(providers.subprocess, "Popen", lambda *a, **k: popens.append((a, k)))
+
+    # No ~/.codex/auth.json under the temp home -> no refresher is spawned.
+    providers._spawn_provider_refresh("codex", {})
+
+    assert popens == []
+
+
+def test_spawn_codex_refresh_runs_when_logged_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    (tmp_path / ".codex").mkdir(parents=True)
+    (tmp_path / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(providers.shutil, "which", lambda *a, **k: "/usr/bin/codex")
+    popens = []
+
+    class _Popen:
+        def __init__(self, cmd, **kwargs):
+            popens.append((cmd, kwargs))
+
+    monkeypatch.setattr(providers.subprocess, "Popen", _Popen)
+
+    providers._spawn_provider_refresh("codex", {})
+
+    assert popens
+    cmd, kwargs = popens[0]
+    assert cmd[:2] == ["python3", "-c"]
+    assert "refresh_codex_cache" in cmd[2]
+    assert kwargs["start_new_session"] is True
+    assert json.loads(kwargs["env"]["CLAUDE_STATUSLINE_REFRESH_CONFIG"]) == {}
+
+
 def test_glm_fixture_maps_quota_limits():
     data = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
 
