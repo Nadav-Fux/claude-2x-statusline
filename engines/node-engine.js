@@ -21,6 +21,9 @@ const RST = '\x1b[0m', BOLD = '\x1b[1m', DIM = '\x1b[2m';
 const RED = '\x1b[31m', GREEN = '\x1b[32m', YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m', MAGENTA = '\x1b[35m', CYAN = '\x1b[36m';
 const WHITE = '\x1b[38;2;220;220;220m';
+// Truecolor purple — owner-requested addition to the palette (session-quality
+// line: the ⚒ tool-call counter and the eff efficiency dots).
+const PURPLE = '\x1b[38;2;178;148;255m';
 const BG_GREEN = '\x1b[38;5;255;48;5;28m';
 const BG_YELLOW = '\x1b[38;5;16;48;5;220m';
 const BG_RED = '\x1b[38;5;255;48;5;124m';
@@ -179,7 +182,29 @@ function loadSchedule(config) {
 // ── Helpers ──
 function fmtDur(mins) { const h = Math.floor(mins/60), m = mins%60; return h > 0 ? `${h}h ${String(m).padStart(2,'0')}m` : `${m}m`; }
 function fmtSecs(s) { const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60; return h>0?`${h}h${String(m).padStart(2,'0')}m`:m>0?`${m}m${String(sec).padStart(2,'0')}s`:`${sec}s`; }
-function colorPct(p) { return p >= 80 ? RED : p >= 50 ? YELLOW : GREEN; }
+// Window-duration rule for usage-bar color thresholds (see colorPct). A label
+// naming a sub-day window ('5h', '12h', ...) is SHORT. Every other label --
+// '7d'/'30d' (Codex/Antigravity), 'weekly'/'wk' (Claude/Antigravity), GLM's
+// token-quota 'tok', Copilot's monthly meter -- is LONG: it covers a
+// week/month/token-quota, not hours, so it should warn earlier. Mirrors the
+// existing 5h-vs-longer split used for reset-clock formatting
+// (resetStyleForLabel in lib/usage_providers). An unlabeled/unrecognized bar
+// defaults to SHORT (today's thresholds) rather than guessing.
+function isLongWindowLabel(label) {
+  const text = String(label || '').trim().toLowerCase();
+  if (!text) return false;
+  return !/^\d+h$/.test(text);
+}
+
+// Usage-bar color thresholds. Windows longer than a day (weekly/monthly/
+// token-quota) warn earlier -- red >=75 / yellow >=45 -- than sub-day windows
+// like the Claude 5h bucket, which keep the tighter red >=80 / yellow >=50.
+// Pass longWindow=true for any weekly-or-longer bar; see isLongWindowLabel
+// for the label rule that decides this at the call site.
+function colorPct(p, longWindow = false) {
+  if (longWindow) return p >= 75 ? RED : p >= 45 ? YELLOW : GREEN;
+  return p >= 80 ? RED : p >= 50 ? YELLOW : GREEN;
+}
 function git(...args) { try { return execFileSync('git', args, { timeout: 2000, encoding: 'utf8' }).trim(); } catch { return ''; } }
 function fmtTokens(n) { return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.floor(n/1e3)}K` : String(n); }
 function toNum(value, fallback = 0) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }
@@ -211,10 +236,10 @@ function fmtHour(h) {
   return mInt ? `${display}:${String(mInt).padStart(2,'0')}${ampm}` : `${display}${ampm}`;
 }
 
-function buildUsageBar(pct, width = 10) {
+function buildUsageBar(pct, width = 10, longWindow = false) {
   pct = Math.max(0, Math.min(100, pct));
   const filled = Math.floor(pct * width / 100), empty = width - filled;
-  return `${colorPct(pct)}${'\u25b0'.repeat(filled)}${DIM}${'\u25b1'.repeat(empty)}${RST}`;
+  return `${colorPct(pct, longWindow)}${'\u25b0'.repeat(filled)}${DIM}${'\u25b1'.repeat(empty)}${RST}`;
 }
 
 // \u2500\u2500 Responsive width (mirror of python-engine resolve_render_width/reflow_parts) \u2500\u2500
@@ -348,6 +373,12 @@ function formatReset(isoStr, style) {
 
 // ── Workflow helpers ──
 const USAGE_RE = /"usage"\s*:\s*\{\s*"input_tokens"\s*:\s*(\d+)\s*,\s*"cache_creation_input_tokens"\s*:\s*(\d+)\s*,\s*"cache_read_input_tokens"\s*:\s*(\d+)\s*,\s*"output_tokens"\s*:\s*(\d+)/g;
+
+// A tool-use content block inside a transcript JSONL line, e.g.
+// {"type":"tool_use","id":"toolu_...",...}. Matched as raw text (not parsed
+// JSON) so a multi-MB transcript is one regex scan, not N JSON.parse calls --
+// same tradeoff as USAGE_RE above. Mirrors python's _TOOL_USE_RE.
+const TOOL_USE_RE = /"type"\s*:\s*"tool_use"/g;
 
 function projectSlug(cwd) {
   // Empirical Claude Code rule: every char outside [A-Za-z0-9] becomes '-'
@@ -825,6 +856,9 @@ const SEGMENTS = {
     const totalCache = cacheRead + cacheCreate;
     if (totalCache < 1000) return '';
     const hitPct = Math.floor(cacheRead * 100 / totalCache);
+    // Stashed for the eff segment, which turns this same ratio into purple
+    // dots on the session-quality line instead of recomputing it.
+    ctx.cacheHitPct = hitPct;
     const savingsPct = Math.max(0, Math.min(90, Math.floor(hitPct * 0.9)));
     const delta = rs.cacheDelta(5);
     if (delta !== null && delta > 0) {
@@ -832,6 +866,54 @@ const SEGMENTS = {
       return `${DIM}cache reuse${RST} ${delta > 500 ? GREEN : DIM}${hitPct}% \u2191${dStr} saving ~${savingsPct}% cost${RST}`;
     }
     return `${DIM}cache reuse${RST} ${DIM}${hitPct}% idle (saves ~${savingsPct}% when active)${RST}`;
+  },
+  // Efficiency dots: the cache-reuse ratio cache_hit() already computed,
+  // mapped 0-100% -> 0-5 filled purple dots (round half up). No letters, no
+  // "grade" wording -- just dots. Self-hides whenever cache_hit() did (not
+  // enough cache data yet), so it never shows a score with nothing behind it.
+  eff(ctx) {
+    const hitPct = ctx.cacheHitPct;
+    if (hitPct == null) return '';
+    const filled = Math.max(0, Math.min(5, Math.floor(hitPct / 100 * 5 + 0.5)));
+    const filledDots = '\u25cf'.repeat(filled);
+    const emptyDots = '\u25cb'.repeat(5 - filled);
+    return `${DIM}eff${RST} ${PURPLE}${filledDots}${DIM}${emptyDots}${RST}`;
+  },
+  // This session's tool-call count: literal '"type":"tool_use"' occurrences in
+  // the transcript JSONL named by stdin.transcript_path. Cached by session_id
+  // + transcript mtime under $TMPDIR/claude/ (never under ~/.claude/ -- this
+  // is a throwaway render cache, not user config/state). A missing/unreadable
+  // transcript omits the whole segment; it never renders a placeholder.
+  tool_count(ctx) {
+    const stdin = ctx.stdin || {};
+    const sessionId = stdin.session_id || '', transcriptPath = stdin.transcript_path || '';
+    if (!sessionId || !transcriptPath) return '';
+    let mtime;
+    try { mtime = fs.statSync(transcriptPath).mtimeMs; } catch { return ''; }
+
+    const h = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+    const cacheDir = path.join(os.tmpdir(), 'claude');
+    const cacheFile = path.join(cacheDir, `statusline-toolcount-${h}.json`);
+
+    let count = null;
+    try {
+      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      if (cached.mtime === mtime) count = Number(cached.count) || 0;
+    } catch {}
+
+    if (count === null) {
+      let text;
+      try { text = fs.readFileSync(transcriptPath, 'utf8'); } catch { return ''; }
+      count = (text.match(TOOL_USE_RE) || []).length;
+      try {
+        fs.mkdirSync(cacheDir, { recursive: true });
+        const tmp = `${cacheFile}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify({ mtime, count }));
+        fs.renameSync(tmp, cacheFile);
+      } catch {}
+    }
+
+    return `${PURPLE}\u2692${RST} ${DIM}${count}${RST}`;
   },
 };
 SEGMENTS.promo_2x = SEGMENTS.peak_hours;
@@ -889,12 +971,13 @@ function buildRateLimitsLine(ctx) {
   const labels = (ctx.schedule || {}).labels || {};
   const fhLabel = labels.five_hour || '5h', wkLabel = labels.weekly || 'weekly';
   const cur = `${WHITE}${fhLabel}${RST} ${buildUsageBar(fhPct)} ${colorPct(fhPct)}${String(fhPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(fh.resets_at, 'time')}${RST}`;
-  const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct)} ${colorPct(sdPct)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
+  // Weekly window (and its sonnet sub-window below): longer than a day -> earlier warning thresholds.
+  const wk = `${WHITE}${wkLabel}${RST} ${buildUsageBar(sdPct, 10, true)} ${colorPct(sdPct, true)}${String(sdPct).padStart(3)}%${RST} ${DIM}\u27f3${RST} ${WHITE}${formatReset(sd.resets_at, 'datetime')}${RST}`;
   let line = renderDashboardLine([cur, wk], ctx.renderWidth || 0, checkOffloopDrain(ctx, ud));
   // sonnet weekly resets with the weekly window \u2014 drop the redundant \u27f3 stamp and
   // put it on its own continuation row below instead of off to the right.
   if (sdsPct > 0) {
-    const sonnet = `${DIM}sonnet${RST} ${buildUsageBar(sdsPct)} ${colorPct(sdsPct)}${String(sdsPct).padStart(3)}%${RST}`;
+    const sonnet = `${DIM}sonnet${RST} ${buildUsageBar(sdsPct, 10, true)} ${colorPct(sdsPct, true)}${String(sdsPct).padStart(3)}%${RST}`;
     line += `\n${DIM}\u2502${RST}   ${sonnet} ${DIM}\u2502${RST}`;
   }
   return line;
@@ -908,7 +991,8 @@ function renderExternalProviderParts(row) {
       .filter(part => part.kind === 'metric')
       .map(part => {
         const pct = Number.isFinite(Number(part.pct)) ? Math.max(0, Math.min(100, Math.round(Number(part.pct)))) : 0;
-        return `${WHITE}${part.label}${RST} ${colorPct(pct)}${pct}%${RST}`;
+        const longWindow = isLongWindowLabel(part.label);
+        return `${WHITE}${part.label}${RST} ${colorPct(pct, longWindow)}${pct}%${RST}`;
       });
     if (!metrics.length) return '';
     const reset = row.resetText ? ` ${DIM}${row.resetText}${RST}` : '';
@@ -922,7 +1006,8 @@ function renderExternalProviderParts(row) {
       chunks.push(`${WHITE}${part.label}${RST}${part.plan ? `${DIM} ${part.plan}${RST}` : ''}`);
     } else if (part.kind === 'window') {
       const reset = part.resetText ? ` ${DIM}${part.resetText}${RST}` : '';
-      chunks.push(`${WHITE}${part.label}${RST} ${buildUsageBar(part.pct)} ${colorPct(part.pct)}${String(part.pct).padStart(3)}%${RST}${reset}`);
+      const longWindow = isLongWindowLabel(part.label);
+      chunks.push(`${WHITE}${part.label}${RST} ${buildUsageBar(part.pct, 10, longWindow)} ${colorPct(part.pct, longWindow)}${String(part.pct).padStart(3)}%${RST}${reset}`);
     } else if (part.kind === 'tokens') {
       chunks.push(`${DIM}tokens${RST} ${WHITE}${fmtTokens(part.total)}${RST}`);
     }
@@ -1046,12 +1131,19 @@ function checkOffloopDrain(ctx, usageData) {
   return actualPctPerHr > expectedPctPerHr * 2.5 && delta > 3 ? ` ${YELLOW}\u26a0 off-loop drain${RST}` : '';
 }
 
+// Line 4 (session-quality line): spending + cache metrics + efficiency dots +
+// tool-call count. eff runs after cache_hit so it can read the cache-reuse
+// ratio the latter stashes on ctx.cacheHitPct instead of recomputing it.
 function buildMetricsLine(ctx) {
   const parts = [];
   const burn = SEGMENTS.burn_rate(ctx);
   if (burn) parts.push(burn);
   const cache = SEGMENTS.cache_hit(ctx);
   if (cache) parts.push(cache);
+  const eff = SEGMENTS.eff(ctx);
+  if (eff) parts.push(eff);
+  const tools = SEGMENTS.tool_count(ctx);
+  if (tools) parts.push(tools);
   const wf = SEGMENTS.workflows(ctx);
   if (wf) parts.push(wf);
   if (!parts.length) return '';
@@ -1138,6 +1230,17 @@ function maybeHeartbeat(config) {
   } catch {}
 }
 
+// Subtle end-of-line-1 render-time stamp (HH:MM, local time), multi-cli only.
+// Distinct from the (unwired) python seg_time -- this one is dim and reuses
+// ctx.now, the engine's existing local-time resolution (getLocalTime()).
+function renderClock(ctx) {
+  const now = ctx.now;
+  if (!now) return '';
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  return `${DIM}${hh}:${mm}${RST}`;
+}
+
 // ── Main ──
 async function main() {
   const config = loadConfig();
@@ -1189,6 +1292,14 @@ async function main() {
     else parts.push(r);
   }
   if (gitParts.length) parts.push(gitParts.join(' '));
+
+  // multi-cli only: a subtle render-time stamp at the tail of line 1. Not the
+  // Claude Code version (owner rejected that) -- just HH:MM, dim, so a stale
+  // statusline render is visible at a glance. Every other tier stays as-is.
+  if (isMultiCli) {
+    const clock = renderClock(ctx);
+    if (clock) parts.push(clock);
+  }
 
   const arrowColor = ctx.isPeak ? YELLOW : GREEN;
   const arrow = ` ${arrowColor}\u25b8${RST} `;

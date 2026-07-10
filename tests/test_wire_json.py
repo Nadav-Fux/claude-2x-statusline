@@ -89,6 +89,53 @@ def test_wire_json_merges_nested_objects_and_dedupes_arrays(tmp_path):
     ]
 
 
+def test_wire_json_backs_up_settings_json_before_patching(tmp_path):
+    """Every settings.json patch must be preceded by a settings.json.bak.<epoch>
+    safety copy — a bad merge (or an interrupted process) must never be
+    unrecoverable. See lib/wire-json.sh's wire_json()."""
+    settings_path = tmp_path / "settings.json"
+    original = {"statusLine": {"type": "command", "command": "/old"}, "other": True}
+    settings_path.write_text(json.dumps(original), encoding="utf-8")
+
+    merge_json = json.dumps({"statusLine": {"type": "command", "command": "/new"}})
+    script = f'. "{WIRE_JSON.as_posix()}"; wire_json "{settings_path.as_posix()}" \'{merge_json}\''
+    _run_bash(script)
+
+    backups = list(tmp_path.glob("settings.json.bak.*"))
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text(encoding="utf-8")) == original
+
+    # And the patch itself still landed.
+    merged = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert merged["statusLine"]["command"] == "/new"
+    assert merged["other"] is True
+
+
+def test_wire_json_does_not_back_up_non_settings_targets(tmp_path):
+    """The backup is scoped to settings.json specifically — merging into
+    statusline-config.json (or anything else) must not spray .bak files."""
+    config_path = tmp_path / "statusline-config.json"
+    config_path.write_text(json.dumps({"tier": "full"}), encoding="utf-8")
+
+    merge_json = json.dumps({"tier": "standard"})
+    script = f'. "{WIRE_JSON.as_posix()}"; wire_json "{config_path.as_posix()}" \'{merge_json}\''
+    _run_bash(script)
+
+    assert list(tmp_path.glob("*.bak.*")) == []
+
+
+def test_wire_json_does_not_back_up_a_new_settings_json(tmp_path):
+    """No existing file means nothing to back up — first-time creation must
+    not leave a spurious .bak file behind."""
+    settings_path = tmp_path / "settings.json"
+    merge_json = json.dumps({"statusLine": {"type": "command", "command": "/new"}})
+    script = f'. "{WIRE_JSON.as_posix()}"; wire_json "{settings_path.as_posix()}" \'{merge_json}\''
+    _run_bash(script)
+
+    assert settings_path.exists()
+    assert list(tmp_path.glob("settings.json.bak.*")) == []
+
+
 def test_json_get_reads_scalar_values(tmp_path):
     config_path = tmp_path / "statusline-config.json"
     config_path.write_text(

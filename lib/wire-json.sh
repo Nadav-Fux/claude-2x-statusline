@@ -79,6 +79,15 @@ wire_json() {
     _wire_json_select_backend
     mkdir -p "$(dirname "$target")"
 
+    # Timestamped safety copy before any backend below touches settings.json —
+    # a bad merge (or an interrupted process) must never be unrecoverable.
+    # Backend-agnostic (covers python/node/jq/pwsh/none) and scoped to
+    # settings.json specifically, not every file wire_json ever merges (e.g.
+    # statusline-config.json). No-op when the target doesn't exist yet.
+    if [ -f "$target" ] && [ "$(basename -- "$target")" = "settings.json" ]; then
+        cp "$target" "$target.bak.$(date +%s)" 2>/dev/null || true
+    fi
+
     case "$_WIRE_JSON_BACKEND" in
         python)
             "$_WIRE_JSON_RUNTIME" - "$target" "$merge_json" <<'PY'

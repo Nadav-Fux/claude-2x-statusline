@@ -1,0 +1,8 @@
+{"type":"user","message":{"content":"Please read the file and fix the bug"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","id":"toolu_01","name":"Read","input":{"file_path":"/tmp/a.py"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"file contents"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"pytest"}},{"type":"tool_use","id":"toolu_03","name":"Bash","input":{"command":"echo hi"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_02","content":"ok"},{"type":"tool_result","tool_use_id":"toolu_03","content":"hi"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use", "id":"toolu_04","name":"Edit","input":{}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_04","content":"applied"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done."},{"type":"tool_use","id":"toolu_05","name":"Bash","input":{"command":"pytest"}}]}}

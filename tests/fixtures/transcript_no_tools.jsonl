@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":"Just chatting, no tool calls here"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Sure, happy to help without touching any files."}]}}
+{"type":"user","message":{"content":"Thanks!"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"You're welcome."}]}}

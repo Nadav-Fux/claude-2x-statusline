@@ -317,7 +317,7 @@ wire_settings() {
     # re-running install leaves the broken entry alongside the new correct one.
     if [ -n "$PY" ] && [ -f "$SETTINGS" ]; then
         "$PY" - "$SETTINGS" << 'PY' >/dev/null 2>&1 || true
-import json, os, sys, tempfile
+import json, os, shutil, sys, tempfile, time
 
 path = sys.argv[1]
 NARRATOR_BASENAMES = ("narrator-session-start.sh", "narrator-prompt-submit.sh")
@@ -385,6 +385,13 @@ for event in ("SessionStart", "UserPromptSubmit"):
 
 if not changed:
     sys.exit(0)
+
+# Timestamped safety copy before this healing migration rewrites settings.json
+# — a bad merge (or an interrupted process) must never be unrecoverable.
+try:
+    shutil.copyfile(path, f"{path}.bak.{int(time.time())}")
+except Exception:
+    pass
 
 target_dir = os.path.dirname(path) or "."
 fd, temp = tempfile.mkstemp(dir=target_dir, suffix=".tmp")

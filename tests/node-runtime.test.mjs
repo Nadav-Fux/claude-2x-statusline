@@ -252,6 +252,215 @@ test('node full tier ignores foreign gateway and keeps Claude rate-limit bars', 
   }
 });
 
+function writeUsageCacheWithPct(home, fhPct, sdPct) {
+  fs.writeFileSync(
+    path.join(home, '.claude', 'statusline-usage-cache.json'),
+    JSON.stringify({
+      five_hour: { utilization: fhPct, resets_at: '2099-01-01T01:00:00Z' },
+      seven_day: { utilization: sdPct, resets_at: '2099-01-07T01:00:00Z' },
+    }),
+    'utf8',
+  );
+}
+
+test('node rate-limit line applies window-aware color thresholds', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, { tier: 'standard', schedule_url: '', schedule_cache_hours: 999 });
+    writeCachedSchedule(home);
+    // 48% is below BOTH the short (>=50) and long (>=45) yellow thresholds'
+    // old/common ground -- pick a value that only trips the LONG threshold so
+    // the two windows visibly diverge: 48 is GREEN under the short (5h) rule
+    // (< 50) but YELLOW under the new long (weekly) rule (>= 45).
+    writeUsageCacheWithPct(home, 48, 48);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    // 5h (short window): still green at 48% -- unaffected by the new rule.
+    assert.match(result.stdout, /\x1b\[32m 48%/);
+    // weekly (long window): yellow at 48% -- the new, earlier threshold.
+    assert.match(result.stdout, /\x1b\[33m 48%/);
+    assert.doesNotMatch(result.stdout, /\x1b\[31m 48%/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node rate-limit line reds out a long window earlier than a short one', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, { tier: 'standard', schedule_url: '', schedule_cache_hours: 999 });
+    writeCachedSchedule(home);
+    // 76%: short (5h) rule keeps this YELLOW (< 80); long (weekly) rule turns
+    // it RED (>= 75).
+    writeUsageCacheWithPct(home, 76, 76);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /\x1b\[33m 76%/); // 5h stays yellow
+    assert.match(result.stdout, /\x1b\[31m 76%/); // weekly goes red
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+function writeToolUseTranscript(home, toolUseCount) {
+  const transcriptPath = path.join(home, 'transcript.jsonl');
+  const lines = [{ type: 'user', message: { content: 'hi' } }];
+  for (let i = 0; i < toolUseCount; i++) {
+    lines.push({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: `t${i}`, name: 'Bash', input: {} }] },
+    });
+  }
+  fs.writeFileSync(transcriptPath, lines.map(l => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+  return transcriptPath;
+}
+
+function cacheCurrentUsage(cacheReadPct) {
+  // 10000 total cache tokens so seg_cache_hit's >=1000 floor is comfortably
+  // cleared and hitPct == cacheReadPct exactly (10000 divides evenly).
+  const total = 10000;
+  const cacheRead = Math.round((cacheReadPct / 100) * total);
+  return {
+    input_tokens: 1000,
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: total - cacheRead,
+  };
+}
+
+test('node session-quality line renders the tool-call counter from the transcript', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, { tier: 'full', schedule_url: '', schedule_cache_hours: 999 });
+    writeCachedSchedule(home);
+    const transcriptPath = writeToolUseTranscript(home, 7);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        session_id: 'sess-tool-count-7',
+        transcript_path: transcriptPath,
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(stripAnsi(result.stdout), /⚒ 7/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node tool-call counter renders 0 (not omitted) for a transcript with no tool_use', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, { tier: 'full', schedule_url: '', schedule_cache_hours: 999 });
+    writeCachedSchedule(home);
+    const transcriptPath = writeToolUseTranscript(home, 0);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        session_id: 'sess-tool-count-0',
+        transcript_path: transcriptPath,
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(stripAnsi(result.stdout), /⚒ 0/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node tool-call counter is omitted entirely when the transcript is missing', () => {
+  const home = makeHome();
+  try {
+    writeConfig(home, { tier: 'full', schedule_url: '', schedule_cache_hours: 999 });
+    writeCachedSchedule(home);
+
+    const result = runNodeEngine({
+      home,
+      input: JSON.stringify({
+        session_id: 'sess-tool-count-missing',
+        transcript_path: path.join(home, 'does-not-exist.jsonl'),
+        model: { display_name: 'Sonnet 4.6' },
+        context_window: { context_window_size: 200000, current_usage: { input_tokens: 1000 } },
+        cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+        workspace: { current_dir: repoRoot },
+      }),
+      env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(stripAnsi(result.stdout), /⚒/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('node eff segment maps cache-reuse pct to dots, rounding half up', () => {
+  const cases = [
+    { pct: 0, dots: '○○○○○' },
+    { pct: 49, dots: '●●○○○' },
+    { pct: 50, dots: '●●●○○' }, // exact half rounds UP (3), not banker's-rounds-down (2)
+    { pct: 100, dots: '●●●●●' },
+  ];
+  for (const { pct, dots } of cases) {
+    const home = makeHome();
+    try {
+      writeConfig(home, { tier: 'full', schedule_url: '', schedule_cache_hours: 999 });
+      writeCachedSchedule(home);
+
+      const result = runNodeEngine({
+        home,
+        input: JSON.stringify({
+          model: { display_name: 'Sonnet 4.6' },
+          context_window: { context_window_size: 200000, current_usage: cacheCurrentUsage(pct) },
+          cost: { total_cost_usd: 1.23, total_duration_ms: 600000 },
+          workspace: { current_dir: repoRoot },
+        }),
+        env: { STATUSLINE_DISABLE_TELEMETRY: '1' },
+      });
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(stripAnsi(result.stdout), new RegExp(`eff ${dots}`), `pct=${pct}`);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
 function writeCachedScheduleWithBanner(home) {
   const schedule = {
     v: 2,

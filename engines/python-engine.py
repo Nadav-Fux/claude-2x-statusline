@@ -60,6 +60,9 @@ BLUE = "\033[34m"
 MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 WHITE = "\033[38;2;220;220;220m"
+# Truecolor purple — owner-requested addition to the palette (session-quality
+# line: the ⚒ tool-call counter and the eff efficiency dots).
+PURPLE = "\033[38;2;178;148;255m"
 BG_GREEN = "\033[38;5;255;48;5;28m"
 BG_YELLOW = "\033[38;5;16;48;5;220m"
 BG_RED = "\033[38;5;255;48;5;124m"
@@ -524,7 +527,41 @@ def fmt_seconds(secs):
     return f"{s}s"
 
 
-def color_for_pct(pct):
+_HOUR_WINDOW_RE = re.compile(r"^\d+h$")
+
+
+def _is_long_window_label(label):
+    """Window-duration rule for usage-bar color thresholds (see color_for_pct).
+
+    A label naming a sub-day window ('5h', '12h', ...) is SHORT. Every other
+    label -- '7d'/'30d' (Codex/Antigravity), 'weekly'/'wk' (Claude/Antigravity),
+    GLM's token-quota 'tok', Copilot's monthly meter -- is LONG: it covers a
+    week/month/token-quota, not hours, so it should warn earlier. Mirrors the
+    existing 5h-vs-longer split used for reset-clock formatting
+    (_reset_style_for_label in lib/usage_providers). An unlabeled/unrecognized
+    bar defaults to SHORT (today's thresholds) rather than guessing.
+    """
+    text = str(label or "").strip().lower()
+    if not text:
+        return False
+    return not _HOUR_WINDOW_RE.match(text)
+
+
+def color_for_pct(pct, long_window=False):
+    """Usage-bar color thresholds.
+
+    Windows longer than a day (weekly/monthly/token-quota) warn earlier --
+    red >=75 / yellow >=45 -- than sub-day windows like the Claude 5h bucket,
+    which keep the tighter red >=80 / yellow >=50. Pass long_window=True for
+    any weekly-or-longer bar; see _is_long_window_label for the label rule
+    that decides this at the call site.
+    """
+    if long_window:
+        if pct >= 75:
+            return RED
+        elif pct >= 45:
+            return YELLOW
+        return GREEN
     if pct >= 80:
         return RED
     elif pct >= 50:
@@ -540,11 +577,11 @@ def _as_float(value, default=0.0):
         return default
 
 
-def build_usage_bar(pct, width=10):
+def build_usage_bar(pct, width=10, long_window=False):
     pct = max(0, min(100, pct))
     filled = pct * width // 100
     empty = width - filled
-    color = color_for_pct(pct)
+    color = color_for_pct(pct, long_window)
     filled_chars = "\u25b0" * filled
     empty_chars = "\u25b1" * empty
     return f"{color}{filled_chars}{DIM}{empty_chars}{RST}"
@@ -552,6 +589,11 @@ def build_usage_bar(pct, width=10):
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _TASK_NAME_RE = re.compile(r"^\d+\.json$")  # numeric task files in ~/.claude/tasks/<sid>/
+# A tool-use content block inside a transcript JSONL line, e.g.
+# {"type":"tool_use","id":"toolu_...",...}. Matched as raw text (not parsed
+# JSON) so a multi-MB transcript is one regex scan, not N json.loads calls —
+# same tradeoff as workflows.py's _USAGE_PATTERN.
+_TOOL_USE_RE = re.compile(r'"type"\s*:\s*"tool_use"')
 
 
 def visible_width(s):
@@ -1115,6 +1157,9 @@ def seg_cache_hit(ctx):
     if total_cache < 1000:
         return ""  # Not enough cache data to be meaningful
     hit_pct = cache_read * 100 // total_cache if total_cache > 0 else 0
+    # Stashed for seg_eff, which turns this same ratio into purple dots on the
+    # session-quality line instead of recomputing it.
+    ctx["cache_hit_pct"] = hit_pct
 
     # Cache "savings %": reused tokens cost ~10% of fresh input, so
     # effective cost reduction ≈ hit_ratio × 0.90. Clamp to 0-90.
@@ -1131,6 +1176,68 @@ def seg_cache_hit(ctx):
     # Idle: still show the savings the cache unlocks when active
     return (f"{DIM}cache reuse{RST} {DIM}{hit_pct}% idle "
             f"(saves ~{savings_pct}% when active){RST}")
+
+
+def seg_eff(ctx):
+    """Efficiency dots: the cache-reuse ratio seg_cache_hit already computed,
+    mapped 0-100% -> 0-5 filled purple dots (round half up). No letters, no
+    "grade" wording -- just dots. Self-hides whenever seg_cache_hit did (not
+    enough cache data yet), so it never shows a score with nothing behind it."""
+    hit_pct = ctx.get("cache_hit_pct")
+    if hit_pct is None:
+        return ""
+    filled = max(0, min(5, int(hit_pct / 100 * 5 + 0.5)))
+    filled_dots = "●" * filled
+    empty_dots = "○" * (5 - filled)
+    return f"{DIM}eff{RST} {PURPLE}{filled_dots}{DIM}{empty_dots}{RST}"
+
+
+def seg_tool_count(ctx):
+    """This session's tool-call count: literal '"type":"tool_use"' occurrences
+    in the transcript JSONL named by stdin's transcript_path. Cached by
+    session_id + transcript mtime under $TMPDIR/claude/ (never under
+    ~/.claude/ -- this is a throwaway render cache, not user config/state).
+    A missing/unreadable transcript omits the whole segment; it never renders
+    a placeholder."""
+    stdin = ctx.get("stdin", {}) or {}
+    session_id = stdin.get("session_id", "")
+    transcript_path = stdin.get("transcript_path", "")
+    if not session_id or not transcript_path:
+        return ""
+    try:
+        mtime = os.path.getmtime(transcript_path)
+    except OSError:
+        return ""
+
+    import tempfile as _tf
+
+    h = hashlib.sha256(session_id.encode()).hexdigest()[:16]
+    cache_dir = Path(_tf.gettempdir()) / "claude"
+    cache_file = cache_dir / f"statusline-toolcount-{h}.json"
+
+    count = None
+    try:
+        cached = json.loads(cache_file.read_text(encoding="utf-8"))
+        if cached.get("mtime") == mtime:
+            count = int(cached.get("count", 0))
+    except Exception:
+        count = None
+
+    if count is None:
+        try:
+            text = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        count = len(_TOOL_USE_RE.findall(text))
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            tmp = cache_file.with_name(f"{cache_file.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps({"mtime": mtime, "count": count}), encoding="utf-8")
+            os.replace(str(tmp), str(cache_file))
+        except Exception:
+            pass
+
+    return f"{PURPLE}⚒{RST} {DIM}{count}{RST}"
 
 
 def seg_vim_mode(ctx):
@@ -1645,8 +1752,9 @@ def build_rate_limits_line(ctx):
     sd = usage_data.get("seven_day") or {}
     sd_pct = int(sd.get("utilization", 0))
     sd_reset = sd.get("resets_at", "")
-    sd_bar = build_usage_bar(sd_pct, bw)
-    sd_color = color_for_pct(sd_pct)
+    # Weekly window: longer than a day -> earlier warning thresholds.
+    sd_bar = build_usage_bar(sd_pct, bw, long_window=True)
+    sd_color = color_for_pct(sd_pct, long_window=True)
 
     sds = usage_data.get("seven_day_sonnet") or {}
     sds_pct = int(sds.get("utilization", 0))
@@ -1671,8 +1779,9 @@ def build_rate_limits_line(ctx):
     # drop the redundant \u27f3 stamp and give it its own continuation row below
     # instead of pushing it off to the right of the 5h/weekly row.
     if sds_pct > 0:
-        sds_bar = build_usage_bar(sds_pct, bw)
-        sds_color = color_for_pct(sds_pct)
+        # Sonnet sub-window resets on the same weekly clock -> also long.
+        sds_bar = build_usage_bar(sds_pct, bw, long_window=True)
+        sds_color = color_for_pct(sds_pct, long_window=True)
         sonnet = f"{DIM}sonnet{RST} {sds_bar} {sds_color}{sds_pct:3d}%{RST}"
         line += f"\n{DIM}\u2502{RST}   {sonnet} {DIM}\u2502{RST}"
     return line
@@ -1717,7 +1826,8 @@ def _render_external_provider_parts(row):
                 pct = max(0, min(100, int(round(float(part.get("pct") or 0)))))
             except (TypeError, ValueError):
                 pct = 0
-            metrics.append(f"{WHITE}{part.get('label')}{RST} {color_for_pct(pct)}{pct}%{RST}")
+            long_window = _is_long_window_label(part.get("label"))
+            metrics.append(f"{WHITE}{part.get('label')}{RST} {color_for_pct(pct, long_window)}{pct}%{RST}")
         if not metrics:
             return ""
         sep = f" {DIM}\u00b7{RST} "
@@ -1733,8 +1843,9 @@ def _render_external_provider_parts(row):
             chunks.append(f"{WHITE}{part.get('label', '')}{RST}{plan}")
         elif kind == "window":
             pct = int(part.get("pct") or 0)
+            long_window = _is_long_window_label(part.get("label"))
             reset = f" {DIM}{part.get('reset_text')}{RST}" if part.get("reset_text") else ""
-            chunks.append(f"{WHITE}{part.get('label')}{RST} {build_usage_bar(pct)} {color_for_pct(pct)}{pct:3d}%{RST}{reset}")
+            chunks.append(f"{WHITE}{part.get('label')}{RST} {build_usage_bar(pct, long_window=long_window)} {color_for_pct(pct, long_window)}{pct:3d}%{RST}{reset}")
         elif kind == "tokens":
             chunks.append(f"{DIM}tokens{RST} {WHITE}{_fmt_tokens(int(part.get('total') or 0))}{RST}")
     stale = f"{DIM}{row.get('stale_text')}{RST}" if row.get("stale_text") else ""
@@ -2024,8 +2135,11 @@ def _format_reset(iso_str, style="time"):
 
 
 def build_metrics_line(ctx):
-    """Line 4: spending + cache metrics. Delegates to seg_burn_rate +
-    seg_cache_hit so the rolling-window logic is the single source of truth."""
+    """Line 4 (session-quality line): spending + cache metrics + efficiency
+    dots + tool-call count. Delegates to seg_burn_rate + seg_cache_hit so the
+    rolling-window logic is the single source of truth. seg_eff runs after
+    seg_cache_hit so it can read the cache-reuse ratio the latter stashes on
+    ctx["cache_hit_pct"] instead of recomputing it."""
     parts = []
 
     burn = seg_burn_rate(ctx)
@@ -2035,6 +2149,14 @@ def build_metrics_line(ctx):
     cache = seg_cache_hit(ctx)
     if cache:
         parts.append(cache)
+
+    eff = seg_eff(ctx)
+    if eff:
+        parts.append(eff)
+
+    tools = seg_tool_count(ctx)
+    if tools:
+        parts.append(tools)
 
     wf = seg_workflows(ctx)
     if wf:
@@ -2106,6 +2228,8 @@ SEGMENTS = {
     "gateway": seg_gateway,
     "context": seg_context,
     "cache_hit": seg_cache_hit,
+    "eff": seg_eff,
+    "tool_count": seg_tool_count,
     "burn_rate": seg_burn_rate,
     "vim_mode": seg_vim_mode,
     "agent": seg_agent,
@@ -2138,6 +2262,17 @@ def _run_segment(name, fn, ctx):
     except Exception as exc:
         debug(f"segment {name} failed: {exc!r}")
         return ""
+
+
+def _render_clock(ctx):
+    """Subtle end-of-line-1 render-time stamp (HH:MM, local time), multi-cli
+    only. Distinct from seg_time (bold white, opt-in via a custom tier's
+    segment list) -- this one is dim and wired specifically into multi-cli's
+    line 1 tail. See get_local_time() for the timezone resolution it reuses."""
+    now = ctx.get("local_time")
+    if not now:
+        return ""
+    return f"{DIM}{now.strftime('%H:%M')}{RST}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2234,6 +2369,14 @@ def main():
 
     if git_parts:
         parts.append(" ".join(git_parts))
+
+    # multi-cli only: a subtle render-time stamp at the tail of line 1. Not the
+    # Claude Code version (owner rejected that) -- just HH:MM, dim, so a stale
+    # statusline render is visible at a glance. Every other tier stays as-is.
+    if is_multi_cli:
+        clock = _render_clock(ctx)
+        if clock:
+            parts.append(clock)
 
     # Flow design: colored arrows (green=off-peak, yellow=peak)
     arrow_color = YELLOW if ctx.get("is_peak") else GREEN

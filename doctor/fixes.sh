@@ -51,11 +51,20 @@ esac
 [ -n "${WINDIR:-}" ] && is_windows=1
 
 # ── JSON helpers ─────────────────────────────────────────────────────────
+# Timestamped safety copy of settings.json before any patch below touches it.
+# A bad merge (or an interrupted process) must never be unrecoverable. No-op
+# when settings.json doesn't exist yet (nothing to back up).
+backup_settings() {
+    [ -f "$SETTINGS" ] || return 0
+    cp "$SETTINGS" "$SETTINGS.bak.$(date +%s)" 2>/dev/null || true
+}
+
 # Set statusLine.command in settings.json. Preserves every other key.
 # Requires python — falls back to a naive rewrite that only handles the
 # common shape. If settings.json is missing, creates a minimal one.
 set_statusline_command() {
     local new_cmd="$1"
+    backup_settings
     if [ -n "$PY" ] && [ -f "$SETTINGS" ]; then
         "$PY" - "$SETTINGS" "$new_cmd" <<'PY'
 import json, os, sys, tempfile

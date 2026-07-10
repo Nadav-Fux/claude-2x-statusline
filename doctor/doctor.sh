@@ -476,6 +476,8 @@ SEG_ONELINER[timeline]="Horizontal bar of today's peak/off-peak windows with 'no
 SEG_ONELINER[metrics]="Combined spending + cache metrics line (full tier only)"
 SEG_ONELINER[banner]="Broadcast message from remote schedule.json; hidden after expiry"
 SEG_ONELINER[duration]="Wall-clock time elapsed since session start"
+SEG_ONELINER[eff]="Efficiency dots (●●●●○): cache-reuse ratio mapped 0-100% -> 0-5 purple dots (full/multi-cli)"
+SEG_ONELINER[tool_count]="This session's tool-call count from the transcript (⚒ N, purple; full/multi-cli)"
 
 # ── explain mode ─────────────────────────────────────────────────────────
 do_explain() {
@@ -489,7 +491,7 @@ do_explain() {
         local name
         for name in peak_hours model context vim_mode agent workflows worktree git_branch git_dirty \
                     cost effort rate_limits usage_credits auth_mode sdk_meter env \
-                    burn_rate cache_hit context_depletion \
+                    burn_rate cache_hit eff tool_count context_depletion \
                     timeline metrics banner duration; do
             local line="${SEG_ONELINER[$name]:-}"
             if [[ -n "$line" ]]; then

@@ -43,6 +43,19 @@ render equivalent output for the same input.
   has no Node or bash equivalent; on Node-only or bash-only installs, the
   narrator hooks simply no-op until Python becomes available.
 
+## The display rule: whole field or nothing
+
+A segment renders completely (label + value) or not at all — never a blank,
+a dash, or a null placeholder. If a segment's data is missing, stale beyond
+its own freshness bar, or fails to parse, the segment function returns `""`
+and the render loop drops it silently; it never prints `label: -` or
+`label: N/A`. A legitimate zero-ish reading (e.g. "0 tool calls so far") is
+not "missing data" and still renders normally — only genuinely absent/broken
+data causes an omission. See `docs/FIELDS.md` for the exact source each
+segment reads from, and `seg_tool_count`/`seg_eff` in
+`engines/python-engine.py` for a worked example (missing/unreadable
+transcript → omit the segment; zero tool calls → render `⚒ 0`).
+
 ## Provider architecture (in brief)
 
 - `lib/usage_providers.py` defines a `PROVIDERS` registry (provider name →
