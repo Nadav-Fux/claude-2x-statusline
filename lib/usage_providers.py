@@ -42,6 +42,9 @@ CODEX_APP_SERVER_TIMEOUT = 10.0
 # The two-pool Antigravity quota-summary cache is refreshed in the background on
 # this cadence (mirrors the GLM detached-refresh pattern).
 ANTIGRAVITY_CACHE_TTL = 120
+# A stale quota-summary (5h + weekly per pool) still beats the CLI's 5h-only
+# view; only past this horizon does the render drop to the CLI fallback.
+ANTIGRAVITY_SUMMARY_MAX_AGE = 6 * 3600
 # Hard overall wall-clock budget for one quota-summary refresh (local + cloud).
 ANTIGRAVITY_REFRESH_BUDGET = 8.0
 ANTIGRAVITY_LOCAL_RPC_PATH = (
@@ -2243,12 +2246,15 @@ def get_antigravity_usage(config=None):
         if age is None or age >= ANTIGRAVITY_CACHE_TTL:
             _spawn_provider_refresh("antigravity", config)
 
-        # 1) Fresh two-pool quota-summary cache wins.
+        # 1) Two-pool quota-summary cache wins — even stale (up to the horizon),
+        # because 5h+weekly per pool beats the CLI's 5h-only view. The TTL above
+        # already triggered the background refresh; staleness stays honest via
+        # stale_seconds.
         if (
             _is_available_record(record)
             and record.get("source") == "quota-summary"
             and age is not None
-            and age < ANTIGRAVITY_CACHE_TTL
+            and age < ANTIGRAVITY_SUMMARY_MAX_AGE
         ):
             out = dict(record)
             out["stale_seconds"] = max(0, age)
