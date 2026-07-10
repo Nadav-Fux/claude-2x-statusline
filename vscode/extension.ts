@@ -42,6 +42,7 @@ interface UsageData {
 }
 
 interface ContextData {
+  ts?: number;
   current_usage?: number;
   context_window_size?: number;
   pct?: number;
@@ -68,11 +69,16 @@ interface ExternalUsageRecord {
   available?: boolean;
   display?: 'bars' | 'compact' | string;
   plan?: string | null;
+  level?: string | null;
+  source?: string | null;
+  stale_seconds?: number | null;
   five_hour?: ExternalUsageWindow | null;
   weekly?: ExternalUsageWindow | null;
   metrics?: ExternalUsageWindow[] | null;
   metrics_5h?: ExternalUsageWindow[] | null;
   metrics_weekly?: ExternalUsageWindow[] | null;
+  all_plans?: ExternalUsageRecord[] | null;
+  tokens?: Record<string, number> | null;
 }
 
 interface ExternalUsageCache {
@@ -102,13 +108,6 @@ const DEFAULT_SCHEDULE_URL = 'https://raw.githubusercontent.com/Nadav-Fux/claude
 const CONTEXT_TTL_MS = 10 * 60_000;
 const PROVIDER_CACHE_STALE_MS = 15 * 60_000;
 const EXTERNAL_PROVIDER_ORDER: ExternalProvider[] = ['codex', 'glm', 'droid', 'antigravity', 'copilot'];
-const PROVIDER_SUMMARY_LABELS: Record<ExternalProvider, string> = {
-  codex: 'Cdx',
-  glm: 'GLM',
-  droid: 'Droid',
-  antigravity: 'AGY',
-  copilot: 'CoP',
-};
 const PROVIDER_FALLBACK_LABELS: Record<ExternalProvider, string> = {
   codex: 'Codex',
   glm: 'GLM',
@@ -471,47 +470,321 @@ function updateWdItem(item: vscode.StatusBarItem, pct: number, resetAt?: string)
 
 // ── Provider cockpit ──
 
+// Cockpit priority order (left→right). Claude is always attempted; the rest are
+// gated by the selected external providers. GLM/Copilot/Droid are droppable —
+// they are appended to the status-bar text only while it stays within budget.
+type CockpitKey = 'claude' | ExternalProvider;
+
+const COCKPIT_ORDER: CockpitKey[] = ['claude', 'codex', 'antigravity', 'glm', 'copilot', 'droid'];
+const COCKPIT_DROPPABLE = new Set<CockpitKey>(['glm', 'copilot', 'droid']);
+const COCKPIT_SHORT: Record<CockpitKey, string> = {
+  claude: 'Cl', codex: 'Cdx', antigravity: 'AGY', glm: 'GLM', copilot: 'CoP', droid: 'Drd',
+};
+const COCKPIT_FULL: Record<CockpitKey, string> = {
+  claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', glm: 'GLM', copilot: 'Copilot', droid: 'Droid',
+};
+const DEFAULT_COCKPIT_MAX_LENGTH = 80;
+const COCKPIT_ICON = '⛁'; // ⛁
+const STALE_MARKER = '°'; // °
+const ANTIGRAVITY_CLI_CACHE_PATH = path.join(CLAUDE_DIR, 'statusline-usage-antigravity-cli.json');
+
+interface CockpitWindow {
+  label: string;
+  pct: number;
+  resetsAt?: number | string | null;
+}
+
+interface CockpitPool {
+  plan?: string | null;
+  windows: CockpitWindow[];
+}
+
+interface CockpitSegment {
+  key: CockpitKey;
+  short: string;
+  full: string;
+  droppable: boolean;
+  available: boolean;        // has usable pct → eligible for the bar
+  cachedAtMs: number | null;
+  ageMs: number | null;
+  stale: boolean;
+  plan?: string | null;
+  source?: string | null;
+  barBody: string | null;    // percent body without the short label
+  pools: CockpitPool[];      // AGY carries one pool per plan; others carry one
+  note?: string;             // e.g. 'no data', 'no usage', tokens summary
+}
+
 function updateProviderCockpit(config: StatuslineConfig) {
-  const providers = selectedExternalProviders(config);
-  if (providers.length === 0) {
+  const selected = new Set<ExternalProvider>(selectedExternalProviders(config));
+  const maxLen = clampCockpitMaxLength(
+    vscode.workspace.getConfiguration('claudeStatusline').get<number>('cockpitMaxLength', DEFAULT_COCKPIT_MAX_LENGTH)
+  );
+
+  const segments: CockpitSegment[] = [];
+  for (const key of COCKPIT_ORDER) {
+    if (key === 'claude') {
+      segments.push(buildClaudeSegment());
+    } else if (selected.has(key)) {
+      segments.push(buildExternalSegment(key));
+    }
+  }
+
+  const claudeSeg = segments.find(seg => seg.key === 'claude');
+  const claudeAvailable = !!claudeSeg && claudeSeg.available;
+  if (selected.size === 0 && !claudeAvailable) {
     cockpitItem.hide();
     return;
   }
 
-  const snapshots = providers
-    .map(provider => readProviderSnapshot(provider))
-    .filter((snapshot): snapshot is ProviderSnapshot => snapshot !== null);
+  // Greedy append in priority order; stop at the first segment that would blow
+  // the budget so lower-priority (droppable) segments never jump the queue.
+  const rendered: CockpitSegment[] = [];
+  let text = COCKPIT_ICON;
+  for (const seg of segments) {
+    if (!seg.available) { continue; }
+    const piece = `${seg.short} ${seg.barBody}${seg.stale ? STALE_MARKER : ''}`;
+    const candidate = rendered.length === 0 ? `${COCKPIT_ICON} ${piece}` : `${text} · ${piece}`;
+    if (candidate.length <= maxLen) {
+      text = candidate;
+      rendered.push(seg);
+    } else {
+      break;
+    }
+  }
 
-  if (snapshots.length === 0) {
-    cockpitItem.text = '⛁ no provider cache';
-    cockpitItem.tooltip = providerCacheMissTooltip(providers);
-    cockpitItem.command = 'claudeStatusline.refreshProviderCockpit';
-    cockpitItem.backgroundColor = undefined;
-    cockpitItem.color = undefined;
-    cockpitItem.show();
+  cockpitItem.text = rendered.length === 0 ? `${COCKPIT_ICON} no data` : text;
+  cockpitItem.tooltip = buildCockpitTooltip(segments, rendered, maxLen);
+  cockpitItem.command = 'claudeStatusline.refreshProviderCockpit';
+  cockpitItem.backgroundColor = undefined;
+  const allStale = rendered.length > 0 && rendered.every(seg => seg.stale);
+  cockpitItem.color = allStale ? new vscode.ThemeColor('descriptionForeground') : undefined;
+  cockpitItem.show();
+}
+
+function clampCockpitMaxLength(value: number | undefined): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) { return DEFAULT_COCKPIT_MAX_LENGTH; }
+  return Math.max(24, Math.min(400, Math.round(n)));
+}
+
+function emptyCockpitSegment(key: CockpitKey): CockpitSegment {
+  return {
+    key,
+    short: COCKPIT_SHORT[key],
+    full: COCKPIT_FULL[key],
+    droppable: COCKPIT_DROPPABLE.has(key),
+    available: false,
+    cachedAtMs: null,
+    ageMs: null,
+    stale: false,
+    plan: null,
+    source: null,
+    barBody: null,
+    pools: [],
+  };
+}
+
+function buildClaudeSegment(): CockpitSegment {
+  const seg = emptyCockpitSegment('claude');
+  try {
+    const stat = fs.statSync(CONTEXT_PATH);
+    const data: ContextData = JSON.parse(fs.readFileSync(CONTEXT_PATH, 'utf8'));
+    const fh = numericPct(data.five_hour_pct);
+    const wd = numericPct(data.seven_day_pct);
+    if (fh === null && wd === null) {
+      seg.note = 'no data';
+      return seg;
+    }
+    const cachedAtMs = typeof data.ts === 'number' && data.ts > 0 ? data.ts * 1000 : stat.mtimeMs;
+    seg.cachedAtMs = cachedAtMs;
+    seg.ageMs = Math.max(0, Date.now() - cachedAtMs);
+    seg.stale = seg.ageMs > PROVIDER_CACHE_STALE_MS;
+    seg.plan = stringValue(data.model);
+    seg.source = 'context';
+    const windows: CockpitWindow[] = [];
+    if (fh !== null) { windows.push({ label: '5h', pct: fh }); }
+    if (wd !== null) { windows.push({ label: '7d', pct: wd }); }
+    seg.pools = [{ windows }];
+    seg.available = true;
+    seg.barBody = windows.map(w => Math.round(w.pct)).join('/');
+    return seg;
+  } catch {
+    seg.note = 'no data';
+    return seg;
+  }
+}
+
+function buildExternalSegment(key: ExternalProvider): CockpitSegment {
+  const seg = emptyCockpitSegment(key);
+  const snapshot = readProviderSnapshot(key);
+  if (!snapshot) {
+    seg.note = 'no data';
+    return seg;
+  }
+  seg.cachedAtMs = snapshot.cachedAtMs;
+  seg.ageMs = snapshot.ageMs;
+  seg.stale = snapshot.ageMs > PROVIDER_CACHE_STALE_MS;
+  seg.plan = stringValue(snapshot.record.plan) || stringValue(snapshot.record.level);
+  seg.source = stringValue(snapshot.record.source);
+
+  if (key === 'antigravity') {
+    fillAntigravitySegment(seg, snapshot.record);
+  } else if (key === 'droid') {
+    fillDroidSegment(seg, snapshot.record);
+  } else {
+    fillStandardSegment(seg, snapshot.record);
+  }
+
+  if (!seg.available && !seg.note) {
+    seg.note = snapshot.record.available === false ? 'unavailable' : 'no usage';
+  }
+  return seg;
+}
+
+function fillStandardSegment(seg: CockpitSegment, record: ExternalUsageRecord) {
+  const windows: CockpitWindow[] = [];
+  pushCockpitWindow(windows, record.five_hour, '5h');
+  pushCockpitWindow(windows, record.weekly, '7d');
+  if (windows.length === 0) {
+    for (const metric of collectMetricWindows(record)) { pushCockpitWindow(windows, metric, 'm'); }
+  }
+  seg.pools = [{ windows }];
+  if (windows.length > 0) {
+    seg.available = true;
+    seg.barBody = windows.map(w => Math.round(w.pct)).join('/');
+  }
+}
+
+function fillAntigravitySegment(seg: CockpitSegment, record: ExternalUsageRecord) {
+  const allPlans = Array.isArray(record.all_plans) ? record.all_plans : null;
+  if (allPlans && allPlans.length > 0) {
+    const pools: CockpitPool[] = [];
+    for (const plan of allPlans) {
+      if (!plan || typeof plan !== 'object') { continue; }
+      const windows: CockpitWindow[] = [];
+      pushCockpitWindow(windows, plan.five_hour, '5h');
+      pushCockpitWindow(windows, plan.weekly, 'wk');
+      pools.push({ plan: stringValue(plan.plan), windows });
+    }
+    seg.pools = pools;
+    const parts = pools
+      .filter(pool => pool.windows.length > 0)
+      .map(pool => `${antigravityPoolAbbrev(pool.plan)}:${pool.windows.map(w => Math.round(w.pct)).join('/')}`);
+    if (parts.length > 0) {
+      seg.available = true;
+      seg.barBody = parts.join(' ');
+    }
     return;
   }
 
-  const summaryParts = snapshots
-    .map(snapshot => {
-      const pct = maxProviderPct(snapshot.record);
-      if (pct === null) { return null; }
-      return `${PROVIDER_SUMMARY_LABELS[snapshot.provider]} ${pct}%`;
-    })
-    .filter((part): part is string => part !== null);
+  // Fallbacks: top-level 5h/wk (selected plan) → compact metrics → antigravity-cli file.
+  const windows: CockpitWindow[] = [];
+  pushCockpitWindow(windows, record.five_hour, '5h');
+  pushCockpitWindow(windows, record.weekly, 'wk');
+  if (windows.length === 0) {
+    for (const metric of collectMetricWindows(record)) { pushCockpitWindow(windows, metric, 'm'); }
+  }
+  if (windows.length === 0) {
+    for (const metric of readAntigravityCliFallback()) { pushCockpitWindow(windows, metric, 'm'); }
+  }
+  seg.pools = [{ plan: stringValue(record.plan), windows }];
+  if (windows.length > 0) {
+    seg.available = true;
+    seg.barBody = windows.map(w => Math.round(w.pct)).join('/');
+  }
+}
 
-  if (summaryParts.length === 0) {
-    cockpitItem.text = '⛁ no provider usage';
-  } else {
-    const allStale = snapshots.every(snapshot => snapshot.ageMs > PROVIDER_CACHE_STALE_MS);
-    cockpitItem.text = `⛁ ${summaryParts.join(' · ')}${allStale ? ' (stale)' : ''}`;
+function fillDroidSegment(seg: CockpitSegment, record: ExternalUsageRecord) {
+  // Droid caches carry token totals but no percentage windows → tooltip only.
+  const total = record.tokens && typeof record.tokens === 'object' ? Number(record.tokens.total) : NaN;
+  seg.note = Number.isFinite(total) ? `${fmtTokens(total)} tok` : 'no usage';
+}
+
+function pushCockpitWindow(windows: CockpitWindow[], window: ExternalUsageWindow | null | undefined, fallbackLabel: string) {
+  if (!window || typeof window !== 'object') { return; }
+  const pct = numericPct(window.used_pct);
+  if (pct === null) { return; }
+  windows.push({ label: stringValue(window.label) || fallbackLabel, pct, resetsAt: window.resets_at });
+}
+
+function collectMetricWindows(record: ExternalUsageRecord): ExternalUsageWindow[] {
+  const out: ExternalUsageWindow[] = [];
+  for (const arr of [record.metrics, record.metrics_5h, record.metrics_weekly]) {
+    if (!Array.isArray(arr)) { continue; }
+    for (const metric of arr) {
+      if (metric && typeof metric === 'object') { out.push(metric); }
+    }
+  }
+  return out;
+}
+
+function readAntigravityCliFallback(): ExternalUsageWindow[] {
+  try {
+    const cache: ExternalUsageCache = JSON.parse(fs.readFileSync(ANTIGRAVITY_CLI_CACHE_PATH, 'utf8'));
+    const record = cache.record;
+    if (!record || typeof record !== 'object') { return []; }
+    const metrics = collectMetricWindows(record);
+    if (metrics.length > 0) { return metrics; }
+    const windows: ExternalUsageWindow[] = [];
+    if (record.five_hour) { windows.push(record.five_hour); }
+    if (record.weekly) { windows.push(record.weekly); }
+    return windows;
+  } catch {
+    return [];
+  }
+}
+
+function antigravityPoolAbbrev(plan: string | null | undefined): string {
+  const p = (plan || '').toLowerCase();
+  if (p.includes('gemini')) { return 'g'; }
+  if (p.includes('claude')) { return 'c'; }
+  if (p.includes('gpt')) { return 'x'; }
+  const match = p.match(/[a-z0-9]/);
+  return match ? match[0] : '?';
+}
+
+function buildCockpitTooltip(segments: CockpitSegment[], rendered: CockpitSegment[], maxLen: number): vscode.MarkdownString {
+  const renderedKeys = new Set(rendered.map(seg => seg.key));
+  const lines: string[] = ['### Multi-CLI cockpit', ''];
+  lines.push('| Provider | Plan | Window | Used | Resets | Status |');
+  lines.push('|:--|:--|:--|--:|:--|:--|');
+
+  for (const seg of segments) {
+    if (!seg.available) {
+      lines.push(`| **${mdCell(seg.full)}** | ${mdCell(seg.plan)} | — | ${mdCell(seg.note || 'no data')} | — | — |`);
+      continue;
+    }
+    const status = seg.stale ? `stale ${fmtAge(seg.ageMs ?? 0)}` : 'fresh';
+    let firstRow = true;
+    for (const pool of seg.pools) {
+      let firstInPool = true;
+      for (const window of pool.windows) {
+        const providerCell = firstRow ? `**${mdCell(seg.full)}**` : '';
+        const planCell = firstInPool ? mdCell(pool.plan ?? seg.plan) : '';
+        const resets = mdCell(formatResetLocal(window.resetsAt));
+        const statusCell = firstRow ? status : '';
+        lines.push(`| ${providerCell} | ${planCell} | ${mdCell(window.label)} | ${Math.round(window.pct)}% | ${resets} | ${statusCell} |`);
+        firstRow = false;
+        firstInPool = false;
+      }
+    }
   }
 
-  cockpitItem.tooltip = providerCockpitTooltip(snapshots);
-  cockpitItem.command = 'claudeStatusline.refreshProviderCockpit';
-  cockpitItem.backgroundColor = undefined;
-  cockpitItem.color = undefined;
-  cockpitItem.show();
+  lines.push('');
+  const dropped = segments.filter(seg => seg.available && !renderedKeys.has(seg.key)).map(seg => seg.short);
+  if (dropped.length > 0) {
+    lines.push(`Bar budget ${maxLen} chars — not shown: ${dropped.join(', ')}.`, '');
+  }
+  lines.push('Click to re-read provider caches.');
+  const md = new vscode.MarkdownString(lines.join('\n'), true);
+  md.supportThemeIcons = true;
+  return md;
+}
+
+function mdCell(value: unknown): string {
+  const s = value === null || value === undefined || value === '' ? '—' : String(value);
+  return s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
 function selectedExternalProviders(config: StatuslineConfig): ExternalProvider[] {
@@ -556,7 +829,7 @@ function readProviderSnapshot(provider: ExternalProvider): ProviderSnapshot | nu
 
 function normalizeProviderRecord(provider: ExternalProvider, cache: ExternalUsageCache): ExternalUsageRecord | null {
   if (cache.record && typeof cache.record === 'object') {
-    if (cache.record.available === false && providerWindows(cache.record).length === 0) { return null; }
+    // Keep unavailable records too — the tooltip lists them explicitly.
     return {
       provider,
       label: PROVIDER_FALLBACK_LABELS[provider],
@@ -612,92 +885,6 @@ function usageWindow(usedPct: unknown, resetsAt: number | null, label: string): 
   return { label, used_pct: pct, resets_at: resetsAt };
 }
 
-function maxProviderPct(record: ExternalUsageRecord): number | null {
-  const pcts = providerWindows(record)
-    .map(window => numericPct(window.used_pct))
-    .filter((pct): pct is number => pct !== null);
-  if (pcts.length === 0) { return null; }
-  return Math.round(Math.max(...pcts));
-}
-
-function providerWindows(record: ExternalUsageRecord): ExternalUsageWindow[] {
-  const windows: ExternalUsageWindow[] = [];
-  if (record.five_hour && typeof record.five_hour === 'object') { windows.push(record.five_hour); }
-  if (record.weekly && typeof record.weekly === 'object') { windows.push(record.weekly); }
-  appendMetricWindows(windows, record.metrics);
-  appendMetricWindows(windows, record.metrics_5h);
-  appendMetricWindows(windows, record.metrics_weekly);
-  return windows;
-}
-
-function appendMetricWindows(target: ExternalUsageWindow[], metrics: ExternalUsageWindow[] | null | undefined) {
-  if (!Array.isArray(metrics)) { return; }
-  for (const metric of metrics) {
-    if (metric && typeof metric === 'object') { target.push(metric); }
-  }
-}
-
-function providerCockpitTooltip(snapshots: ProviderSnapshot[]): vscode.MarkdownString {
-  const lines = ['### Multi-CLI cockpit', ''];
-  for (const snapshot of snapshots) {
-    const record = snapshot.record;
-    const label = stringValue(record.label) || PROVIDER_FALLBACK_LABELS[snapshot.provider];
-    const plan = stringValue(record.plan);
-    const staleText = snapshot.ageMs > PROVIDER_CACHE_STALE_MS ? ` ·stale ${fmtAge(snapshot.ageMs)}` : '';
-    lines.push(`#### ${escapeMarkdown(label)}${plan ? ` · ${escapeMarkdown(plan)}` : ''}${staleText}`, '');
-    lines.push(`Cached: ${formatLocalDateTime(snapshot.cachedAtMs)}`, '');
-    appendWindowTooltipLines(lines, '5h', record.five_hour);
-    appendWindowTooltipLines(lines, '7d', record.weekly);
-    appendMetricsTooltipLines(lines, 'Metrics', record.metrics);
-    appendMetricsTooltipLines(lines, '5h models', record.metrics_5h);
-    appendMetricsTooltipLines(lines, '7d models', record.metrics_weekly);
-    lines.push('');
-  }
-  lines.push('Click to re-read provider caches.');
-  return new vscode.MarkdownString(lines.join('\n'), true);
-}
-
-function providerCacheMissTooltip(providers: ExternalProvider[]): vscode.MarkdownString {
-  const labels = providers.map(provider => PROVIDER_FALLBACK_LABELS[provider]).join(', ');
-  return new vscode.MarkdownString(
-    [
-      '### Multi-CLI cockpit',
-      '',
-      `Selected: ${escapeMarkdown(labels)}`,
-      '',
-      'No provider cache files were readable yet.',
-      '',
-      'Click to re-read provider caches.',
-    ].join('\n'),
-    true
-  );
-}
-
-function appendWindowTooltipLines(lines: string[], fallbackLabel: string, window: ExternalUsageWindow | null | undefined) {
-  if (!window || typeof window !== 'object') { return; }
-  const pct = numericPct(window.used_pct);
-  if (pct === null) { return; }
-  const label = stringValue(window.label) || fallbackLabel;
-  const reset = formatResetLocal(window.resets_at);
-  lines.push(`- **${escapeMarkdown(label)}**: ${Math.round(pct)}% ${usageBar(pct)}${reset ? ` · resets ${reset}` : ''}`);
-}
-
-function appendMetricsTooltipLines(lines: string[], title: string, metrics: ExternalUsageWindow[] | null | undefined) {
-  if (!Array.isArray(metrics) || metrics.length === 0) { return; }
-  const entries = metrics
-    .map(metric => {
-      const pct = numericPct(metric.used_pct);
-      if (pct === null) { return null; }
-      const label = stringValue(metric.label) || 'metric';
-      const reset = formatResetLocal(metric.resets_at);
-      return `${escapeMarkdown(label)} ${Math.round(pct)}%${reset ? ` (${reset})` : ''}`;
-    })
-    .filter((entry): entry is string => entry !== null);
-  if (entries.length > 0) {
-    lines.push(`- **${escapeMarkdown(title)}**: ${entries.join(' · ')}`);
-  }
-}
-
 function numericPct(value: unknown): number | null {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) { return null; }
@@ -736,10 +923,6 @@ function fmtAge(ageMs: number): string {
   const hours = Math.floor(mins / 60);
   if (hours < 48) { return `${hours}h`; }
   return `${Math.floor(hours / 24)}d`;
-}
-
-function escapeMarkdown(value: string): string {
-  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, '\\$1');
 }
 
 function batteryBar(pct: number): string {
