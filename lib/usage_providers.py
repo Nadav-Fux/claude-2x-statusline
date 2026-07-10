@@ -7,7 +7,9 @@ import os
 import re
 import shutil
 import signal
+import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -37,6 +39,17 @@ CODEX_LIVE_TTL = 120
 # Hard ceiling on the whole app-server exchange (spawn -> initialize ->
 # account/rateLimits/read). The child is always killed when this elapses.
 CODEX_APP_SERVER_TIMEOUT = 10.0
+# The two-pool Antigravity quota-summary cache is refreshed in the background on
+# this cadence (mirrors the GLM detached-refresh pattern).
+ANTIGRAVITY_CACHE_TTL = 120
+# Hard overall wall-clock budget for one quota-summary refresh (local + cloud).
+ANTIGRAVITY_REFRESH_BUDGET = 8.0
+ANTIGRAVITY_LOCAL_RPC_PATH = (
+    "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+)
+ANTIGRAVITY_CLOUD_URL = (
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+)
 EXTERNAL_USAGE_CACHE_TTL = 15 * 60
 GLM_ENDPOINT = "/api/monitor/usage/quota/limit"
 COPILOT_CACHE_TTL = 300
@@ -1830,41 +1843,428 @@ def _map_antigravity_snapshot(snapshot):
     return [groups[name] for name in ordered]
 
 
+# ── Antigravity quota-summary (RetrieveUserQuotaSummary RPC) ──────────────────
+# The richer of Antigravity's two data sources: TWO pools ("gemini" and
+# "claude+gpt", internally "3p") that EACH expose a 5-hour AND a weekly bucket,
+# with independent reset times. Bucket ids are matched exactly. remainingFraction
+# is 0..1 where 1 == full, so used% = round((1-fraction)*100).
+_ANTIGRAVITY_QUOTA_POOLS = (
+    # (plan label, 5h bucket id, weekly bucket id)
+    ("gemini", "gemini-5h", "gemini-weekly"),
+    ("claude+gpt", "3p-5h", "3p-weekly"),
+)
+
+
+def _antigravity_bucket_used_pct(fraction):
+    number = _finite_number(fraction)
+    if number is None:
+        return None
+    return max(0, min(100, int(round((1.0 - number) * 100))))
+
+
+def _antigravity_quota_buckets(summary):
+    """Flatten a RetrieveUserQuotaSummary response into {bucketId: {used_pct,
+    resets_at}}. Accepts the local route's wrapped ``{"response": {"groups": ...}}``
+    form and the cloud route's bare ``{"groups": ...}`` form."""
+    if not isinstance(summary, dict):
+        return {}
+    root = summary.get("response") if isinstance(summary.get("response"), dict) else summary
+    groups = root.get("groups") if isinstance(root, dict) else None
+    if not isinstance(groups, list):
+        return {}
+    buckets = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        entries = group.get("buckets")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            bucket_id = entry.get("bucketId") or entry.get("bucket_id")
+            if not bucket_id:
+                continue
+            used_pct = _antigravity_bucket_used_pct(
+                entry.get("remainingFraction", entry.get("remaining_fraction"))
+            )
+            if used_pct is None:
+                continue
+            reset = _parse_iso_seconds(entry.get("resetTime") or entry.get("reset_time"))
+            buckets[str(bucket_id)] = {
+                "used_pct": used_pct,
+                "resets_at": int(reset) if reset else None,
+            }
+    return buckets
+
+
+def _map_antigravity_quota_summary(summary):
+    """Map a RetrieveUserQuotaSummary response into Antigravity's two pool
+    sub-records, each carrying a 5-hour and a weekly window (display "bars").
+
+    Returns the ordered list [gemini, claude+gpt] of pool records that carry at
+    least one window, or None when no known bucket is present.
+    """
+    buckets = _antigravity_quota_buckets(summary)
+    if not buckets:
+        return None
+    pool_records = []
+    for plan, five_id, weekly_id in _ANTIGRAVITY_QUOTA_POOLS:
+        five = buckets.get(five_id)
+        weekly = buckets.get(weekly_id)
+        five_window = _usage_window(five["used_pct"], five["resets_at"], "5h") if five else None
+        weekly_window = _usage_window(weekly["used_pct"], weekly["resets_at"], "wk") if weekly else None
+        if five_window is None and weekly_window is None:
+            continue
+        record = unavailable("antigravity")
+        record.update(
+            {
+                "available": True,
+                "label": "AGY",
+                "plan": plan,
+                "display": "bars",
+                "five_hour": five_window,
+                "weekly": weekly_window,
+                "source": "quota-summary",
+                "stale_seconds": 0,
+            }
+        )
+        pool_records.append(record)
+    return pool_records or None
+
+
+def _compose_antigravity_quota_record(pool_records):
+    """Compose the cached codex-style antigravity record from pool sub-records:
+    the top-level mirrors the WORST pool (highest max used across its windows)
+    for backward compat, and ``all_plans`` fans out one row per pool via the same
+    seam codex multi-plan rows use."""
+    if not pool_records:
+        return None
+
+    def pool_max_used(record):
+        values = [
+            window.get("used_pct")
+            for window in (record.get("five_hour"), record.get("weekly"))
+            if isinstance(window, dict)
+        ]
+        return max(values) if values else 0
+
+    worst = max(pool_records, key=pool_max_used)
+    record = unavailable("antigravity")
+    record.update(
+        {
+            "available": True,
+            "label": "AGY",
+            "plan": worst.get("plan"),
+            "display": "bars",
+            "five_hour": worst.get("five_hour"),
+            "weekly": worst.get("weekly"),
+            "source": "quota-summary",
+            "stale_seconds": 0,
+            "all_plans": pool_records,
+        }
+    )
+    return record
+
+
+def _antigravity_extract_arg(cmdline, name):
+    """Pull a ``--flag=value`` / ``--flag value`` argument out of a process
+    command line, stripping any surrounding quotes (mirrors the CLI parser)."""
+    escaped = re.escape(name)
+    for pattern in (
+        rf"{escaped}=([^\s\"']+|\"[^\"]*\"|'[^']*')",
+        rf"{escaped}\s+([^\s\"']+|\"[^\"]*\"|'[^']*')",
+    ):
+        match = re.search(pattern, cmdline)
+        if match:
+            return match.group(1).strip("\"'")
+    return None
+
+
+def _antigravity_local_process(timeout=3.0):
+    """Scan ``ps aux`` for the running Antigravity language server. Returns
+    ``(pid, csrf_token, extension_server_port)``. The CSRF token lives in memory
+    only — it is never logged, cached, or passed via argv."""
+    try:
+        proc = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None, None, None
+    for line in (proc.stdout or "").splitlines():
+        lower = line.lower()
+        if "antigravity" not in lower or "server installation script" in lower:
+            continue
+        if not any(
+            signal in line
+            for signal in (
+                "language-server",
+                "lsp",
+                "--csrf_token",
+                "--extension_server_port",
+                "exa.language_server_pb",
+            )
+        ):
+            continue
+        parts = line.split()
+        if len(parts) < 11:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        cmdline = " ".join(parts[10:])
+        return (
+            pid,
+            _antigravity_extract_arg(cmdline, "--csrf_token"),
+            _antigravity_extract_arg(cmdline, "--extension_server_port"),
+        )
+    return None, None, None
+
+
+def _antigravity_listen_ports(pid, timeout=3.0):
+    ports = []
+    try:
+        proc = subprocess.run(
+            ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", str(pid)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        for line in (proc.stdout or "").splitlines():
+            match = re.search(r":(\d+)\s+\(LISTEN\)", line)
+            if match:
+                port = int(match.group(1))
+                if port not in ports:
+                    ports.append(port)
+    except Exception:
+        pass
+    return ports
+
+
+def _antigravity_local_summary(deadline):
+    """Fetch RetrieveUserQuotaSummary from the local Antigravity language server
+    (preferred while the IDE runs). Self-signed TLS is accepted only for
+    127.0.0.1. Returns mapped pool records or None."""
+
+    def remaining():
+        return deadline - time.time()
+
+    pid, csrf, ext_port = _antigravity_local_process(max(0.2, min(3.0, remaining())))
+    if pid is None:
+        return None
+    ports = _antigravity_listen_ports(pid, max(0.2, min(3.0, remaining())))
+    if not ports and ext_port:
+        try:
+            ports = [int(ext_port)]
+        except (TypeError, ValueError):
+            ports = []
+    if not ports:
+        return None
+
+    body = json.dumps(
+        {"metadata": {"ideName": "antigravity", "extensionName": "antigravity", "locale": "en"}}
+    ).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Connect-Protocol-Version": "1",
+    }
+    if csrf:
+        headers["X-Codeium-Csrf-Token"] = csrf
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    for port in ports:
+        for scheme in ("https", "http"):
+            if remaining() <= 0:
+                return None
+            url = f"{scheme}://127.0.0.1:{port}{ANTIGRAVITY_LOCAL_RPC_PATH}"
+            try:
+                request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+                kwargs = {"timeout": max(0.2, min(2.5, remaining()))}
+                if scheme == "https":
+                    kwargs["context"] = ctx
+                with urllib.request.urlopen(request, **kwargs) as resp:
+                    data = json.loads(resp.read())
+            except Exception:
+                continue
+            summary = _map_antigravity_quota_summary(data)
+            if summary:
+                return summary
+    return None
+
+
+def _antigravity_config_dir():
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "antigravity-usage"
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(home / "AppData" / "Roaming")
+        return Path(base) / "antigravity-usage"
+    base = os.environ.get("XDG_CONFIG_HOME") or str(home / ".config")
+    return Path(base) / "antigravity-usage"
+
+
+def _read_antigravity_oauth():
+    """Read (read-only) the OAuth access token + expiry (ms epoch) the
+    ``antigravity-usage`` CLI stores. The token is returned for in-memory use
+    only; it is never logged, cached, or written anywhere."""
+    try:
+        config_dir = _antigravity_config_dir()
+        tokens = None
+        config = _read_json(config_dir / "config.json")
+        email = config.get("activeAccount") if isinstance(config, dict) else None
+        if email:
+            safe = re.sub(r"[^a-zA-Z0-9@._-]", "_", str(email))
+            tokens = _read_json(config_dir / "accounts" / safe / "tokens.json")
+        if not isinstance(tokens, dict):
+            tokens = _read_json(config_dir / "tokens.json")
+        if not isinstance(tokens, dict):
+            return None, None
+        token = tokens.get("accessToken")
+        if not token:
+            return None, None
+        expires_at = tokens.get("expiresAt")
+        expires_at = float(expires_at) if isinstance(expires_at, (int, float)) else None
+        return str(token), expires_at
+    except Exception:
+        return None, None
+
+
+def _antigravity_cloud_summary(deadline):
+    """Fetch retrieveUserQuotaSummary from the Google cloud route with the stored
+    OAuth bearer (fallback when the IDE is closed). On an expired token or any
+    auth error we give up gracefully for this cycle — no token refresh."""
+    token, expires_at = _read_antigravity_oauth()
+    if not token:
+        return None
+    if expires_at is not None and (time.time() * 1000.0) >= expires_at:
+        return None
+    body = json.dumps({}).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "antigravity",
+    }
+    try:
+        request = urllib.request.Request(
+            ANTIGRAVITY_CLOUD_URL, data=body, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(request, timeout=max(0.2, min(5.0, deadline - time.time()))) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return None
+    return _map_antigravity_quota_summary(data)
+
+
+def refresh_antigravity_cache(config=None):
+    """Refresh the Antigravity two-pool quota-summary cache (5h + weekly per
+    pool) from the RetrieveUserQuotaSummary RPC.
+
+    Tries the local Antigravity language-server route first, then the cloud route
+    with the stored OAuth bearer. Never clobbers a prior cache on failure (writes
+    only on a mapped, available record). All CSRF/token material stays in memory
+    only. Runs under a hard overall deadline. Meant to be called from the
+    detached provider refresher, never on the render path.
+    """
+    deadline = time.time() + ANTIGRAVITY_REFRESH_BUDGET
+    try:
+        summary = _antigravity_local_summary(deadline)
+        if summary is None:
+            summary = _antigravity_cloud_summary(deadline)
+        if not summary:
+            return False
+        record = _compose_antigravity_quota_record(summary)
+        if not (isinstance(record, dict) and record.get("available")):
+            return False
+        return _write_json(
+            _cache_path("antigravity"), {"cached_at": time.time(), "record": record}
+        ) is True
+    except Exception:
+        return False
+
+
+def _antigravity_cli_usage(config):
+    """Antigravity quota via the ``antigravity-usage`` CLI (owns OAuth refresh +
+    local-IDE/cloud fallback). This is the 5h-only compact fallback used when no
+    fresh quota-summary cache is available. Caches BOTH hits and misses so a
+    logged-out machine never re-spawns the CLI on every render."""
+    config = config if isinstance(config, dict) else {}
+    cached = _read_cached_record("antigravity", GLM_CACHE_TTL)
+    if cached is not None:
+        return cached
+    bin_path = str(config.get("bin") or "antigravity-usage")
+    out = ""
+    try:
+        proc = subprocess.run(
+            [bin_path, "quota", "--json", "--method", "auto"],
+            capture_output=True, text=True, timeout=5,
+        )
+        out = proc.stdout or ""
+    except Exception:
+        out = ""
+    try:
+        snapshot = json.loads(out)
+    except Exception:
+        snapshot = None
+    metrics = _map_antigravity_snapshot(snapshot)
+    if metrics:
+        record = unavailable("antigravity")
+        record.update({
+            "available": True, "label": "AGY", "display": "compact", "metrics": metrics,
+            "plan": snapshot.get("planType") if isinstance(snapshot, dict) else None,
+            "source": "api", "stale_seconds": 0,
+        })
+    else:
+        record = unavailable("antigravity")
+    _write_json(_cache_path("antigravity"), {"cached_at": time.time(), "record": record})
+    return record
+
+
 def get_antigravity_usage(config=None):
-    """Antigravity quota via the `antigravity-usage` CLI (owns OAuth refresh +
-    local-IDE/cloud fallback). Caches BOTH hits and misses so a logged-out machine
-    never re-spawns the CLI on every render."""
+    """Antigravity quota.
+
+    Prefers the two-pool quota-summary cache (5h + weekly per pool, refreshed in
+    a detached child like GLM), then falls back to the ``antigravity-usage`` CLI
+    5h-only compact path, then to unavailable. The render path never blocks on
+    the network: the quota-summary fetch happens in the background.
+    """
     try:
         config = config if isinstance(config, dict) else {}
-        cached = _read_cached_record("antigravity", GLM_CACHE_TTL)
-        if cached:
-            return cached
-        bin_path = str(config.get("bin") or "antigravity-usage")
-        out = ""
+        path = _cache_path("antigravity")
+        data = _read_json(path)
         try:
-            proc = subprocess.run(
-                [bin_path, "quota", "--json", "--method", "auto"],
-                capture_output=True, text=True, timeout=5,
-            )
-            out = proc.stdout or ""
+            age = int(time.time() - path.stat().st_mtime)
         except Exception:
-            out = ""
-        try:
-            snapshot = json.loads(out)
-        except Exception:
-            snapshot = None
-        metrics = _map_antigravity_snapshot(snapshot)
-        if metrics:
-            record = unavailable("antigravity")
-            record.update({
-                "available": True, "label": "AGY", "display": "compact", "metrics": metrics,
-                "plan": snapshot.get("planType") if isinstance(snapshot, dict) else None,
-                "source": "api", "stale_seconds": 0,
-            })
-        else:
-            record = unavailable("antigravity")
-        _write_json(_cache_path("antigravity"), {"cached_at": time.time(), "record": record})
-        return record
+            age = None
+        record = data.get("record") if isinstance(data, dict) else None
+
+        # Background quota-summary refresh (GLM pattern): spawn when missing/aging.
+        if age is None or age >= ANTIGRAVITY_CACHE_TTL:
+            _spawn_provider_refresh("antigravity", config)
+
+        # 1) Fresh two-pool quota-summary cache wins.
+        if (
+            _is_available_record(record)
+            and record.get("source") == "quota-summary"
+            and age is not None
+            and age < ANTIGRAVITY_CACHE_TTL
+        ):
+            out = dict(record)
+            out["stale_seconds"] = max(0, age)
+            return out
+
+        # 2) Existing CLI 5h-only compact path.
+        cli = _antigravity_cli_usage(config)
+        if _is_available_record(cli):
+            return cli
+
+        # 3) Any still-available cached record (stale quota-summary), else unavailable.
+        if _is_available_record(record):
+            out = dict(record)
+            out["stale_seconds"] = max(0, age or 0)
+            return out
+        return unavailable("antigravity")
     except Exception:
         return unavailable("antigravity")
 
@@ -2116,6 +2516,8 @@ def _provider_refresh_config(provider, config):
         return _glm_provider_config(config, include_api_key=False)
     if provider == "codex":
         return _codex_refresh_config(config)
+    # Antigravity discovers its own transport (process scan / OAuth storage); it
+    # needs no secrets or per-provider config carried across the spawn boundary.
     return {}
 
 
@@ -2135,7 +2537,7 @@ def _codex_live_refresh_viable(config):
 
 
 def _spawn_provider_refresh(provider, config):
-    if provider not in {"copilot", "glm", "codex"}:
+    if provider not in {"copilot", "glm", "codex", "antigravity"}:
         return
     if provider == "codex" and not _codex_live_refresh_viable(config):
         return
@@ -2158,7 +2560,9 @@ def _spawn_provider_refresh(provider, config):
             "cfg=json.loads(os.environ.get('CLAUDE_STATUSLINE_REFRESH_CONFIG', '{}')); "
             "usage_providers.refresh_copilot_cache(cfg) if provider == 'copilot' "
             "else usage_providers.refresh_glm_cache(cfg) if provider == 'glm' "
-            "else usage_providers.refresh_codex_cache(cfg) if provider == 'codex' else None"
+            "else usage_providers.refresh_codex_cache(cfg) if provider == 'codex' "
+            "else usage_providers.refresh_antigravity_cache(cfg) if provider == 'antigravity' "
+            "else None"
         )
         subprocess.Popen(
             ["python3", "-c", code],

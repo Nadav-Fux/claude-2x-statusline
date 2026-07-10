@@ -828,6 +828,190 @@ def test_antigravity_dual_model_rows_render_two_compact_rows_without_bars():
     assert "▱" not in row["text"]
 
 
+# ── Antigravity quota-summary (two pools × 5h+weekly) ─────────────────────────
+
+def _quota_summary_fixture():
+    return json.loads((FIXTURES / "antigravity_quota_summary.json").read_text(encoding="utf-8"))
+
+
+def _assert_two_pool_summary(pools):
+    assert [p["plan"] for p in pools] == ["gemini", "claude+gpt"]
+    gemini, claude_gpt = pools
+    # remainingFraction -> used%: 1.0->0, 0.97->3, 0.78->22
+    assert gemini["five_hour"]["used_pct"] == 0 and gemini["five_hour"]["label"] == "5h"
+    assert gemini["weekly"]["used_pct"] == 3 and gemini["weekly"]["label"] == "wk"
+    assert claude_gpt["five_hour"]["used_pct"] == 0
+    assert claude_gpt["weekly"]["used_pct"] == 22
+    # Reset times parsed to epoch seconds from the ISO strings.
+    assert gemini["five_hour"]["resets_at"] == 1783713600      # 2026-07-10T20:00Z
+    assert gemini["weekly"]["resets_at"] == 1784145600         # 2026-07-15T20:00Z
+    assert claude_gpt["five_hour"]["resets_at"] == 1783706400  # 2026-07-10T18:00Z
+    assert claude_gpt["weekly"]["resets_at"] == 1783983600     # 2026-07-13T23:00Z
+    for pool in pools:
+        assert pool["label"] == "AGY" and pool["display"] == "bars"
+        assert pool["source"] == "quota-summary"
+
+
+def test_antigravity_quota_summary_maps_bare_form_into_two_pools():
+    pools = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    _assert_two_pool_summary(pools)
+
+
+def test_antigravity_quota_summary_maps_wrapped_form_into_two_pools():
+    # The local language-server route wraps the payload under ``response``.
+    wrapped = {"response": _quota_summary_fixture()}
+    pools = providers._map_antigravity_quota_summary(wrapped)
+    _assert_two_pool_summary(pools)
+
+
+def test_antigravity_quota_summary_top_level_mirrors_worst_pool():
+    pools = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    record = providers._compose_antigravity_quota_record(pools)
+    # Worst pool = highest max-used across its windows: claude+gpt (22%) > gemini (3%).
+    assert record["plan"] == "claude+gpt"
+    assert record["weekly"]["used_pct"] == 22
+    assert record["source"] == "quota-summary"
+    assert [p["plan"] for p in record["all_plans"]] == ["gemini", "claude+gpt"]
+
+
+def test_antigravity_quota_summary_renders_one_row_per_pool_with_both_windows():
+    pools = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    record = providers._compose_antigravity_quota_record(pools)
+
+    def clock(_epoch, style):
+        return "8:00pm" if style == "time" else "15/7 8:00pm"
+
+    row = providers.format_provider_row_parts(record, 1_000, format_clock=clock)
+    lines = row["text"].splitlines()
+    assert len(lines) == 2
+    gemini_line, claude_line = lines
+
+    assert gemini_line.startswith("AGY gemini")
+    assert "5h" in gemini_line and "wk" in gemini_line
+    assert "  0%" in gemini_line and "  3%" in gemini_line
+    # Both pool rows carry bar glyphs (bars display, not compact).
+    assert "▱" in gemini_line
+
+    assert claude_line.startswith("AGY claude+gpt")
+    assert " 22%" in claude_line
+    assert "▰" in claude_line  # 22% weekly has at least two filled cells
+
+
+def test_antigravity_quota_summary_partial_buckets_still_map():
+    # Only the gemini pool reports; the claude+gpt pool is absent entirely.
+    summary = {
+        "groups": [
+            {
+                "buckets": [
+                    {"bucketId": "gemini-5h", "remainingFraction": 0.5, "resetTime": "2026-07-10T20:00:00Z"},
+                    {"bucketId": "gemini-weekly", "remainingFraction": 0.9, "resetTime": "2026-07-15T20:00:00Z"},
+                ]
+            }
+        ]
+    }
+    pools = providers._map_antigravity_quota_summary(summary)
+    assert [p["plan"] for p in pools] == ["gemini"]
+    assert pools[0]["five_hour"]["used_pct"] == 50
+    assert pools[0]["weekly"]["used_pct"] == 10
+
+
+def test_antigravity_quota_summary_ignores_unknown_buckets():
+    summary = {"groups": [{"buckets": [{"bucketId": "mystery-5h", "remainingFraction": 0.5}]}]}
+    assert providers._map_antigravity_quota_summary(summary) is None
+
+
+def test_refresh_antigravity_cache_writes_two_pool_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    summary = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    # Local route succeeds; cloud route must not be reached.
+    monkeypatch.setattr(providers, "_antigravity_local_summary", lambda deadline: summary)
+    monkeypatch.setattr(
+        providers,
+        "_antigravity_cloud_summary",
+        lambda deadline: (_ for _ in ()).throw(AssertionError("cloud route must not run")),
+    )
+
+    assert providers.refresh_antigravity_cache({}) is True
+
+    cache = json.loads((tmp_path / ".claude" / "statusline-usage-antigravity.json").read_text(encoding="utf-8"))
+    record = cache["record"]
+    assert record["available"] is True
+    assert record["source"] == "quota-summary"
+    assert [p["plan"] for p in record["all_plans"]] == ["gemini", "claude+gpt"]
+
+
+def test_refresh_antigravity_cache_falls_back_to_cloud(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    summary = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    monkeypatch.setattr(providers, "_antigravity_local_summary", lambda deadline: None)
+    monkeypatch.setattr(providers, "_antigravity_cloud_summary", lambda deadline: summary)
+
+    assert providers.refresh_antigravity_cache({}) is True
+    cache = json.loads((tmp_path / ".claude" / "statusline-usage-antigravity.json").read_text(encoding="utf-8"))
+    assert cache["record"]["source"] == "quota-summary"
+
+
+def test_refresh_antigravity_cache_never_clobbers_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    prior = {"cached_at": 123.0, "record": {"provider": "antigravity", "available": True, "sentinel": "keep-me"}}
+    cache_path = claude_dir / "statusline-usage-antigravity.json"
+    cache_path.write_text(json.dumps(prior), encoding="utf-8")
+
+    # Both transports fail — refresh must leave the prior cache byte-for-byte intact.
+    monkeypatch.setattr(providers, "_antigravity_local_summary", lambda deadline: None)
+    monkeypatch.setattr(providers, "_antigravity_cloud_summary", lambda deadline: None)
+
+    assert providers.refresh_antigravity_cache({}) is False
+    assert json.loads(cache_path.read_text(encoding="utf-8")) == prior
+
+
+def test_get_antigravity_usage_prefers_fresh_quota_summary_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers, "_spawn_provider_refresh", lambda provider, config: None)
+    # If the CLI path were reached it would raise; a fresh quota-summary must win.
+    monkeypatch.setattr(
+        providers,
+        "_antigravity_cli_usage",
+        lambda config: (_ for _ in ()).throw(AssertionError("CLI fallback must not run")),
+    )
+    pools = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    record = providers._compose_antigravity_quota_record(pools)
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "statusline-usage-antigravity.json").write_text(
+        json.dumps({"cached_at": time.time(), "record": record}), encoding="utf-8"
+    )
+
+    out = providers.get_antigravity_usage({})
+    assert out["source"] == "quota-summary"
+    assert [p["plan"] for p in out["all_plans"]] == ["gemini", "claude+gpt"]
+
+
+def test_get_antigravity_usage_falls_back_to_cli_without_quota_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    spawned = []
+    monkeypatch.setattr(providers, "_spawn_provider_refresh", lambda provider, config: spawned.append(provider))
+    snapshot = json.loads((FIXTURES / "antigravity_quota_response.json").read_text(encoding="utf-8"))
+
+    def fake_run(cmd, capture_output, text, timeout):
+        class _P:
+            stdout = json.dumps(snapshot)
+        return _P()
+
+    monkeypatch.setattr(providers.subprocess, "run", fake_run)
+
+    out = providers.get_antigravity_usage({})
+    # No quota-summary cache -> current 5h-only compact behavior is unchanged.
+    assert out["available"] is True
+    assert out["display"] == "compact"
+    assert out["source"] == "api"
+    assert [m["label"] for m in out["metrics"]] == ["Gemini", "Claude+GPT"]
+    # A background quota-summary refresh was still kicked off for next time.
+    assert "antigravity" in spawned
+
+
 def _write_copilot_cache(home, age_seconds=0):
     """Copy the copilot cache fixture into a monkeypatched home and age it.
 

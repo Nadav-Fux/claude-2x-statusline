@@ -576,6 +576,57 @@ test('antigravity parser returns unavailable for junk rows', () => {
   assert.equal(record.available, false);
 });
 
+// Two-pool quota-summary record (5h + weekly per pool). The Python background
+// refresher writes it; this Node twin reads the cache and renders the same rows.
+function antigravityPool(plan, weeklyPct) {
+  return {
+    provider: 'antigravity', available: true, label: 'AGY', plan, display: 'bars',
+    five_hour: { used_pct: 0, resets_at: 1783713600, label: '5h' },
+    weekly: { used_pct: weeklyPct, resets_at: 1783983600, label: 'wk' },
+    source: 'quota-summary', stale_seconds: 0,
+  };
+}
+
+function antigravityQuotaSummaryRecord() {
+  const gemini = antigravityPool('gemini', 3);
+  const claude = antigravityPool('claude+gpt', 22);
+  return { ...claude, all_plans: [gemini, claude] };
+}
+
+test('antigravity quota-summary renders one bars row per pool with both windows', () => {
+  const clock = (_epoch, style) => (style === 'time' ? '8:00pm' : '15/7 8:00pm');
+  const row = providers.formatProviderRowParts(antigravityQuotaSummaryRecord(), 1000, { formatClock: clock });
+  const lines = row.text.split('\n');
+  assert.equal(lines.length, 2);
+  const [gemini, claude] = lines;
+  assert.ok(gemini.startsWith('AGY gemini'));
+  assert.ok(gemini.includes('5h') && gemini.includes('wk'));
+  assert.ok(gemini.includes('▱'));
+  assert.ok(claude.startsWith('AGY claude+gpt'));
+  assert.ok(claude.includes(' 22%'));
+  assert.ok(claude.includes('▰'));
+});
+
+test('getAntigravityUsage prefers a fresh quota-summary cache over the CLI', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-agy-'));
+  const claudeDir = path.join(home, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(claudeDir, 'statusline-usage-antigravity.json'),
+    JSON.stringify({ cached_at: Date.now() / 1000, record: antigravityQuotaSummaryRecord() }),
+    'utf8',
+  );
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const record = providers.getAntigravityUsage({});
+    assert.equal(record.source, 'quota-summary');
+    assert.deepEqual(record.all_plans.map(p => p.plan), ['gemini', 'claude+gpt']);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+  }
+});
+
 test('provider row parts omit past reset countdown', () => {
   const row = providers.formatProviderRowParts({
     provider: 'glm',
