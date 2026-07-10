@@ -2193,7 +2193,7 @@ def _antigravity_cli_usage(config):
     fresh quota-summary cache is available. Caches BOTH hits and misses so a
     logged-out machine never re-spawns the CLI on every render."""
     config = config if isinstance(config, dict) else {}
-    cached = _read_cached_record("antigravity", GLM_CACHE_TTL)
+    cached = _read_cached_record("antigravity-cli", GLM_CACHE_TTL)
     if cached is not None:
         return cached
     bin_path = str(config.get("bin") or "antigravity-usage")
@@ -2220,7 +2220,26 @@ def _antigravity_cli_usage(config):
         })
     else:
         record = unavailable("antigravity")
-    _write_json(_cache_path("antigravity"), {"cached_at": time.time(), "record": record})
+    # The CLI path owns its own cache file so it can NEVER clobber the richer
+    # quota-summary record in the main cache (that clobber hid the two-pool rows).
+    _write_json(_cache_path("antigravity-cli"), {"cached_at": time.time(), "record": record})
+    # Keep the main cache populated for out-of-band readers (narrator, VS Code)
+    # on machines where the quota-summary route never succeeds — but never
+    # downgrade a usable summary record.
+    try:
+        main = _read_json(_cache_path("antigravity"))
+        main_record = main.get("record") if isinstance(main, dict) else None
+        main_age = time.time() - float(main.get("cached_at", 0)) if isinstance(main, dict) else None
+        summary_alive = (
+            isinstance(main_record, dict)
+            and main_record.get("source") == "quota-summary"
+            and main_age is not None
+            and main_age < ANTIGRAVITY_SUMMARY_MAX_AGE
+        )
+        if not summary_alive:
+            _write_json(_cache_path("antigravity"), {"cached_at": time.time(), "record": record})
+    except Exception:
+        pass
     return record
 
 
