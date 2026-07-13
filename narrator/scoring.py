@@ -89,6 +89,55 @@ def _window_label(window, fallback: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Cross-CLI recency gate
+# ---------------------------------------------------------------------------
+# Principle: another CLI's cap only matters to THIS Claude session when the
+# user is actually using that CLI right now. Bug history: a Claude session at
+# 2% 5h usage surfaced "Codex 5h quota is maxed (100%)" as a top insight — the
+# data was correct, but it's cross-CLI noise in a Claude-only session, and got
+# mis-relayed downstream as "your own budget is basically spent."
+#
+# 10 min: mirrors the existing "·stale" cutoff applied to this same
+# stale_seconds field in lib/usage_providers.format_provider_row_parts /
+# formatProviderRowParts (stale_seconds > 600 there).
+_RECENT_ACTIVITY_SECONDS = 600
+
+# Sources whose stale_seconds is anchored to a REAL local-activity timestamp
+# (a rollout/session file's mtime) rather than "how long ago we polled an
+# account API". Codex's rollout-fallback and Droid both read a local session
+# file that is only touched by genuine CLI use, so stale_seconds there is
+# trustworthy. Every other source — Codex's live "app-server" snapshot, and
+# GLM / Antigravity / Copilot's "api" / "quota-summary" / "gh-billing" quota
+# checks — is kept warm by a detached background poller on a fixed cadence
+# (CODEX_LIVE_TTL / GLM_CACHE_TTL / ANTIGRAVITY_CACHE_TTL / COPILOT_CACHE_TTL
+# in lib/usage_providers.py) driven by Claude's OWN render loop, independent
+# of whether the human has touched that CLI recently. Concretely: a live
+# Codex snapshot is written with stale_seconds=0 every refresh regardless of
+# real usage, so it would ALWAYS read "fresh" — a small stale_seconds there
+# proves only that the poll succeeded, not that anyone is mid-flow in Codex.
+# So: trust stale_seconds directly only for these local sources; everywhere
+# else (or when the field is simply absent) the caller applies its own
+# conservative fallback instead of trusting a misleadingly-fresh reading.
+_LOCAL_ACTIVITY_SOURCES = frozenset({"local-jsonl"})
+
+
+def _provider_recently_active(record: dict) -> Optional[bool]:
+    """True/False from a trustworthy per-record recency signal; None when the
+    record has no reliable signal at all, in which case the caller should
+    apply its own conservative fallback (see the cross_cli_capped template).
+    """
+    if record.get("source") not in _LOCAL_ACTIVITY_SOURCES:
+        return None
+    try:
+        stale_seconds = float(record.get("stale_seconds"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(stale_seconds):
+        return None
+    return stale_seconds <= _RECENT_ACTIVITY_SECONDS
+
+
+# ---------------------------------------------------------------------------
 # Template builders
 # ---------------------------------------------------------------------------
 
@@ -152,27 +201,54 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         ))
 
     # ── Burn: High (≥ $10/hr rolling or ≥ $15/hr session) ───────────────────
+    # NOTE (bug history): this used to project max(0, (50 - obs.cost_usd) / rate)
+    # as a fake "5-hour budget" countdown. obs.cost_usd is the SESSION-CUMULATIVE
+    # cost, so once a long session passed $50 total (routine for long XHIGH
+    # sessions — observed at $154) the subtraction went negative, clamped to 0,
+    # and the text read "your 5-hour budget ends in ~0m" — relayed downstream as
+    # "your budget is spent" even though the REAL rate limits (observed: 5h=3%,
+    # weekly=52%) had huge headroom left. Same principle as the ctx-critical gate
+    # above: gate on the real limit, not a scary projection. burn_high is now a
+    # spend-VELOCITY flag — it only escalates to "ease off" wording when a REAL
+    # limit (rate_limit_5h_pct / rate_limit_7d_pct) is actually close to cap.
     if effective_burn is not None and (
         (burn_10m is not None and burn_10m >= 10.0) or
         (burn_sess is not None and burn_sess >= 15.0)
     ):
         rate_display = burn_10m if burn_10m is not None else burn_sess
-        # Time to $X budget (assume $50 default — use 5-hour budget extrapolation)
-        budget_hours = 5.0
-        hours_left = max(0.0, (50.0 - obs.cost_usd) / rate_display) if rate_display > 0 else 0.0
-        mins_left = int(hours_left * 60)
+        rl5_pct = obs.rate_limit_5h_pct
+        rl7_pct = obs.rate_limit_7d_pct
         key = "burn_high"
-        results.append(Insight(
-            text=f"Burning ${rate_display:.1f}/hr — at this rate your 5-hour budget ends in "
-                 f"~{mins_left}m. Consider Sonnet for simple steps.",
-            text_he=f"שורף ${rate_display:.1f}/hr — בקצב הזה תגמור את budget 5 השעות בעוד ~{mins_left} דקות. "
-                    f"שקול Sonnet לצעדים פשוטים.",
-            urgency=10,
-            novelty=_novelty(key, memory),
-            actionability=10,
-            uniqueness=10,
-            template_key=key,
-        ))
+        # Escalation gate: a high burn alone must never dominate or read as
+        # "stop, out of budget" — only a REAL near-cap limit is genuinely urgent.
+        _BURN_ESCALATE_5H_PCT = 80.0
+        _BURN_ESCALATE_7D_PCT = 85.0
+        if rl5_pct >= _BURN_ESCALATE_5H_PCT or rl7_pct >= _BURN_ESCALATE_7D_PCT:
+            results.append(Insight(
+                text=f"Burning ${rate_display:.1f}/hr AND close to a real cap "
+                     f"(5h {rl5_pct:.0f}% / weekly {rl7_pct:.0f}%) — ease off now or switch to Sonnet.",
+                text_he=f"שורף ${rate_display:.1f}/hr וגם קרוב לתקרה אמיתית "
+                        f"(5h {rl5_pct:.0f}% / שבועי {rl7_pct:.0f}%) — תוריד הילוך עכשיו או עבור ל-Sonnet.",
+                urgency=10,
+                novelty=_novelty(key, memory),
+                actionability=10,
+                uniqueness=10,
+                template_key=key,
+            ))
+        else:
+            results.append(Insight(
+                text=f"Burning ${rate_display:.1f}/hr — high spend velocity, not a limit; "
+                     f"your 5h/weekly still have room ({rl5_pct:.0f}%/{rl7_pct:.0f}%). "
+                     f"Consider Sonnet for simple steps.",
+                text_he=f"שורף ${rate_display:.1f}/hr — קצב הוצאה גבוה, זו לא תקרה; "
+                        f"ל-5 השעות ולשבוע עדיין יש מקום ({rl5_pct:.0f}%/{rl7_pct:.0f}%). "
+                        f"שקול Sonnet לצעדים פשוטים.",
+                urgency=5,
+                novelty=_novelty(key, memory),
+                actionability=10,
+                uniqueness=10,
+                template_key=key,
+            ))
 
     # ── Burn: Moderate ($5–$10/hr) ────────────────────────────────────────────
     elif effective_burn is not None and effective_burn >= 5.0:
@@ -425,11 +501,26 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
         ))
 
     # ── Cross-CLI usage: capped external provider ────────────────────────────
+    # See the "Cross-CLI recency gate" section above for why every candidate
+    # is gated on recent activity before it can ever fire.
     external_usage = getattr(obs, "external_usage", []) or []
     if isinstance(external_usage, list):
+        # Conservative fallback for records with no trustworthy recency signal
+        # (_provider_recently_active returned None): only worth a mention if
+        # Claude's OWN usage is already running warm. Deliberately does NOT
+        # default to "ahead of pace" when the pace line is unknown (unlike
+        # _weekly_ahead_of_pace below) — this path must default to suppress.
+        _claude_weekly_confirmed_hot = pace is not None and pct7 >= pace - 3
+        _cross_cli_fallback_relevant = pct5 >= 50 or _claude_weekly_confirmed_hot
+
         capped = []
         for record in external_usage:
             if not isinstance(record, dict):
+                continue
+            active = _provider_recently_active(record)
+            if active is None:
+                active = _cross_cli_fallback_relevant
+            if not active:
                 continue
             label = _record_label(record)
             five_window = record.get("five_hour")
@@ -449,16 +540,18 @@ def _build_insights(obs: "Observation", memory: dict) -> list[Insight]:
             key = "cross_cli_capped"
             results.append(Insight(
                 text=(
-                    f"{label} {window} quota is maxed ({pct_text}%) — route {kind}-heavy "
-                    f"work to another CLI until it resets."
+                    f"Cross-CLI heads-up, not Claude: {label}'s {window} quota is maxed "
+                    f"({pct_text}%). Your Claude budget is unaffected — only {label}'s "
+                    f"{kind}-heavy work needs to move elsewhere until it resets."
                 ),
                 text_he=(
-                    f"{label} {window} quota מלאה ({pct_text}%) — העבר עבודה עתירת "
-                    f"{kind_he} ל-CLI אחר עד שהיא מתאפסת."
+                    f"עדכון חוצה-CLI, לא Claude: מכסת ה-{window} של {label} מלאה "
+                    f"({pct_text}%). ה-budget של Claude לא נפגע — רק עבודה עתירת "
+                    f"{kind_he} ב-{label} צריכה לעבור למקום אחר עד שהיא מתאפסת."
                 ),
-                urgency=7,
+                urgency=4,
                 novelty=_novelty(key, memory),
-                actionability=8,
+                actionability=6,
                 uniqueness=10,
                 template_key=key,
             ))

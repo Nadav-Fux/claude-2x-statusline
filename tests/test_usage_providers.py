@@ -624,7 +624,7 @@ def test_compact_provider_row_parts_render_metrics_without_bars_while_bars_recor
         1_000,
     )
 
-    assert "GLM lite  5h 0% \u00b7 tok 8% \u27f3 39m" in compact["text"]
+    assert "GLM lite  5h 0% ⟳ 39m · tok 8% ⟳ 1h 30m" in compact["text"]
     assert "\u25b0" not in compact["text"]
     assert "\u25b1" not in compact["text"]
 
@@ -644,6 +644,44 @@ def test_compact_provider_row_parts_render_metrics_without_bars_while_bars_recor
     )
 
     assert "\u25b0" in bars["text"] or "\u25b1" in bars["text"]
+
+
+def test_compact_row_shows_each_meters_own_reset_inline_not_bunched_at_the_end():
+    """A compact row can carry two metrics on very different cadences (GLM's
+    5h + monthly meters). Each meter must show ITS OWN reset immediately
+    after it -- the row must not bunch both resets together at the end."""
+
+    def clock(_epoch, style):
+        return "3:07pm" if style == "time" else "8/8 8:33pm"
+
+    row = providers.format_provider_row_parts(
+        {
+            "provider": "glm",
+            "label": "GLM",
+            "available": True,
+            "display": "compact",
+            "metrics": [
+                {"label": "5h", "used_pct": 62, "resets_at": 1_000 + 39 * 60},
+                {"label": "mo", "used_pct": 0, "resets_at": 1_000 + 90 * 60},
+            ],
+            "plan": "lite",
+            "stale_seconds": 0,
+        },
+        1_000,
+        format_clock=clock,
+    )
+
+    metric_parts = [part for part in row["parts"] if part.get("kind") == "metric"]
+    # 5h uses a bare clock ("time" style); mo uses date + clock ("datetime"
+    # style) -- exactly like the Claude/Codex rate-limit lines -- and each
+    # lives on its OWN metric part now, not just at the row level.
+    assert metric_parts[0]["label"] == "5h"
+    assert metric_parts[0]["reset_text"] == "⟳ 3:07pm"
+    assert metric_parts[1]["label"] == "mo"
+    assert metric_parts[1]["reset_text"] == "⟳ 8/8 8:33pm"
+    assert row["reset_text"] == ""
+
+    assert row["text"] == "GLM lite  5h 62% ⟳ 3:07pm · mo 0% ⟳ 8/8 8:33pm"
 
 
 def test_provider_row_parts_include_reset_countdown_and_stale_marker():
@@ -1031,6 +1069,19 @@ def _write_glm_cache(home, age_seconds=0, auth_style=None):
     claude_dir = home / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
     response = json.loads((FIXTURES / "glm_quota_response.json").read_text(encoding="utf-8"))
+    # The fixture's nextResetTime values are static epoch timestamps that age
+    # into the past as real time passes. Any test reaching parse_glm_quota_response
+    # through get_glm_usage() (rather than calling it directly with an explicit
+    # now_sec) classifies against the real wall clock, so rebase both limits
+    # onto "now" here -- preserving the fixture's original shape (TOKENS_LIMIT
+    # a short ~3h-out window, TIME_LIMIT a long ~211h/~8.8d-out window) -- so
+    # the short/long classification is stable no matter when the suite runs.
+    now_ms = time.time() * 1000
+    for item in response["data"]["limits"]:
+        if item.get("type") == "TOKENS_LIMIT":
+            item["nextResetTime"] = now_ms + 3 * 3600 * 1000
+        elif item.get("type") == "TIME_LIMIT":
+            item["nextResetTime"] = now_ms + 211 * 3600 * 1000
     payload = {"cached_at": time.time(), "response": response}
     if auth_style:
         payload["auth_style"] = auth_style
@@ -1149,7 +1200,10 @@ def test_glm_reads_stale_cache_and_spawns_refresh_without_blocking(tmp_path, mon
     assert kwargs["start_new_session"] is True
     assert record["provider"] == "glm"
     assert record["available"] is True
-    assert record["weekly"]["label"] == "tok"
+    # TIME_LIMIT is the genuinely long (~211h) window in this fixture (see
+    # _write_glm_cache) so it lands in the weekly slot labeled "mo", not the
+    # old type-name-derived "tok" -- classification goes by actual interval.
+    assert record["weekly"]["label"] == "mo"
     assert record["stale_seconds"] >= 300
 
 
@@ -1416,7 +1470,7 @@ def test_combined_glm_copilot_row_joins_both_glm_first_with_dim_separator_style(
 
     text = row["text"]
     assert text.index("GLM") < text.index("Copilot")
-    assert "GLM lite  5h 0% · tok 8%" in text
+    assert "GLM lite  5h 0% ⟳ 39m · tok 8% ⟳ 1h 30m" in text
     assert "Copilot business  2152 left 28%" in text
     # GLM and Copilot are joined with the same plain ' · ' separator style
     # already used between metrics inside a single compact row.

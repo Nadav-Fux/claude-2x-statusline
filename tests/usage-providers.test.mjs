@@ -412,7 +412,7 @@ test('compact provider row parts render metrics without bars while bars records 
     stale_seconds: 0,
   }, 1_000);
 
-  assert.match(compact.text, /GLM lite  5h 0% \u00b7 tok 8% \u27f3 39m/);
+  assert.match(compact.text, /GLM lite  5h 0% ⟳ 39m · tok 8% ⟳ 1h 30m/);
   assert.doesNotMatch(compact.text, /[\u25b0\u25b1]/);
 
   const bars = providers.formatProviderRowParts({
@@ -428,6 +428,38 @@ test('compact provider row parts render metrics without bars while bars records 
   }, 1_000);
 
   assert.match(bars.text, /[\u25b0\u25b1]/);
+});
+
+test('compact row shows each meters own reset inline, not bunched at the end', () => {
+  // A compact row can carry two metrics on very different cadences (GLM's 5h
+  // + monthly meters). Each meter must show ITS OWN reset immediately after
+  // it -- the row must not bunch both resets together at the end.
+  const clock = (_epoch, style) => (style === 'time' ? '3:07pm' : '8/8 8:33pm');
+
+  const row = providers.formatProviderRowParts({
+    provider: 'glm',
+    label: 'GLM',
+    available: true,
+    display: 'compact',
+    metrics: [
+      { label: '5h', used_pct: 62, resets_at: 1_000 + 39 * 60 },
+      { label: 'mo', used_pct: 0, resets_at: 1_000 + 90 * 60 },
+    ],
+    plan: 'lite',
+    stale_seconds: 0,
+  }, 1_000, { formatClock: clock });
+
+  const metricParts = row.parts.filter(part => part.kind === 'metric');
+  // 5h uses a bare clock ('time' style); mo uses date + clock ('datetime'
+  // style) -- exactly like the Claude/Codex rate-limit lines -- and each
+  // lives on its OWN metric part now, not just at the row level.
+  assert.equal(metricParts[0].label, '5h');
+  assert.equal(metricParts[0].resetText, '⟳ 3:07pm');
+  assert.equal(metricParts[1].label, 'mo');
+  assert.equal(metricParts[1].resetText, '⟳ 8/8 8:33pm');
+  assert.equal(row.resetText, '');
+
+  assert.equal(row.text, 'GLM lite  5h 62% ⟳ 3:07pm · mo 0% ⟳ 8/8 8:33pm');
 });
 
 // \u2500\u2500 formatCombinedGlmCopilotRow (GLM + Copilot merged bottom row) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -471,7 +503,7 @@ test('combined GLM+Copilot row joins both GLM-first with the dim separator style
 
   const { text } = row;
   assert.ok(text.indexOf('GLM') < text.indexOf('Copilot'));
-  assert.match(text, /GLM lite  5h 0% \u00b7 tok 8%/);
+  assert.match(text, /GLM lite  5h 0% ⟳ 39m · tok 8% ⟳ 1h 30m/);
   assert.match(text, /Copilot business  2152 left 28%/);
   // GLM and Copilot are joined with the same plain ' \u00b7 ' separator style
   // already used between metrics inside a single compact row.

@@ -125,6 +125,15 @@
       .cyan {
         color: #39d353;
       }
+      .teal {
+        color: #2dd4bf;
+      }
+      .pink {
+        color: #f778ba;
+      }
+      .purple {
+        color: #b294ff;
+      }
       .white {
         color: #e6edf3;
         font-weight: 700;
@@ -249,15 +258,15 @@
       <div class="tier-grid">
         <div class="tier-btn active" onclick="pickTier('minimal', this)">
           <h4>Minimal</h4>
-          <p>Time + 2x + git</p>
+          <p>Model + context + 5h limit + git</p>
         </div>
         <div class="tier-btn" onclick="pickTier('standard', this)">
           <h4>Standard</h4>
-          <p>+ model + context + cost</p>
+          <p>+ cost + effort + rate limit bars</p>
         </div>
         <div class="tier-btn" onclick="pickTier('full', this)">
           <h4>Full</h4>
-          <p>+ rate limits + timeline</p>
+          <p>+ timeline (opt-in) + burn rate + cache</p>
         </div>
         <div class="tier-btn" onclick="pickTier('custom', this)">
           <h4>Custom</h4>
@@ -269,127 +278,276 @@
     <!-- ═══════ MINIMAL ═══════ -->
     <div class="section" id="sec-minimal">
       <h2>Minimal</h2>
-      <div class="label">2x Active (green — over 3 hours left)</div>
+      <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px">
+        1 line: model, compact context %, 5h limit %, git, environment.
+      </p>
+      <div class="label">Healthy session (green — plenty of 5h budget left)</div>
       <div class="terminal">
-        <span class="white">09:15</span> <span class="arrow">&#9656;</span>
-        <span class="bg-green"> &#9889; 2x </span>
-        <span class="dim">6h 45m left</span> <span class="arrow">&#9656;</span>
-        <span class="dim">feature-branch</span> <span class="yellow">~2</span>
-      </div>
-
-      <div class="label">2x Active (yellow — 1-3 hours left)</div>
-      <div class="terminal">
-        <span class="white">12:30</span> <span class="arrow">&#9656;</span>
-        <span
-          style="
-            background: #9e6a03;
-            color: #fff;
-            padding: 1px 6px;
-            border-radius: 3px;
-            font-weight: 700;
-          "
-        >
-          &#9889; 2x
-        </span>
-        <span class="dim">1h 30m left</span> <span class="arrow">&#9656;</span>
-        <span class="dim">main</span>
-      </div>
-
-      <div class="label">2x Active (red — under 1 hour!)</div>
-      <div class="terminal">
-        <span class="white">13:45</span> <span class="arrow">&#9656;</span>
-        <span
-          style="
-            background: #da3633;
-            color: #fff;
-            padding: 1px 6px;
-            border-radius: 3px;
-          "
-        >
-          &#9889; 2x
-        </span>
-        <span class="dim">15m left</span> <span class="arrow">&#9656;</span>
-        <span class="dim">main</span> <span class="yellow">~7</span>
-      </div>
-
-      <div class="label">Peak hours (1x mode)</div>
-      <div class="terminal">
-        <span class="white">16:30</span> <span class="arrow-peak">&#9656;</span>
-        <span class="bg-gray"> PEAK </span>
-        <span class="dim">&#8594; 2x in 4h 40m</span>
-        <span class="arrow-peak">&#9656;</span> <span class="dim">main</span>
-      </div>
-
-      <div class="label">Weekend (all day 2x)</div>
-      <div class="terminal">
-        <span class="white">11:00</span> <span class="arrow">&#9656;</span>
-        <span class="bg-green"> &#9889; 2x </span>
-        <span class="dim">21h 00m left</span> <span class="dim">weekend</span>
+        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="dim">CTX</span> <span class="green">36%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="green">11%</span> <span class="dim">5H</span>
+        <span class="arrow">&#9656;</span> <span class="teal">LOCAL</span>
         <span class="arrow">&#9656;</span> <span class="dim">main</span>
+        <span class="green">saved</span>
+      </div>
+
+      <div class="label">Approaching the 5h limit (yellow, 50-79%)</div>
+      <div class="terminal">
+        <span class="blue">Sonnet 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="dim">CTX</span> <span class="yellow">61%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="yellow">68%</span> <span class="dim">5H</span>
+        <span class="arrow">&#9656;</span> <span class="teal">LOCAL</span>
+        <span class="arrow">&#9656;</span> <span class="dim">main</span>
+        <span class="green">saved</span>
+      </div>
+
+      <div class="label">Critical usage (red, 80%+)</div>
+      <div class="terminal">
+        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="dim">CTX</span> <span class="red">92%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="red">88%</span> <span class="dim">5H</span>
+        <span class="arrow">&#9656;</span> <span class="pink">REMOTE</span>
+        <span class="arrow">&#9656;</span> <span class="dim">main</span>
+        <span class="yellow">3 unsaved</span>
+      </div>
+
+      <div class="label">Remote / SSH session with unpushed commits</div>
+      <div class="terminal">
+        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="dim">CTX</span> <span class="green">40%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="green">22%</span> <span class="dim">5H</span>
+        <span class="arrow">&#9656;</span> <span class="pink">REMOTE</span>
+        <span class="arrow">&#9656;</span>
+        <span class="dim">feature-branch</span>
+        <span class="yellow">2 unpushed</span>
+      </div>
+
+      <div class="label">
+        Legacy peak-hours cue &mdash; opt-in, custom tier only (off by default
+        since Anthropic dropped peak-hour throttling, 2026-05-06)
+      </div>
+      <div class="terminal">
+        <span class="bg-green"> Off-Peak </span>
+        <span class="arrow">&#9656;</span>
+        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="dim">CTX</span> <span class="green">18%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="green">9%</span> <span class="dim">5H</span>
+        <span class="arrow">&#9656;</span> <span class="teal">LOCAL</span>
+        <span class="arrow">&#9656;</span> <span class="dim">main</span>
+        <span class="green">saved</span>
       </div>
     </div>
 
     <!-- ═══════ STANDARD ═══════ -->
     <div class="section" id="sec-standard" style="display: none">
       <h2>Standard</h2>
-      <div class="label">2x Active</div>
+      <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px">
+        2 lines: full model + context, cost, effort, environment, git on line
+        1, then a second line with 5h + weekly rate-limit bars and reset
+        times.
+      </p>
+      <div class="label">Healthy session</div>
       <div class="terminal">
-        <span class="white">22:44</span> <span class="arrow">&#9656;</span>
-        <span class="bg-green"> &#9889; 2x </span>
-        <span class="dim">5h 37m left</span> <span class="arrow">&#9656;</span>
         <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
-        <span class="green">40%</span> <span class="arrow">&#9656;</span>
-        <span class="magenta">$0.420</span> <span class="arrow">&#9656;</span>
-        <span class="blue">23m</span> <span class="arrow">&#9656;</span>
-        <span class="dim">main</span> <span class="yellow">~3</span>
-      </div>
-
-      <div class="label">Peak hours</div>
-      <div class="terminal">
-        <span class="white">16:30</span> <span class="arrow-peak">&#9656;</span>
-        <span class="bg-gray"> PEAK </span>
-        <span class="dim">&#8594; 2x in 4h 40m</span>
-        <span class="arrow-peak">&#9656;</span>
-        <span class="blue">Opus 4.6</span>
-        <span class="arrow-peak">&#9656;</span> <span class="yellow">72%</span>
-        <span class="arrow-peak">&#9656;</span>
-        <span class="magenta">$1.23</span>
-        <span class="arrow-peak">&#9656;</span> <span class="blue">1h05m</span>
-        <span class="arrow-peak">&#9656;</span> <span class="dim">main</span>
-      </div>
-
-      <div class="label">High context usage (red warning)</div>
-      <div class="terminal">
-        <span class="white">14:20</span> <span class="arrow">&#9656;</span>
-        <span class="bg-green"> &#9889; 2x </span>
-        <span class="dim">5h 40m left</span> <span class="arrow">&#9656;</span>
-        <span class="blue">Sonnet 4.6</span> <span class="arrow">&#9656;</span>
-        <span class="red">89%</span> <span class="arrow">&#9656;</span>
-        <span class="magenta">$2.15</span> <span class="arrow">&#9656;</span>
-        <span class="blue">45m</span> <span class="arrow">&#9656;</span>
-        <span class="dim">dev</span> <span class="yellow">~12</span>
-      </div>
-    </div>
-
-    <!-- ═══════ FULL ═══════ -->
-    <div class="section" id="sec-full" style="display: none">
-      <h2>Full (with --full flag)</h2>
-
-      <div class="label">2x Active — full dashboard</div>
-      <div class="terminal">
-        <span class="white">22:44</span> <span class="arrow">&#9656;</span>
-        <span class="bg-green"> &#9889; 2x </span>
-        <span class="dim">5h 37m left</span> <span class="arrow">&#9656;</span>
-        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="green">360K/1.0M 36%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="magenta">$0.42</span> <span class="arrow">&#9656;</span>
+        <span class="green">e:HI</span> <span class="arrow">&#9656;</span>
+        <span class="teal">LOCAL</span> <span class="arrow">&#9656;</span>
+        <span class="dim">main</span> <span class="green">saved</span>
+        <br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">5h</span>
+        <span class="green"
+          >&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="green">20%</span> <span class="dim">&#10227; 5:00pm</span>
+        <span class="dim">&#183;</span> <span class="dim">weekly</span>
         <span class="green"
           >&#9648;&#9648;&#9648;&#9648;<span class="dim"
             >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
           ></span
         >
-        <span class="green">40%</span> <span class="arrow">&#9656;</span>
-        <span class="magenta">$0.42</span> <span class="arrow">&#9656;</span>
-        <span class="dim">main</span> <span class="yellow">~3</span>
-        <span class="dim">&#8593;1</span> <br /><br />
+        <span class="green">42%</span>
+        <span class="dim">&#10227; 4/4 11:00pm &#9474;</span>
+      </div>
+
+      <div class="label">Workflow agents running (remote session)</div>
+      <div class="terminal">
+        <span class="blue">Sonnet 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="green">128K/1.0M 13%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="dim">&#9881; 3 agents ctx &Sigma; 240K</span>
+        <span class="arrow">&#9656;</span>
+        <span class="magenta">$1.10</span> <span class="arrow">&#9656;</span>
+        <span class="yellow">e:MED</span> <span class="arrow">&#9656;</span>
+        <span class="pink">REMOTE</span> <span class="arrow">&#9656;</span>
+        <span class="dim">main</span> <span class="yellow">2 unsaved</span>
+        <br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">5h</span>
+        <span class="green"
+          >&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="green">28%</span> <span class="dim">&#10227; 6:15pm</span>
+        <span class="dim">&#183;</span> <span class="dim">weekly</span>
+        <span class="yellow"
+          >&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="yellow">48%</span>
+        <span class="dim">&#10227; 4/4 11:00pm &#9474;</span>
+      </div>
+
+      <div class="label">High context usage (red warning)</div>
+      <div class="terminal">
+        <span class="blue">Sonnet 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="red">890K/1.0M 89%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="magenta">$2.15</span> <span class="arrow">&#9656;</span>
+        <span class="green">e:HI</span> <span class="arrow">&#9656;</span>
+        <span class="teal">LOCAL</span> <span class="arrow">&#9656;</span>
+        <span class="dim">dev</span> <span class="yellow">12 unpushed</span>
+        <br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">5h</span>
+        <span class="red"
+          >&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;</span
+          ></span
+        >
+        <span class="red">83%</span> <span class="dim">&#10227; 9:40pm</span>
+        <span class="dim">&#183;</span> <span class="dim">weekly</span>
+        <span class="yellow"
+          >&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="yellow">51%</span>
+        <span class="dim">&#10227; 4/4 11:00pm &#9474;</span>
+      </div>
+    </div>
+
+    <!-- ═══════ FULL ═══════ -->
+    <div class="section" id="sec-full" style="display: none">
+      <h2>Full &mdash; recommended</h2>
+      <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px">
+        Everything Standard shows (line 1 + rate-limit bars), plus a
+        burn-rate/cache/efficiency metrics line, plus an optional timeline
+        line above the bars. The timeline only appears on a custom
+        peak-hours schedule &mdash; since Anthropic removed peak-hour
+        throttling for Pro/Max (2026-05-06), the default remote schedule
+        ships with it disabled, so most installs never see it.
+      </p>
+
+      <div class="label">Full dashboard &mdash; current default (no timeline)</div>
+      <div class="terminal">
+        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="green">360K/1.0M 36%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="magenta">$4.20</span> <span class="arrow">&#9656;</span>
+        <span class="green">e:HI</span> <span class="arrow">&#9656;</span>
+        <span class="teal">LOCAL</span> <span class="arrow">&#9656;</span>
+        <span class="dim">main</span> <span class="green">saved</span>
+        <br /><br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">5h</span>
+        <span class="green"
+          >&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="green">20%</span> <span class="dim">&#10227; 5:00pm</span>
+        <span class="dim">&#183;</span> <span class="dim">weekly</span>
+        <span class="green"
+          >&#9648;&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="green">42%</span>
+        <span class="dim">&#10227; 4/4 11:00pm &#9474;</span>
+        <br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">spending</span>
+        <span class="magenta">$3.2/hr low (10m)</span>
+        <span class="dim">&#183;</span>
+        <span class="dim">cache reuse</span>
+        <span class="green">82% &#8593;2.3k saving ~73% cost</span>
+        <span class="dim">&#183;</span>
+        <span class="dim">eff</span>
+        <span class="purple">&#9679;&#9679;&#9679;&#9679;</span
+        ><span class="dim">&#9675;</span>
+        <span class="dim">&#183;</span>
+        <span class="purple">&#9874;</span> <span class="dim">47 &#9474;</span>
+      </div>
+
+      <div class="label">
+        High burn rate + context approaching full (yellow)
+      </div>
+      <div class="terminal">
+        <span class="blue">Sonnet 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="yellow">720K/1.0M 72%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="magenta">$1.23</span> <span class="arrow">&#9656;</span>
+        <span class="yellow">e:MED</span> <span class="arrow">&#9656;</span>
+        <span class="teal">LOCAL</span> <span class="arrow">&#9656;</span>
+        <span class="dim">main</span> <span class="green">saved</span>
+        <br /><br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">5h</span>
+        <span class="yellow"
+          >&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="yellow">72%</span> <span class="dim">&#10227; 8:00pm</span>
+        <span class="dim">&#183;</span> <span class="dim">weekly</span>
+        <span class="yellow"
+          >&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
+            >&#9649;&#9649;&#9649;&#9649;&#9649;</span
+          ></span
+        >
+        <span class="yellow">55%</span>
+        <span class="dim">&#10227; 4/4 11:00pm &#9474;</span>
+        <br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">spending</span>
+        <span class="yellow">$6.3/hr moderate (10m)</span>
+        <span class="yellow"> ctx full ~47m</span>
+        <span class="dim">&#183;</span>
+        <span class="dim">cache reuse</span>
+        <span class="green">68% &#8593;1.1k saving ~61% cost</span>
+        <span class="dim">&#183;</span>
+        <span class="dim">eff</span>
+        <span class="purple">&#9679;&#9679;&#9679;</span
+        ><span class="dim">&#9675;&#9675;</span>
+        <span class="dim">&#183;</span>
+        <span class="purple">&#9874;</span> <span class="dim">112 &#9474;</span>
+      </div>
+
+      <div class="label">
+        Legacy: custom peak-hours schedule active (opt-in, custom tier only
+        &mdash; timeline visible)
+      </div>
+      <div class="terminal">
+        <span class="blue">Opus 4.6</span> <span class="arrow">&#9656;</span>
+        <span class="green">53K/1.0M 5%</span>
+        <span class="arrow">&#9656;</span>
+        <span class="magenta">$0.05</span> <span class="arrow">&#9656;</span>
+        <span class="green">e:HI</span> <span class="arrow">&#9656;</span>
+        <span class="teal">LOCAL</span> <span class="arrow">&#9656;</span>
+        <span class="dim">main</span> <span class="green">saved</span>
+        <br /><br />
         <span class="dim">&#9474;</span>
         <span class="green"
           >&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
@@ -399,118 +557,39 @@
         ><span class="white">&#9679;</span
         ><span class="green">&#9473;&#9473;&#9473;</span>
         <span class="dim">&#9474;</span>&nbsp; <span class="green">&#9473;</span
-        ><span class="dim"> 2x</span> <span class="yellow">&#9473;</span
-        ><span class="dim"> 1x 14:00-20:00</span>&nbsp;
+        ><span class="dim"> off-peak</span>
+        <span class="yellow">&#9473;</span>
+        <span class="dim"> peak (3pm-9pm)</span>&nbsp;
         <span class="white">&#9679;</span><span class="dim"> now</span>
         <br />
         <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
-        <span class="dim">current</span>
-        <span class="green"
-          >&#9648;&#9648;<span class="dim"
-            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
-          ></span
-        >
-        <span class="green">15%</span> <span class="dim">&#10227; 10pm</span>
-        <span class="dim">&#183;</span> <span class="dim">weekly</span>
-        <span class="green"
-          >&#9648;&#9648;&#9648;<span class="dim"
-            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
-          ></span
-        >
-        <span class="green">31%</span> <span class="cyan">&#10052;</span>
-        <span class="dim">&#10227; mar 20</span>
-        <span class="dim">&#9474;</span>
-      </div>
-
-      <div class="label">Peak hours — full dashboard</div>
-      <div class="terminal">
-        <span class="white">16:30</span> <span class="arrow-peak">&#9656;</span>
-        <span class="bg-gray"> PEAK </span>
-        <span class="dim">&#8594; 2x in 4h 40m</span>
-        <span class="arrow-peak">&#9656;</span>
-        <span class="blue">Opus 4.6</span>
-        <span class="arrow-peak">&#9656;</span>
-        <span class="yellow"
-          >&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
-            >&#9649;&#9649;&#9649;</span
-          ></span
-        >
-        <span class="yellow">72%</span> <span class="arrow-peak">&#9656;</span>
-        <span class="magenta">$1.23</span> <br /><br />
-        <span class="dim">&#9474;</span>
-        <span class="green"
-          >&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
-        ><span class="yellow">&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
-        ><span class="white">&#9679;</span
-        ><span class="yellow">&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
-        ><span class="green"
-          >&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
-        >
-        <span class="dim">&#9474;</span>&nbsp; <span class="green">&#9473;</span
-        ><span class="dim"> 2x</span> <span class="yellow">&#9473;</span
-        ><span class="dim"> 1x 14:00-20:00</span>&nbsp;
-        <span class="white">&#9679;</span><span class="dim"> now</span>
-        <br />
-        <span class="dim">&#9474;</span> <span class="arrow-peak">&#9656;</span>
-        <span class="dim">current</span>
-        <span class="yellow"
-          >&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
-            >&#9649;&#9649;&#9649;</span
-          ></span
-        >
-        <span class="yellow">72%</span> <span class="dim">&#10227; 8pm</span>
-        <span class="dim">&#183;</span> <span class="dim">weekly</span>
-        <span class="yellow"
-          >&#9648;&#9648;&#9648;&#9648;&#9648;<span class="dim"
-            >&#9649;&#9649;&#9649;&#9649;&#9649;</span
-          ></span
-        >
-        <span class="yellow">55%</span> <span class="dim">&#10227; mar 22</span>
-        <span class="dim">&#9474;</span>
-      </div>
-
-      <div class="label">Weekend — full dashboard</div>
-      <div class="terminal">
-        <span class="white">11:00</span> <span class="arrow">&#9656;</span>
-        <span class="bg-green"> &#9889; 2x </span>
-        <span class="dim">21h left</span> <span class="dim">weekend</span>
-        <span class="arrow">&#9656;</span> <span class="blue">Opus 4.6</span>
-        <span class="arrow">&#9656;</span>
+        <span class="dim">5h</span>
         <span class="green"
           >&#9648;<span class="dim"
             >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
           ></span
         >
-        <span class="green">8%</span> <span class="arrow">&#9656;</span>
-        <span class="magenta">$0.05</span> <br /><br />
-        <span class="dim">&#9474;</span>
-        <span class="green"
-          >&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
-        ><span class="white">&#9679;</span
-        ><span class="green"
-          >&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;&#9473;</span
-        >
-        <span class="dim">&#9474;</span>&nbsp; <span class="green">&#9473;</span
-        ><span class="dim"> 2x all day</span>&nbsp;
-        <span class="white">&#9679;</span><span class="dim"> now</span>
-        <br />
-        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
-        <span class="dim">current</span>
-        <span class="green"
-          >&#9648;<span class="dim"
-            >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
-          ></span
-        >
-        <span class="green">8%</span> <span class="dim">&#10227; 4am</span>
+        <span class="green">8%</span> <span class="dim">&#10227; 4:00am</span>
         <span class="dim">&#183;</span> <span class="dim">weekly</span>
         <span class="green"
           >&#9648;&#9648;<span class="dim"
             >&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;&#9649;</span
           ></span
         >
-        <span class="green">20%</span> <span class="cyan">&#10052;</span>
-        <span class="dim">&#10227; mar 22</span>
-        <span class="dim">&#9474;</span>
+        <span class="green">20%</span>
+        <span class="dim">&#10227; 4/4 11:00pm &#9474;</span>
+        <br />
+        <span class="dim">&#9474;</span> <span class="arrow">&#9656;</span>
+        <span class="dim">spending</span>
+        <span class="magenta">$0.4/hr low (10m)</span>
+        <span class="dim">&#183;</span>
+        <span class="dim">cache reuse</span>
+        <span class="dim">91% idle (saves ~81% when active)</span>
+        <span class="dim">&#183;</span>
+        <span class="dim">eff</span>
+        <span class="purple">&#9679;&#9679;&#9679;&#9679;&#9679;</span>
+        <span class="dim">&#183;</span>
+        <span class="purple">&#9874;</span> <span class="dim">6 &#9474;</span>
       </div>
     </div>
 
@@ -520,17 +599,16 @@
       <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px">
         Create
         <code style="color: #e6edf3">~/.claude/statusline-config.json</code> and
-        toggle each segment on/off:
+        toggle each segment on/off (29 segments total; a few of the newer ones
+        are shown here &mdash; see
+        <code style="color: #e6edf3">docs/FIELDS.md</code> in the repo for the
+        full list):
       </p>
       <div class="terminal" style="line-height: 2">
         <span class="dim">{</span><br />
         &nbsp;&nbsp;<span class="blue">"tier"</span>:
         <span class="green">"custom"</span>,<br />
         &nbsp;&nbsp;<span class="blue">"segments"</span>: {<br />
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"time"</span>:
-        <span class="green">true</span>,<br />
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"peak_hours"</span>:
-        <span class="green">true</span>,<br />
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"model"</span>:
         <span class="green">true</span>,<br />
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"context"</span>:
@@ -540,13 +618,74 @@
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"git_dirty"</span>:
         <span class="green">true</span>,<br />
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"cost"</span>:
-        <span class="red">false</span>,<br />
-        &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"duration"</span>:
-        <span class="red">false</span>,<br />
+        <span class="green">true</span>,<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"effort"</span>:
+        <span class="green">true</span>,<br />
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"rate_limits"</span>:
-        <span class="green">true</span><br />
+        <span class="green">true</span>,<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"tool_count"</span>:
+        <span class="green">true</span>,<br />
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="blue">"peak_hours"</span>:
+        <span class="red">false</span><br />
         &nbsp;&nbsp;}<br />
         <span class="dim">}</span>
+      </div>
+      <p style="color: #8b949e; font-size: 0.8em; margin-top: 12px">
+        <code style="color: #e6edf3">peak_hours</code> is the old
+        <code style="color: #e6edf3">promo_2x</code>-era segment (the legacy
+        key is still accepted). It's off by default in every tier now that
+        Anthropic dropped peak-hour throttling &mdash; flip it on here if
+        you're running a custom schedule.
+      </p>
+    </div>
+
+    <!-- ═══════ RECENT FIXES ═══════ -->
+    <div class="section">
+      <h2>Recent fixes &amp; additions</h2>
+      <div class="install-box">
+        <h3>VS Code / Cursor / Windsurf / Antigravity cockpit &mdash; v0.4.0</h3>
+        <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px; line-height: 1.6">
+          Providers render in a fixed priority order (Claude &rarr; Codex
+          &rarr; Antigravity &rarr; GLM+Copilot &rarr; Droid); the bar
+          greedily appends them left to right and stops before it would blow
+          its length budget (80 characters by default, configurable). A
+          dropped provider isn't lost &mdash; it moves into the tooltip,
+          which always shows the full truth: every provider's plan, window,
+          %, and reset time, plus a note listing what the budget cut. GLM and
+          Copilot now share <span class="white">one combined bottom row</span>
+          instead of two separate lines.
+        </p>
+        <h3>Terminal statusline &mdash; "super-status" additions</h3>
+        <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px; line-height: 1.6">
+          The Full-tier metrics line gained
+          <span class="purple">eff ●●●●○</span> cache-efficiency dots, a
+          <span class="purple">⚒</span> tool-call counter, and a small
+          multi-CLI clock. Rate-limit and quota bars now use
+          <span class="white">window-aware</span> color thresholds &mdash;
+          short windows like 5h trip red/yellow at 80%/50%, while
+          weekly/monthly-style windows (and GLM's token quota) use 75%/45%
+          since they cover much more time. Every installer/doctor write to
+          <code style="color: #e6edf3">settings.json</code> now backs it up
+          to a timestamped <code style="color: #e6edf3">.bak</code> file
+          first.
+        </p>
+        <h3>Antigravity provider</h3>
+        <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 16px; line-height: 1.6">
+          Fixed a precedence bug where the CLI fallback's 5h-only view could
+          clobber a richer, already-cached quota summary (both pools, 5h +
+          weekly). The CLI fallback now writes to its own cache file, so it
+          can never overwrite the primary summary again.
+        </p>
+        <h3>Narrator &mdash; accurate on 1M-context models</h3>
+        <p style="color: #8b949e; font-size: 0.85em; margin-bottom: 0; line-height: 1.6">
+          Fixed a false "context is maxed" warning on 1M-context sessions at
+          low real usage. Root cause: a context-snapshot file shared across
+          sessions could leak a different session's reading, and a
+          rolling-token fallback assumed a 200K window. Fixed by rejecting
+          any other session's file outright and gating that fallback to
+          windows above 200K &mdash; a genuine 200K session already has the
+          real reading from the bar itself.
+        </p>
       </div>
     </div>
 

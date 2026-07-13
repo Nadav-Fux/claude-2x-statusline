@@ -121,6 +121,9 @@ function loadStatuslineContext(stdinData) {
     // the over-counting rolling sum that reported 100%).
     const ourSid = (stdinData || {}).session_id, fileSid = data.session_id;
     if (ourSid && fileSid && ourSid === fileSid) return data;
+    // A different known session's file must never scale our context (global file,
+    // last render wins; a concurrent session may run a different model/window).
+    if (ourSid && fileSid && ourSid !== fileSid) return {};
     if (Date.now() / 1000 - fs.statSync(p).mtimeMs / 1000 > 300) return {};
     return data;
   } catch { return {}; }
@@ -248,21 +251,18 @@ function buildObservation(memory) {
   // Project CLAUDE.md size (best-practice hygiene hint)
   obs.claude_md_lines = countClaudeMdLines(stdinData);
 
-  // Context %. Prefer the bar's authoritative current_usage from the context
-  // file (the live occupancy Claude Code reports); the rolling token sum
-  // (input+cache_read+cache_creation) over-counts and clamps to 100% in long
-  // sessions. The file is global (last render wins) and current_usage is
-  // session-specific, so only trust it when its session_id matches ours
-  // (lenient when either is absent). A legit 0 (fresh empty window) IS
-  // authoritative — don't fall back to the rolling sum for it.
+  // Context %. Prefer the bar's authoritative, same-session current_usage.
+  // loadStatuslineContext() already rejects other sessions' files, so usage here is
+  // ours (or a legacy no-session-id bar) — no concurrent session's usage leaks in.
   const barCtx = loadStatuslineContext(stdinData);
   const barUsage = barCtx.current_usage;
-  const barSid = barCtx.session_id;
-  const ourSid = (stdinData || {}).session_id;
-  const usageTrusted = !barSid || !ourSid || barSid === ourSid;
-  if (obs.ctx_window_size > 0 && usageTrusted && typeof barUsage === 'number' && barUsage >= 0) {
+  if (obs.ctx_window_size > 0 && typeof barUsage === 'number' && barUsage >= 0
+      && barUsage <= obs.ctx_window_size) {
     obs.ctx_pct = Math.min(100, barUsage / obs.ctx_window_size * 100);
-  } else if (obs.ctx_window_size > 0 && obs.total_input_tokens > 0) {
+  } else if (obs.ctx_window_size > 200000 && obs.total_input_tokens > 0) {
+    // Rolling-token fallback, GATED to >200k windows: the rolling sum over-counts
+    // occupancy and only a small/200k window turns that into a false "nearly full"
+    // alarm. Genuine 200k sessions use the bar's real current_usage above instead.
     const used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens;
     obs.ctx_pct = Math.min(100, used / obs.ctx_window_size * 100);
   }
@@ -469,6 +469,43 @@ function windowLabel(window, fallback) {
   return fallback;
 }
 
+// ── Cross-CLI recency gate ──
+// Principle: another CLI's cap only matters to THIS Claude session when the
+// user is actually using that CLI right now. Bug history: a Claude session at
+// 2% 5h usage surfaced "Codex 5h quota is maxed (100%)" as a top insight — the
+// data was correct, but it's cross-CLI noise in a Claude-only session, and got
+// mis-relayed downstream as "your own budget is basically spent."
+//
+// 10 min: mirrors the existing "·stale" cutoff applied to this same
+// stale_seconds field in lib/usage_providers.js's formatProviderRowParts
+// (stale_seconds > 600 there).
+const RECENT_ACTIVITY_SECONDS = 600;
+
+// Sources whose stale_seconds is anchored to a REAL local-activity timestamp
+// (a rollout/session file's mtime) rather than "how long ago we polled an
+// account API". Codex's rollout-fallback and Droid both read a local session
+// file that is only touched by genuine CLI use, so stale_seconds there is
+// trustworthy. Every other source — Codex's live "app-server" snapshot, and
+// GLM / Antigravity / Copilot's "api" / "sqlite" / "quota-summary" /
+// "gh-billing" quota checks — is kept warm by a detached background poller on
+// a fixed cadence (CODEX_LIVE_TTL / GLM_CACHE_TTL / ANTIGRAVITY_CACHE_TTL in
+// lib/usage_providers.js) driven by Claude's OWN render loop, independent of
+// whether the human has touched that CLI recently. Concretely: a live Codex
+// snapshot is written with stale_seconds=0 every refresh regardless of real
+// usage, so it would ALWAYS read "fresh" — a small stale_seconds there proves
+// only that the poll succeeded, not that anyone is mid-flow in Codex. So:
+// trust stale_seconds directly only for these local sources; everywhere else
+// (or when the field is simply absent) the caller applies its own
+// conservative fallback instead of trusting a misleadingly-fresh reading.
+const LOCAL_ACTIVITY_SOURCES = new Set(['local-jsonl']);
+
+function providerRecentlyActive(record) {
+  if (!record || !LOCAL_ACTIVITY_SOURCES.has(record.source)) return null;
+  const staleSeconds = Number(record.stale_seconds);
+  if (!Number.isFinite(staleSeconds)) return null;
+  return staleSeconds <= RECENT_ACTIVITY_SECONDS;
+}
+
 function nextMilestone(cost) {
   const crossed = COST_MILESTONES.filter(m => cost >= m);
   return crossed.length ? crossed[crossed.length - 1] : null;
@@ -492,8 +529,20 @@ function buildInsights(obs, memory) {
   }
 
   if (effectiveBurn != null && ((burn10 != null && burn10 >= 10) || (burnSess != null && burnSess >= 15))) {
-    const rate = burn10 ?? burnSess, minsLeft = rate > 0 ? Math.max(0, Math.floor((50 - obs.cost_usd) / rate * 60)) : 0, k = 'burn_high';
-    results.push({ text: `Burning $${rate.toFixed(1)}/hr — at this rate your 5-hour budget ends in ~${minsLeft}m. Consider Sonnet for simple steps.`, text_he: `שורף $${rate.toFixed(1)}/hr — בקצב הזה תגמור את budget 5 השעות בעוד ~${minsLeft} דקות. שקול Sonnet לצעדים פשוטים.`, urgency: 10, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
+    // NOTE (bug history): this used to project max(0, (50 - obs.cost_usd) / rate)
+    // as a fake "5-hour budget" countdown against SESSION-CUMULATIVE cost. Once a
+    // long session passed $50 total, the subtraction went negative, clamped to 0,
+    // and the text read "ends in ~0m" — relayed downstream as "budget is spent"
+    // even with huge real rate-limit headroom left. Fix: burn_high is now a
+    // spend-VELOCITY flag; it only escalates to "ease off" wording when a REAL
+    // limit (rate_limit_5h_pct / rate_limit_7d_pct) is actually close to cap.
+    const rate = burn10 ?? burnSess, rl5 = obs.rate_limit_5h_pct, rl7 = obs.rate_limit_7d_pct, k = 'burn_high';
+    const BURN_ESCALATE_5H_PCT = 80, BURN_ESCALATE_7D_PCT = 85;
+    if (rl5 >= BURN_ESCALATE_5H_PCT || rl7 >= BURN_ESCALATE_7D_PCT) {
+      results.push({ text: `Burning $${rate.toFixed(1)}/hr AND close to a real cap (5h ${rl5.toFixed(0)}% / weekly ${rl7.toFixed(0)}%) — ease off now or switch to Sonnet.`, text_he: `שורף $${rate.toFixed(1)}/hr וגם קרוב לתקרה אמיתית (5h ${rl5.toFixed(0)}% / שבועי ${rl7.toFixed(0)}%) — תוריד הילוך עכשיו או עבור ל-Sonnet.`, urgency: 10, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
+    } else {
+      results.push({ text: `Burning $${rate.toFixed(1)}/hr — high spend velocity, not a limit; your 5h/weekly still have room (${rl5.toFixed(0)}%/${rl7.toFixed(0)}%). Consider Sonnet for simple steps.`, text_he: `שורף $${rate.toFixed(1)}/hr — קצב הוצאה גבוה, זו לא תקרה; ל-5 השעות ולשבוע עדיין יש מקום (${rl5.toFixed(0)}%/${rl7.toFixed(0)}%). שקול Sonnet לצעדים פשוטים.`, urgency: 5, novelty: novelty(k, memory), actionability: 10, uniqueness: 10, template_key: k });
+    }
   } else if (effectiveBurn != null && effectiveBurn >= 5) {
     const k = 'burn_moderate', label = burn10 != null ? '(10m)' : '(session)';
     results.push({ text: `Spending $${effectiveBurn.toFixed(1)}/hr ${label} — steady pace for complex work. Budget OK.`, text_he: `מוציא $${effectiveBurn.toFixed(1)}/hr ${label} — קצב יציב לעבודה מורכבת. Budget בסדר.`, urgency: 4, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
@@ -586,10 +635,25 @@ function buildInsights(obs, memory) {
     results.push({ text: `Historical peak schedule is active in your custom tier. Budget: ${maxRl.toFixed(0)}% used. Use this as a local schedule cue, not a faster-drain warning.`, text_he: `לוח שעות שיא היסטורי פעיל ב-custom tier שלך. Budget: ${maxRl.toFixed(0)}% בשימוש. תתייחס לזה כסימון לוח זמנים מקומי, לא כאזהרת צריכה מהירה יותר.`, urgency: 7, novelty: novelty(k, memory), actionability: 5, uniqueness: 5, template_key: k });
   }
 
+  // See the "Cross-CLI recency gate" section above for why every candidate is
+  // gated on recent activity before it can ever fire.
   const externalUsage = Array.isArray(obs.external_usage) ? obs.external_usage : [];
+  // Conservative fallback for records with no trustworthy recency signal
+  // (providerRecentlyActive returned null): only worth a mention if Claude's
+  // OWN usage is already running warm. Deliberately treats an unknown pace
+  // line (pace == null) as "not confirmed hot" — mirrors scoring.py's
+  // _claude_weekly_confirmed_hot, which intentionally differs from the
+  // offload check below (and from Python's own _weekly_ahead_of_pace) in
+  // that missing data must default to suppress here, not show.
+  const claudeWeeklyConfirmedHot = pace != null && pct7 >= pace - 3;
+  const crossCliFallbackRelevant = pct5 >= 50 || claudeWeeklyConfirmedHot;
+
   const capped = [];
   for (const record of externalUsage) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    let active = providerRecentlyActive(record);
+    if (active == null) active = crossCliFallbackRelevant;
+    if (!active) continue;
     const label = recordLabel(record);
     const fiveWindow = record.five_hour;
     const fivePct = usagePct(fiveWindow);
@@ -608,11 +672,11 @@ function buildInsights(obs, memory) {
     const kindHe = hottest.kind === 'token' ? 'טוקנים' : 'פרומפטים';
     const k = 'cross_cli_capped';
     results.push({
-      text: `${hottest.label} ${hottest.window} quota is maxed (${pctText}%) — route ${hottest.kind}-heavy work to another CLI until it resets.`,
-      text_he: `${hottest.label} ${hottest.window} quota מלאה (${pctText}%) — העבר עבודה עתירת ${kindHe} ל-CLI אחר עד שהיא מתאפסת.`,
-      urgency: 7,
+      text: `Cross-CLI heads-up, not Claude: ${hottest.label}'s ${hottest.window} quota is maxed (${pctText}%). Your Claude budget is unaffected — only ${hottest.label}'s ${hottest.kind}-heavy work needs to move elsewhere until it resets.`,
+      text_he: `עדכון חוצה-CLI, לא Claude: מכסת ה-${hottest.window} של ${hottest.label} מלאה (${pctText}%). ה-budget של Claude לא נפגע — רק עבודה עתירת ${kindHe} ב-${hottest.label} צריכה לעבור למקום אחר עד שהיא מתאפסת.`,
+      urgency: 4,
       novelty: novelty(k, memory),
-      actionability: 8,
+      actionability: 6,
       uniqueness: 10,
       template_key: k,
     });

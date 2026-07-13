@@ -460,6 +460,63 @@ test('pick: high burn beats low cache in ordering', () => {
   assert.ok(burnIdx < cacheIdx, 'burn_high should rank before cache_low');
 });
 
+// ── burn_high false-alarm fix regression ──────────────────────────────────────
+// Bug history: hours_left used to be computed as max(0, (50 - obs.cost_usd) / rate)
+// — a hardcoded $50 "budget" minus the SESSION-CUMULATIVE cost. Once a session
+// passed $50 total (routine for long XHIGH sessions — observed at $154) this
+// clamped to 0 and rendered "your 5-hour budget ends in ~0m", read downstream as
+// "budget is spent" even though the REAL rate limits had huge headroom left
+// (observed: 5h=3%, weekly=52%). Mirrors the Python
+// TestBurnHighFalseAlarmFix suite in test_narrator_scoring.py.
+
+test('burn_high: high cumulative cost does not imply budget exhausted (exact repro)', () => {
+  const mem = emptyMem();
+  const obs = makeObs({
+    cost_usd: 154,
+    burn_10m: 21.6,
+    burn_session: 21.6,
+    session_duration_min: 180,
+    rate_limit_5h_pct: 3,
+    rate_limit_7d_pct: 52,
+  });
+
+  const insights = buildInsights(obs, mem);
+  const burn = insights.find(i => i.template_key === 'burn_high');
+  assert.ok(burn, 'Expected a burn_high insight');
+
+  const low = burn.text.toLowerCase();
+  assert.ok(!low.includes('0m'), `Must not read as a zeroed-out countdown: ${burn.text}`);
+  assert.ok(!low.includes('budget ends'), `Must not claim the budget ended: ${burn.text}`);
+  assert.ok(!low.includes('spent'), `Must not claim the budget is spent: ${burn.text}`);
+  assert.ok(
+    burn.text.includes('3%') && burn.text.includes('52%'),
+    `Expected the real 5h/weekly headroom (3%/52%) cited, got: ${burn.text}`,
+  );
+  assert.ok(burn.urgency <= 5, `Non-escalated burn_high must not dominate: urgency=${burn.urgency}`);
+
+  assert.ok(!burn.text_he.includes('0m'));
+  assert.ok(burn.text_he.includes('3%') && burn.text_he.includes('52%'));
+});
+
+test('burn_high: genuinely near a real limit still escalates', () => {
+  const mem = emptyMem();
+  const obs = makeObs({
+    cost_usd: 40,
+    burn_10m: 21.6,
+    burn_session: 21.6,
+    session_duration_min: 180,
+    rate_limit_5h_pct: 85, // >= 80 → escalate
+    rate_limit_7d_pct: 52,
+  });
+
+  const insights = buildInsights(obs, mem);
+  const burn = insights.find(i => i.template_key === 'burn_high');
+  assert.ok(burn, 'Expected a burn_high insight');
+  assert.ok(burn.urgency >= 7, `Near-limit burn_high must escalate urgency, got ${burn.urgency}`);
+  assert.ok(burn.text.includes('85%'));
+  assert.ok(/ease off|cap/i.test(burn.text));
+});
+
 // ── Score formula ─────────────────────────────────────────────────────────────
 
 test('score formula: urgency*3 + novelty*2 + actionability*2 + uniqueness', () => {

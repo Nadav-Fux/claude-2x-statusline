@@ -1842,11 +1842,16 @@ def _render_external_provider_parts(row):
             except (TypeError, ValueError):
                 pct = 0
             long_window = _is_long_window_label(part.get("label"))
-            metrics.append(f"{WHITE}{part.get('label')}{RST} {color_for_pct(pct, long_window)}{pct}%{RST}")
+            part_reset = f" {DIM}{part.get('reset_text')}{RST}" if part.get("reset_text") else ""
+            metrics.append(f"{WHITE}{part.get('label')}{RST} {color_for_pct(pct, long_window)}{pct}%{RST}{part_reset}")
         if not metrics:
             return ""
         sep = f" {DIM}\u00b7{RST} "
-        reset = f" {DIM}{row.get('reset_text')}{RST}" if row.get("reset_text") else ""
+        # Per-metric resets render inline above (e.g. GLM's 5h + mo). Fall back to
+        # the row-level reset only for old-style rows (e.g. Antigravity) whose
+        # metric parts carry no reset_text of their own.
+        _has_metric_reset = any(p.get("reset_text") for p in (row.get("parts") or []) if p.get("kind") == "metric")
+        reset = "" if _has_metric_reset else (f" {DIM}{row.get('reset_text')}{RST}" if row.get("reset_text") else "")
         stale = f"{DIM}{row.get('stale_text')}{RST}" if row.get("stale_text") else ""
         return f"{label}  {sep.join(metrics)}{reset}{stale}"
 

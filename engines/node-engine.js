@@ -1004,10 +1004,14 @@ function renderExternalProviderParts(row) {
       .map(part => {
         const pct = Number.isFinite(Number(part.pct)) ? Math.max(0, Math.min(100, Math.round(Number(part.pct)))) : 0;
         const longWindow = isLongWindowLabel(part.label);
-        return `${WHITE}${part.label}${RST} ${colorPct(pct, longWindow)}${pct}%${RST}`;
+        const partReset = part.resetText ? ` ${DIM}${part.resetText}${RST}` : '';
+        return `${WHITE}${part.label}${RST} ${colorPct(pct, longWindow)}${pct}%${RST}${partReset}`;
       });
     if (!metrics.length) return '';
-    const reset = row.resetText ? ` ${DIM}${row.resetText}${RST}` : '';
+    // Per-metric resets render inline above; fall back to the row-level reset only
+    // for old-style rows (e.g. Antigravity) whose metric parts carry no resetText.
+    const hasMetricReset = (row.parts || []).some(p => p.kind === 'metric' && p.resetText);
+    const reset = hasMetricReset ? '' : (row.resetText ? ` ${DIM}${row.resetText}${RST}` : '');
     const stale = row.staleText ? `${DIM}${row.staleText}${RST}` : '';
     return `${label}  ${metrics.join(` ${DIM}\u00b7${RST} `)}${reset}${stale}`;
   }

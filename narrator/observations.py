@@ -196,9 +196,16 @@ def _load_statusline_context(stdin_data: Optional[dict] = None) -> dict:
         file_sid = data.get("session_id")
         if our_sid and file_sid and our_sid == file_sid:
             return data  # our session — authoritative regardless of age
+        # A DIFFERENT known session's file must never scale our context: the file is
+        # global (one path, last render wins) and a concurrent session may run a
+        # different model/window (e.g. a 200k session overwriting a 1M session's
+        # file). Reject it outright rather than leak a foreign window/usage — that
+        # cross-session leak is what fired false "context nearly full" pressure.
+        if our_sid and file_sid and our_sid != file_sid:
+            return {}
         if time.time() - path.stat().st_mtime > 300:
             return {}
-        return data
+        return data  # legacy bar with no session_id, fresh — best effort
     except Exception:
         return {}
 
@@ -477,23 +484,24 @@ def build(memory: dict) -> Observation:
     # (which also makes the ctx_pct>60 insight gates misfire). _load_statusline_context()
     # already applies a 5-min freshness guard; on a stale/absent file we fall
     # back to the rolling estimate.
+    # Prefer the bar's authoritative, same-session current_usage (the live window
+    # occupancy Claude Code reports). _load_statusline_context() already rejects
+    # OTHER sessions' files, so any usage here is ours (or a legacy no-session-id
+    # bar) — a concurrent session's usage can no longer leak in.
     _bar_ctx = _load_statusline_context(stdin_data)
     _bar_usage = _bar_ctx.get("current_usage")
-    # The context file is global (last render wins). current_usage is
-    # session-specific, so when the file records a session_id only trust it if it
-    # matches ours — otherwise a concurrent session's usage leaks in. Files from
-    # older bars carry no session_id; stay lenient for them. A legit 0 (fresh
-    # empty window) IS authoritative — don't fall back to the rolling sum for it.
-    _bar_sid = _bar_ctx.get("session_id")
-    _our_sid = (stdin_data or {}).get("session_id")
-    # Lenient when either side lacks a session_id (older bars write "" / None):
-    # only a definite mismatch between two known ids blocks trust.
-    _usage_trusted = not _bar_sid or not _our_sid or _bar_sid == _our_sid
-    if (obs.ctx_window_size > 0 and _usage_trusted
+    if (obs.ctx_window_size > 0
             and isinstance(_bar_usage, (int, float)) and not isinstance(_bar_usage, bool)
-            and _bar_usage >= 0):
+            and _bar_usage >= 0
+            and _bar_usage <= obs.ctx_window_size):
         obs.ctx_pct = min(100.0, float(_bar_usage) / obs.ctx_window_size * 100.0)
-    elif obs.ctx_window_size > 0 and obs.total_input_tokens > 0:
+    elif obs.ctx_window_size > 200000 and obs.total_input_tokens > 0:
+        # Rolling-token fallback: the file gave a true >200k window but no live
+        # current_usage. GATED to windows LARGER than the 200k default: the rolling
+        # sum (input+cache_read+cache_creation) over-counts real occupancy, and only
+        # a small/200k window turns that over-count into a false "context nearly
+        # full" alarm. On a genuine 200k session we always have the bar's real
+        # current_usage above, so nothing is lost by skipping the noisy estimate here.
         used = obs.total_input_tokens + obs.cache_creation_tokens + obs.cache_read_tokens
         obs.ctx_pct = min(100.0, used / obs.ctx_window_size * 100.0)
 

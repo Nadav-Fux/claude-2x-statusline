@@ -40,6 +40,15 @@ CODEX_ROLLOUT_SCAN_LIMIT = 40
 # only plans whose newest snapshot is at most this old appear in ``all_plans``.
 CODEX_PLAN_MAX_AGE_SECONDS = 7 * 86400
 GLM_CACHE_TTL = 60
+# GLM's own `type` field (TIME_LIMIT / TOKENS_LIMIT) is NOT a reliable cadence
+# signal: on real accounts observed in production, TIME_LIMIT resets monthly
+# and TOKENS_LIMIT every ~5h -- the OPPOSITE of what the names suggest, and it
+# is not guaranteed to be the same for every account/plan. parse_glm_quota_response
+# therefore classifies each limit by how soon it ACTUALLY resets
+# (nextResetTime - now) instead of trusting `type`. See _glm_window_classification.
+GLM_SHORT_WINDOW_MAX_SECONDS = 6 * 3600  # <= ~6h  -> "5h" / five_hour slot
+GLM_LONG_WINDOW_MIN_SECONDS = 2 * 86400  # >= ~2d  -> "mo" / weekly slot
+GLM_DAY_WINDOW_MAX_SECONDS = 30 * 3600  # in-between band, day-ish half -> "day"
 # A live `codex app-server` rate-limit snapshot stays authoritative this long
 # before the detached refresher is asked to pull a fresh one. Matches the GLM
 # background-refresh cadence (get path is cache-only for the live record).
@@ -109,6 +118,29 @@ def _usage_window(used_pct, resets_at, label=None):
     if clean_label:
         window["label"] = clean_label
     return window
+
+
+def _glm_window_classification(interval_seconds):
+    """Classify one GLM quota window by how soon it resets (seconds from now),
+    NOT by GLM's `type` field -- see the GLM_SHORT_WINDOW_MAX_SECONDS comment
+    above for why `type` can't be trusted.
+
+    Returns (slot, label): slot is "five_hour" (genuinely short, <=~6h) or
+    "weekly" (genuinely long, >=~2d); the ~6h-2d gap in between still resolves
+    to one of the two slots but with an honest "day"/"wk" label instead of
+    forcing "5h"/"mo" onto a window that is neither. (None, None) means the
+    interval is unknown (e.g. no nextResetTime yet) and the caller decides a
+    fallback placement.
+    """
+    if interval_seconds is None:
+        return None, None
+    if interval_seconds <= GLM_SHORT_WINDOW_MAX_SECONDS:
+        return "five_hour", "5h"
+    if interval_seconds >= GLM_LONG_WINDOW_MIN_SECONDS:
+        return "weekly", "mo"
+    if interval_seconds <= GLM_DAY_WINDOW_MAX_SECONDS:
+        return "five_hour", "day"
+    return "weekly", "wk"
 
 
 def _codex_window_label(window_minutes, fallback):
@@ -257,6 +289,26 @@ def _soonest_reset_text(metrics, now_sec, format_duration, format_clock=None):
     return _reset_display(soonest.get("resets_at"), soonest.get("label"), now_sec, format_duration, format_clock)
 
 
+def _compact_metrics_reset_text(metrics, now_sec, format_duration, format_clock=None):
+    """Reset text for a compact row: one reset per metric, not just the
+    soonest.
+
+    A compact row can carry two metrics on very different cadences (GLM's 5h
+    + monthly meters share one row -- see format_combined_glm_copilot_row).
+    _soonest_reset_text picks a single winner, which would permanently hide
+    the longer meter's own reset date behind the short meter's sooner clock,
+    since the short one always resets first. Showing every metric's own reset
+    instead (each in its own style via _reset_style_for_label) keeps both
+    dates/clocks visible, in metric order, joined with the same dim
+    separator used between the metrics themselves.
+    """
+    pieces = [
+        _reset_display(metric.get("resets_at"), metric.get("label"), now_sec, format_duration, format_clock)
+        for metric in metrics
+    ]
+    return " · ".join(piece for piece in pieces if piece)
+
+
 def _plain_usage_bar(pct, width=10):
     clean_pct = max(0, min(100, int(round(_number_or_zero(pct)))))
     filled = clean_pct * width // 100
@@ -270,12 +322,24 @@ def _format_provider_row_text(row):
     label_text = f"{label_part.get('label', '')}{' ' + label_plan if label_plan else ''}"
     if row.get("display") == "compact":
         sep = " \u00b7 "
-        metrics = [
-            f"{part.get('label')} {part.get('pct')}%"
-            for part in parts
-            if isinstance(part, dict) and part.get("kind") == "metric"
-        ]
-        reset = f" {row.get('reset_text')}" if row.get("reset_text") else ""
+        metric_parts = [part for part in parts if isinstance(part, dict) and part.get("kind") == "metric"]
+        # New-style rows (built by format_provider_row_parts's own compact
+        # branch) carry a "reset_text" key on EVERY metric part -- even ""
+        # for a metric with no reset -- so each meter can show ITS OWN reset
+        # right where it appears instead of bunching every meter's reset at
+        # the row's end. Older callers that hand-build compact-shaped rows
+        # without per-metric reset_text (e.g. _antigravity_dual_rows, which
+        # sets one soonest-based reset_text on the ROW instead) keep the
+        # legacy trailing-reset rendering untouched.
+        if any("reset_text" in part for part in metric_parts):
+            metrics = [
+                f"{part.get('label')} {part.get('pct')}%" + (f" {part.get('reset_text')}" if part.get("reset_text") else "")
+                for part in metric_parts
+            ]
+            reset = ""
+        else:
+            metrics = [f"{part.get('label')} {part.get('pct')}%" for part in metric_parts]
+            reset = f" {row.get('reset_text')}" if row.get("reset_text") else ""
         return f"{label_text}  {sep.join(metrics)}{reset}{row.get('stale_text') or ''}"
 
     chunks = []
@@ -418,6 +482,9 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
                     "label": metric["label"],
                     "pct": metric["used_pct"],
                     "resets_at": metric.get("resets_at"),
+                    "reset_text": _reset_display(
+                        metric.get("resets_at"), metric["label"], now_sec, format_duration, format_clock
+                    ),
                 }
             )
         if len(parts) <= 1:
@@ -426,7 +493,12 @@ def format_provider_row_parts(record, now_sec=None, label_width=0, format_durati
             "label": label,
             "display": display,
             "parts": parts,
-            "reset_text": _soonest_reset_text(metrics, now_sec, format_duration, format_clock),
+            # Each metric above now carries its OWN reset_text, so a
+            # two-cadence compact row (GLM's 5h + monthly meters) shows each
+            # reset right after its own meter instead of bunching both at the
+            # row's end. Kept (empty) only for shape parity with non-compact
+            # rows, which do use the row/part-level reset_text convention.
+            "reset_text": "",
             "stale": stale,
             "stale_text": " \u00b7stale" if stale else "",
         }
@@ -1213,7 +1285,7 @@ def get_codex_usage(config=None):
         return unavailable("codex")
 
 
-def parse_glm_quota_response(data, stale_seconds=None):
+def parse_glm_quota_response(data, stale_seconds=None, now_sec=None):
     try:
         body = data if isinstance(data, dict) else json.loads(data)
     except Exception:
@@ -1221,8 +1293,17 @@ def parse_glm_quota_response(data, stale_seconds=None):
 
     data_obj = body.get("data") if isinstance(body.get("data"), dict) else {}
     limits = data_obj.get("limits") if isinstance(data_obj.get("limits"), list) else []
-    five_hour = None
-    weekly = None
+    now = _number_or_zero(now_sec) if now_sec is not None else time.time()
+
+    # Classify each limit by how soon it ACTUALLY resets, not by `type` (see
+    # GLM_SHORT_WINDOW_MAX_SECONDS above). Whichever slot its own interval
+    # earns comes first; a limit that couldn't be classified (no
+    # nextResetTime yet, e.g. a window the API hasn't attached a fresh
+    # countdown to) or that collides with an already-filled slot falls back
+    # to whichever meter is still empty, so both meters keep filling even
+    # when a limit's cadence can't be read from this snapshot alone.
+    slots = {"five_hour": None, "weekly": None}
+    leftovers = []
     for item in limits:
         if not isinstance(item, dict):
             continue
@@ -1232,10 +1313,26 @@ def parse_glm_quota_response(data, stale_seconds=None):
                 reset = int(round(float(item.get("nextResetTime")) / 1000.0))
             except (TypeError, ValueError):
                 reset = None
-        if item.get("type") == "TIME_LIMIT":
-            five_hour = _usage_window(item.get("percentage"), reset, "5h")
-        elif item.get("type") == "TOKENS_LIMIT":
-            weekly = _usage_window(item.get("percentage"), reset, "tok")
+        interval = (reset - now) if reset is not None else None
+        slot, label = _glm_window_classification(interval)
+        window = _usage_window(item.get("percentage"), reset, label)
+        if window is None:
+            continue
+        if slot and slots[slot] is None:
+            slots[slot] = window
+        else:
+            leftovers.append(window)
+
+    for window in leftovers:
+        if slots["five_hour"] is None:
+            window.setdefault("label", "5h")
+            slots["five_hour"] = window
+        elif slots["weekly"] is None:
+            window.setdefault("label", "mo")
+            slots["weekly"] = window
+
+    five_hour = slots["five_hour"]
+    weekly = slots["weekly"]
 
     record = unavailable("glm")
     record.update(
@@ -1247,10 +1344,18 @@ def parse_glm_quota_response(data, stale_seconds=None):
             "metrics": [
                 metric
                 for metric in (
-                    {"label": "5h", "used_pct": five_hour["used_pct"], "resets_at": five_hour["resets_at"]}
+                    {
+                        "label": five_hour.get("label") or "5h",
+                        "used_pct": five_hour["used_pct"],
+                        "resets_at": five_hour["resets_at"],
+                    }
                     if five_hour
                     else None,
-                    {"label": "tok", "used_pct": weekly["used_pct"], "resets_at": weekly["resets_at"]}
+                    {
+                        "label": weekly.get("label") or "mo",
+                        "used_pct": weekly["used_pct"],
+                        "resets_at": weekly["resets_at"],
+                    }
                     if weekly
                     else None,
                 )

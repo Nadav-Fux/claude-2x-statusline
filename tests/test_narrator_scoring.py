@@ -192,9 +192,14 @@ class TestActionability:
         assert cache_insights[0].actionability <= 5
 
     def test_actionability_ordering_in_pick(self):
-        """pick() places higher-actionability insight first when urgency is equal."""
+        """pick() places higher-actionability insight first when urgency is close."""
         mem = _empty_memory()
-        # Conditions that trigger burn_high (actionability=10) + cache_low (actionability=5)
+        # Conditions that trigger burn_high (non-escalated: urgency=5,
+        # actionability=10) + cache_low (urgency=4, actionability=5). burn_high's
+        # urgency was lowered 10 → 5 by the false-alarm fix (a high burn alone,
+        # with no real rate-limit pressure, is informational, not critical), so
+        # this now exercises the actionability tie-break rather than a blowout
+        # urgency gap — burn_high should still win on total score.
         obs = _obs(
             burn_10m=12.0,
             burn_session=12.0,
@@ -204,8 +209,76 @@ class TestActionability:
         )
         results = pick(obs, mem)
         assert len(results) >= 1
-        # burn_high has urgency=10, cache_low has urgency=4 → burn_high wins
-        assert results[0].urgency >= 7
+        assert results[0].template_key == "burn_high"
+        assert results[0].actionability == 10
+
+
+# ---------------------------------------------------------------------------
+# 3b. burn_high false-alarm fix regression
+# ---------------------------------------------------------------------------
+# Bug history: hours_left used to be computed as
+#   max(0, (50.0 - obs.cost_usd) / rate)
+# — a hardcoded $50 "budget" minus the SESSION-CUMULATIVE cost. Once a session
+# passed $50 total (routine for long XHIGH sessions — observed at $154) the
+# subtraction went negative, clamped to 0, and the text read "your 5-hour
+# budget ends in ~0m" — relayed downstream as "your budget is spent" even
+# though the REAL rate limits had huge headroom left (observed: 5h=3%,
+# weekly=52%). Mirrors the Node suite in tests/narrator-node.test.mjs.
+
+class TestBurnHighFalseAlarmFix:
+    def test_high_cumulative_cost_does_not_imply_budget_exhausted(self):
+        """Exact repro: cost_usd=154 (well past the old hardcoded $50), fast
+        burn_10m=21.6, with huge REAL headroom (5h=3%, weekly=52%). The insight
+        must read as a spend-velocity flag, never as "your budget is gone".
+        """
+        mem = _empty_memory()
+        obs = _obs(
+            cost_usd=154.0,
+            burn_10m=21.6,
+            burn_session=21.6,
+            session_duration_min=180.0,
+            rate_limit_5h_pct=3.0,
+            rate_limit_7d_pct=52.0,
+        )
+        insights = _build_insights(obs, mem)
+        burn = next((i for i in insights if i.template_key == "burn_high"), None)
+        assert burn is not None, "Expected a burn_high insight"
+
+        low = burn.text.lower()
+        assert "0m" not in low, f"Must not read as a zeroed-out countdown: {burn.text!r}"
+        assert "budget ends" not in low, f"Must not claim the budget ended: {burn.text!r}"
+        assert "spent" not in low, f"Must not claim the budget is spent: {burn.text!r}"
+
+        # Must cite the REAL headroom so a model can't misread this as a cap.
+        assert "3%" in burn.text and "52%" in burn.text, (
+            f"Expected the real 5h/weekly headroom (3%/52%) cited, got: {burn.text!r}"
+        )
+        assert burn.urgency <= 5, f"Non-escalated burn_high must not dominate: urgency={burn.urgency}"
+
+        # Hebrew side must be equally clean.
+        assert "0m" not in burn.text_he
+        assert "3%" in burn.text_he and "52%" in burn.text_he
+
+    def test_genuinely_near_limit_still_escalates(self):
+        """When a REAL limit (5h or weekly) is actually close, burn_high must
+        still escalate to urgent 'ease off' wording — the fix only silences the
+        false alarm, not genuinely urgent near-cap situations.
+        """
+        mem = _empty_memory()
+        obs = _obs(
+            cost_usd=40.0,
+            burn_10m=21.6,
+            burn_session=21.6,
+            session_duration_min=180.0,
+            rate_limit_5h_pct=85.0,   # >= 80 → escalate
+            rate_limit_7d_pct=52.0,
+        )
+        insights = _build_insights(obs, mem)
+        burn = next((i for i in insights if i.template_key == "burn_high"), None)
+        assert burn is not None, "Expected a burn_high insight"
+        assert burn.urgency >= 7, f"Near-limit burn_high must escalate urgency, got {burn.urgency}"
+        assert "85%" in burn.text
+        assert any(w in burn.text.lower() for w in ("ease off", "cap"))
 
 
 # ---------------------------------------------------------------------------
