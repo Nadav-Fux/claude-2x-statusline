@@ -62,8 +62,10 @@ ANTIGRAVITY_CACHE_TTL = 120
 # A stale quota-summary (5h + weekly per pool) still beats the CLI's 5h-only
 # view; only past this horizon does the render drop to the CLI fallback.
 ANTIGRAVITY_SUMMARY_MAX_AGE = 6 * 3600
-# Hard overall wall-clock budget for one quota-summary refresh (local + cloud).
-ANTIGRAVITY_REFRESH_BUDGET = 8.0
+# Hard overall wall-clock budget for one quota-summary refresh. Covers the
+# local RPC probe, the cloud fetch, AND a one-shot CLI token renewal + cloud
+# retry when the ~1h OAuth token has lapsed (see refresh_antigravity_cache).
+ANTIGRAVITY_REFRESH_BUDGET = 12.0
 ANTIGRAVITY_LOCAL_RPC_PATH = (
     "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
 )
@@ -1989,10 +1991,19 @@ def _map_antigravity_snapshot(snapshot):
             continue
         try:
             frac = float(m.get("remainingPercentage"))
+            used_pct = max(0, min(100, round((1 - frac) * 100)))
         except (TypeError, ValueError):
-            continue
+            # Antigravity meters Claude (Opus/Sonnet) and GPT models as a binary
+            # isExhausted flag with NO remainingPercentage. Honor that signal so
+            # an exhausted Claude+GPT pool reads 100% in the CLI fallback instead
+            # of silently vanishing; a not-exhausted model carries no usable
+            # percentage, so it contributes nothing here (the quota-summary path
+            # covers the in-between, non-exhausted range).
+            if m.get("isExhausted") is True:
+                used_pct = 100
+            else:
+                continue
         pool = _antigravity_pool(m)
-        used_pct = max(0, min(100, round((1 - frac) * 100)))
         reset = _parse_iso_seconds(m.get("resetTime"))
         reset = int(reset) if reset else None
         existing = groups.get(pool)
@@ -2322,20 +2333,56 @@ def _antigravity_cloud_summary(deadline):
     return _map_antigravity_quota_summary(data)
 
 
+def _antigravity_cli_refresh_token(config, deadline):
+    """Renew the stored Antigravity OAuth token by invoking the antigravity-usage
+    CLI (which owns OAuth refresh) purely for that side effect; the response is
+    discarded.
+
+    The cloud quota-summary route deliberately never refreshes an expired token,
+    and these tokens live only ~1 hour. When the IDE is closed (no local RPC
+    route) the summary cache would otherwise freeze at a window-start snapshot
+    once the token lapses — and because a still-"alive" stale summary is served,
+    the render path never falls through to the token-refreshing CLI usage path.
+    Renewing here, in the background refresher, breaks that deadlock. Returns
+    True when the CLI ran within the remaining budget. Never raises.
+    """
+    remaining = deadline - time.time()
+    if remaining <= 1.0:
+        return False
+    config = config if isinstance(config, dict) else {}
+    bin_path = str(config.get("bin") or "antigravity-usage")
+    try:
+        subprocess.run(
+            [bin_path, "quota", "--json", "--method", "auto"],
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, min(6.0, remaining)),
+        )
+        return True
+    except Exception:
+        return False
+
+
 def refresh_antigravity_cache(config=None):
     """Refresh the Antigravity two-pool quota-summary cache (5h + weekly per
     pool) from the RetrieveUserQuotaSummary RPC.
 
     Tries the local Antigravity language-server route first, then the cloud route
-    with the stored OAuth bearer. Never clobbers a prior cache on failure (writes
-    only on a mapped, available record). All CSRF/token material stays in memory
-    only. Runs under a hard overall deadline. Meant to be called from the
-    detached provider refresher, never on the render path.
+    with the stored OAuth bearer. If both fail (typically an expired ~1h OAuth
+    token that the cloud route can't renew on its own), renews the token via the
+    antigravity-usage CLI and retries the cloud route once — so the cache tracks
+    reality instead of freezing at a window-start snapshot while the IDE is
+    closed. Never clobbers a prior cache on failure (writes only on a mapped,
+    available record). All CSRF/token material stays in memory only. Runs under a
+    hard overall deadline. Meant to be called from the detached provider
+    refresher, never on the render path.
     """
     deadline = time.time() + ANTIGRAVITY_REFRESH_BUDGET
     try:
         summary = _antigravity_local_summary(deadline)
         if summary is None:
+            summary = _antigravity_cloud_summary(deadline)
+        if summary is None and _antigravity_cli_refresh_token(config, deadline):
             summary = _antigravity_cloud_summary(deadline)
         if not summary:
             return False

@@ -801,6 +801,54 @@ def test_antigravity_cli_snapshot_old_lineup_lands_in_gemini_pool():
     assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Gemini", 40)]
 
 
+def test_antigravity_cli_snapshot_maps_exhausted_claude_via_isexhausted():
+    """Antigravity meters Claude (Opus/Sonnet) and GPT models as a binary
+    isExhausted flag with NO remainingPercentage. An exhausted Claude model must
+    surface the Claude+GPT pool at 100% (not vanish for lack of a percentage)."""
+    snapshot = {
+        "models": [
+            {"label": "Gemini 3.1 Pro (High)", "modelId": "gemini-3.1-pro-high", "remainingPercentage": 0.7},
+            {
+                "label": "Claude Opus 4.6 (Thinking)",
+                "modelId": "claude-opus-4-6-thinking",
+                "isExhausted": True,
+                "resetTime": "2026-07-14T13:46:21Z",
+            },
+        ]
+    }
+
+    metrics = providers._map_antigravity_snapshot(snapshot)
+
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [
+        ("Gemini", 30),
+        ("Claude+GPT", 100),
+    ]
+    # The exhausted model's resetTime is carried through for the countdown.
+    claude = next(m for m in metrics if m["label"] == "Claude+GPT")
+    assert claude["resets_at"] == 1784036781  # 2026-07-14T13:46:21Z
+
+
+def test_antigravity_cli_snapshot_skips_healthy_unmetered_claude():
+    """A not-exhausted Claude/GPT model with no remainingPercentage carries no
+    usable figure — it must NOT fabricate a Claude+GPT 0% row (that false 0% is
+    exactly what masked a maxed Opus). Only the metered Gemini pool shows."""
+    snapshot = {
+        "models": [
+            {"label": "Gemini 3 Flash", "modelId": "gemini-3-flash", "remainingPercentage": 0.55},
+            {
+                "label": "Claude Opus 4.6 (Thinking)",
+                "modelId": "claude-opus-4-6-thinking",
+                "isExhausted": False,
+                "resetTime": "2026-07-14T13:46:21Z",
+            },
+        ]
+    }
+
+    metrics = providers._map_antigravity_snapshot(snapshot)
+
+    assert [(metric["label"], metric["used_pct"]) for metric in metrics] == [("Gemini", 45)]
+
+
 def test_provider_row_parts_omit_past_reset_countdown():
     row = providers.format_provider_row_parts(
         {
@@ -1000,9 +1048,61 @@ def test_refresh_antigravity_cache_never_clobbers_on_failure(tmp_path, monkeypat
     # Both transports fail — refresh must leave the prior cache byte-for-byte intact.
     monkeypatch.setattr(providers, "_antigravity_local_summary", lambda deadline: None)
     monkeypatch.setattr(providers, "_antigravity_cloud_summary", lambda deadline: None)
+    # Keep it hermetic: no shelling out to the real antigravity-usage CLI.
+    monkeypatch.setattr(providers, "_antigravity_cli_refresh_token", lambda config, deadline: False)
 
     assert providers.refresh_antigravity_cache({}) is False
     assert json.loads(cache_path.read_text(encoding="utf-8")) == prior
+
+
+def test_refresh_antigravity_cache_renews_expired_token_then_retries_cloud(tmp_path, monkeypatch):
+    """The core fix for the frozen AGY meter: when local+cloud both fail (an
+    expired ~1h OAuth token the cloud route can't renew), the refresher renews
+    the token via the CLI and retries the cloud route once — recovering a live
+    quota-summary instead of serving a stale window-start snapshot."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    summary = providers._map_antigravity_quota_summary(_quota_summary_fixture())
+    monkeypatch.setattr(providers, "_antigravity_local_summary", lambda deadline: None)
+
+    cloud_calls = {"n": 0}
+
+    def cloud(deadline):
+        cloud_calls["n"] += 1
+        return None if cloud_calls["n"] == 1 else summary  # expired first, live after renewal
+
+    refresh_calls = {"n": 0}
+
+    def renew(config, deadline):
+        refresh_calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(providers, "_antigravity_cloud_summary", cloud)
+    monkeypatch.setattr(providers, "_antigravity_cli_refresh_token", renew)
+
+    assert providers.refresh_antigravity_cache({}) is True
+    assert cloud_calls["n"] == 2 and refresh_calls["n"] == 1  # renew once, retry cloud once
+    cache = json.loads((tmp_path / ".claude" / "statusline-usage-antigravity.json").read_text(encoding="utf-8"))
+    assert cache["record"]["source"] == "quota-summary"
+    assert [p["plan"] for p in cache["record"]["all_plans"]] == ["gemini", "claude+gpt"]
+
+
+def test_refresh_antigravity_cache_skips_cloud_retry_when_token_renewal_fails(tmp_path, monkeypatch):
+    """If the token can't be renewed (logged out / no CLI), don't burn a second
+    cloud round-trip — fail cleanly and leave any prior cache untouched."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(providers, "_antigravity_local_summary", lambda deadline: None)
+
+    cloud_calls = {"n": 0}
+
+    def cloud(deadline):
+        cloud_calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(providers, "_antigravity_cloud_summary", cloud)
+    monkeypatch.setattr(providers, "_antigravity_cli_refresh_token", lambda config, deadline: False)
+
+    assert providers.refresh_antigravity_cache({}) is False
+    assert cloud_calls["n"] == 1  # no retry when renewal fails
 
 
 def test_get_antigravity_usage_prefers_fresh_quota_summary_cache(tmp_path, monkeypatch):
