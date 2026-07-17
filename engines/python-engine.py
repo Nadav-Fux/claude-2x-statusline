@@ -1366,8 +1366,19 @@ def seg_rate_limits(ctx):
 
     # Refresh if needed
     if usage_data is None:
+        # Backoff guard: a failed fetch (the usage endpoint 429-ing, network,
+        # timeout) must NOT be retried on every render. Without this, once the
+        # endpoint rate-limits us the cache mtime never advances, so every
+        # render fires another request -- which hammers an already rate-limited
+        # endpoint and keeps it limited for hours. On failure we set a deadline
+        # and skip the fetch until it passes, serving the stale cache meanwhile.
+        backoff_file = cache_dir / "statusline-usage-cache.backoff"
+        try:
+            backoff_until = float(backoff_file.read_text())
+        except Exception:
+            backoff_until = 0.0
         token = _get_oauth_token()
-        if token:
+        if token and now >= backoff_until:
             try:
                 import urllib.request
                 req = urllib.request.Request(
@@ -1387,8 +1398,18 @@ def seg_rate_limits(ctx):
                         os.chmod(cache_file, 0o600)
                     except Exception:
                         pass
+                    # Success: clear any prior backoff so we resume the 60s cadence.
+                    try:
+                        backoff_file.unlink()
+                    except Exception:
+                        pass
             except Exception:
-                pass
+                # Failure: defer the next fetch ~5 min. Leaves the cache mtime
+                # untouched so the 'stale' marker stays honest.
+                try:
+                    backoff_file.write_text(str(now + 300))
+                except Exception:
+                    pass
 
         # Fallback to stale cache
         if usage_data is None and cache_file.exists():
