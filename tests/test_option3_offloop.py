@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -102,3 +103,68 @@ def test_rate_limits_line_renders_sonnet_and_schedule_labels(monkeypatch):
     assert "weekly interactive" in line
     assert "sonnet" in line
     assert "35%" in line
+
+
+def test_fable_meter_rides_the_codex_row(monkeypatch):
+    """The model-scoped weekly meter (e.g. Fable) is appended to the RIGHT of the
+    Codex external row -- never a standalone row under the Claude line -- and
+    carries no reset stamp (it shares the Anthropic weekly clock)."""
+    _require_engine()
+
+    limits = [
+        {
+            "kind": "weekly_scoped",
+            "group": "weekly",
+            "percent": 24,
+            "is_active": True,
+            "resets_at": "2026-07-25T02:00:00.396083+00:00",
+            "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+        }
+    ]
+
+    # (a) The Claude rate-limit line must NOT carry Fable anymore.
+    monkeypatch.setattr(engine, "_check_offloop_drain", lambda _ctx, _usage: "")
+    claude_line = engine.build_rate_limits_line(
+        {
+            "usage_data": {
+                "five_hour": {"utilization": 5, "resets_at": "2026-06-10T12:00:00Z"},
+                "seven_day": {"utilization": 17, "resets_at": "2026-06-11T12:00:00Z"},
+                "limits": limits,
+            }
+        }
+    )
+    assert "Fable" not in claude_line
+
+    # (b) Fable rides the Codex external row, to its right, with no reset stamp.
+    def _fake_collect(config, only=None):
+        return [{"provider": "codex", "available": True}]
+
+    def _fake_row(record, now_sec, **kwargs):
+        return {
+            "label": "Codex",
+            "parts": [
+                {"kind": "label", "label": "Codex", "plan": "team"},
+                {"kind": "window", "label": "7d", "pct": 27, "reset_text": ""},
+            ],
+        }
+
+    monkeypatch.setattr(engine._usage_providers, "collect_external_usage", _fake_collect)
+    monkeypatch.setattr(engine._usage_providers, "format_provider_row_parts", _fake_row)
+
+    ctx = {
+        "config": {"external_providers": {"enabled": True, "codex": {"enabled": True}}},
+        "is_multi_cli": True,
+        "render_width": 0,
+        "usage_data": {"limits": limits},
+    }
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", engine.build_external_usage_lines(ctx))
+    codex_lines = [line for line in plain.splitlines() if "Codex" in line]
+
+    assert len(codex_lines) == 1, plain
+    assert "Fable" in codex_lines[0]
+    assert "wk" in codex_lines[0]
+    assert "24%" in codex_lines[0]
+    # No reset stamp on the Fable segment.
+    assert "⟳" not in codex_lines[0].split("Fable", 1)[1]
+    # Fable only ever appears on the Codex line -- never a standalone row.
+    assert all("Codex" in line for line in plain.splitlines() if "Fable" in line)

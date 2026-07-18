@@ -1997,6 +1997,25 @@ def build_external_usage_lines(ctx):
 
     now_sec = time.time()
 
+    # Model-scoped weekly limit (e.g. "Fable") rides on the Codex row, appended
+    # to its right. It resets on the same weekly clock as the Anthropic weekly,
+    # so it carries no reset stamp of its own (keeps the row tight).
+    usage_data = ctx.get("usage_data") or {}
+    scoped_model_part = ""
+    for _entry in (usage_data.get("limits") or []):
+        if not isinstance(_entry, dict) or _entry.get("kind") != "weekly_scoped":
+            continue
+        _model_name = ((_entry.get("scope") or {}).get("model") or {}).get("display_name")
+        if not _model_name:
+            continue
+        _sc_pct = int(_entry.get("percent", 0))
+        scoped_model_part = (
+            f"{WHITE}{_model_name}{RST} {DIM}wk{RST} "
+            f"{build_usage_bar(_sc_pct, 10, long_window=True)} "
+            f"{color_for_pct(_sc_pct, long_window=True)}{_sc_pct:3d}%{RST}"
+        )
+        break
+
     # External records carry resets_at as epoch seconds; convert to the engine's
     # _format_reset so the row shows an absolute end-time (⟳ 12:00pm /
     # ⟳ 4/7 5:00am) exactly like the Claude rate-limit line above.
@@ -2016,20 +2035,27 @@ def build_external_usage_lines(ctx):
         except Exception:
             pass
 
-    def _rows_to_lines(row):
+    def _rows_to_lines(row, extra_parts=None):
         out = []
         if not row:
             return out
         sub_rows = row.get("sub_rows") if isinstance(row.get("sub_rows"), list) and row.get("sub_rows") else [row]
-        for sub in sub_rows:
-            out.append(render_dashboard_line([_render_external_provider_parts(sub)], ctx.get("render_width", 0)))
+        for _i, sub in enumerate(sub_rows):
+            parts = [_render_external_provider_parts(sub)]
+            # Extra dashboard parts (e.g. the model-scoped Fable meter riding the
+            # Codex row) attach to the last sub-row only, so they render once.
+            if extra_parts and _i == len(sub_rows) - 1:
+                parts.extend(extra_parts)
+            out.append(render_dashboard_line(parts, ctx.get("render_width", 0)))
         return out
 
     def _render_available(record, label_width):
         row = _usage_providers.format_provider_row_parts(
             record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
         )
-        return _rows_to_lines(row)
+        # The model-scoped weekly meter (Fable) rides the Codex row only.
+        extra = [scoped_model_part] if (scoped_model_part and record.get("provider") == "codex") else None
+        return _rows_to_lines(row, extra)
 
     def _render_available_combined(glm_record, copilot_record, label_width):
         # GLM + Copilot share one bottom-slot row — see
@@ -2121,7 +2147,9 @@ def build_external_usage_lines(ctx):
                 row = _usage_providers.format_provider_row_parts(
                     record, now_sec, label_width=label_width, format_duration=fmt_duration, format_clock=_format_clock
                 )
-            lines.extend(_rows_to_lines(row))
+            # The model-scoped weekly meter (Fable) rides the Codex row only.
+            extra = [scoped_model_part] if (scoped_model_part and provider == "codex") else None
+            lines.extend(_rows_to_lines(row, extra))
         except Exception:
             pass
     return "\n".join(lines)

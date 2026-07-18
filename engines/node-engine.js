@@ -1072,6 +1072,19 @@ async function buildExternalUsageLines(ctx) {
   let records = [];
   try { records = await usageProviders.collectExternalUsage(config || {}); } catch { return ''; }
   const nowSec = Date.now() / 1000;
+  // Model-scoped weekly limit (e.g. "Fable") rides on the Codex row, appended
+  // to its right. It resets on the same weekly clock as the Anthropic weekly,
+  // so it carries no reset stamp of its own (keeps the row tight).
+  const ud = ctx.usageData || {};
+  let scopedModelPart = '';
+  for (const entry of (ud.limits || [])) {
+    if (!entry || typeof entry !== 'object' || entry.kind !== 'weekly_scoped') continue;
+    const modelName = ((entry.scope || {}).model || {}).display_name;
+    if (!modelName) continue;
+    const scPct = Math.round(entry.percent || 0);
+    scopedModelPart = `${WHITE}${modelName}${RST} ${DIM}wk${RST} ${buildUsageBar(scPct, 10, true)} ${colorPct(scPct, true)}${String(scPct).padStart(3)}%${RST}`;
+    break;
+  }
   const candidates = [];
   for (const record of records) {
     try {
@@ -1109,9 +1122,14 @@ async function buildExternalUsageLines(ctx) {
         row = usageProviders.formatProviderRowParts(record, nowSec, { labelWidth, formatDuration: fmtDur, formatClock });
       }
       if (!row) continue;
+      // The model-scoped weekly meter (Fable) rides the Codex row only, on its
+      // last sub-row so it renders once.
+      const extra = (scopedModelPart && provider === 'codex') ? scopedModelPart : '';
       const subRows = Array.isArray(row.subRows) && row.subRows.length ? row.subRows : [row];
-      for (const sub of subRows) {
-        lines.push(renderDashboardLine([renderExternalProviderParts(sub)], ctx.renderWidth || 0));
+      for (let i = 0; i < subRows.length; i++) {
+        const parts = [renderExternalProviderParts(subRows[i])];
+        if (extra && i === subRows.length - 1) parts.push(extra);
+        lines.push(renderDashboardLine(parts, ctx.renderWidth || 0));
       }
     } catch {}
   }
