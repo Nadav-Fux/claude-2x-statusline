@@ -1055,6 +1055,33 @@ def test_refresh_antigravity_cache_never_clobbers_on_failure(tmp_path, monkeypat
     assert json.loads(cache_path.read_text(encoding="utf-8")) == prior
 
 
+def test_antigravity_local_process_skips_junk_csrf_and_reads_https_port(monkeypatch):
+    """Regression: during a language-server restart a transient/decoy process can
+    match the signals but mis-split into a junk CSRF (a bare "/"). The scanner
+    must skip it and return the real server line — which carries a valid token and
+    the current ``--https_server_port`` arg — instead of stranding the refresh on
+    the laggy cloud route. Real port is 0 (dynamic), so it defers to lsof (None)."""
+    ps_out = "\n".join(
+        (
+            "HEADER line that ps prints first and should be ignored entirely here",
+            # Decoy: matches on "--csrf_token" but the value mis-splits to "/".
+            "nadavfux  42560  0.0  0.1 100 200 ?? S 2:54AM 0:00.01 /Volumes/Antigravity/helper --csrf_token / --foo bar baz qux",
+            # Real language server: valid UUID-ish token + --https_server_port 0.
+            "nadavfux  40879  0.0  0.2 400 300 ?? S 2:54AM 0:00.62 /Volumes/Antigravity/Antigravity.app/Contents/Resources/bin/language_server --standalone --https_server_port 0 --csrf_token 2eba940c-a147-4084-b48a-bbf47718eb81 --app_data_dir antigravity",
+        )
+    )
+
+    class _Proc:
+        stdout = ps_out
+
+    monkeypatch.setattr(providers.subprocess, "run", lambda *a, **k: _Proc())
+
+    pid, csrf, port = providers._antigravity_local_process()
+    assert pid == 40879
+    assert csrf == "2eba940c-a147-4084-b48a-bbf47718eb81"
+    assert port is None  # --https_server_port 0 → dynamic → discovered via lsof
+
+
 def test_refresh_antigravity_cache_renews_expired_token_then_retries_cloud(tmp_path, monkeypatch):
     """The core fix for the frozen AGY meter: when local+cloud both fail (an
     expired ~1h OAuth token the cloud route can't renew), the refresher renews

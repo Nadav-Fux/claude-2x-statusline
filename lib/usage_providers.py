@@ -2157,14 +2157,49 @@ def _antigravity_extract_arg(cmdline, name):
     return None
 
 
+# A real Antigravity CSRF token is a UUID-ish alnum/hyphen string. A ps line for
+# a restarting or decoy process can mis-split into junk (e.g. a bare "/"), which
+# must never be handed on as a token.
+_ANTIGRAVITY_CSRF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{6,}$")
+
+
+def _antigravity_valid_csrf(token):
+    return bool(token) and bool(_ANTIGRAVITY_CSRF_RE.match(str(token)))
+
+
+def _antigravity_server_port(cmdline):
+    """Parse the language server's listen port from its argv. Current builds pass
+    ``--https_server_port`` (older ones ``--extension_server_port``); a value of 0
+    means 'pick a dynamic port', so the real port must come from lsof — return
+    None for it so the caller falls through to port discovery."""
+    for name in ("--https_server_port", "--extension_server_port"):
+        raw = _antigravity_extract_arg(cmdline, name)
+        if raw is None:
+            continue
+        try:
+            port = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if port > 0:
+            return str(port)
+    return None
+
+
 def _antigravity_local_process(timeout=3.0):
     """Scan ``ps aux`` for the running Antigravity language server. Returns
-    ``(pid, csrf_token, extension_server_port)``. The CSRF token lives in memory
-    only — it is never logged, cached, or passed via argv."""
+    ``(pid, csrf_token, server_port)``.
+
+    Scans EVERY candidate line and prefers the one that yields a *valid* CSRF
+    token: during an IDE/language-server restart a transient or decoy process can
+    match the signals but mis-split into a junk token (e.g. ``/``). Returning that
+    early made ``_antigravity_local_summary`` fail and the refresh fall through to
+    the laggy cloud route — which then cached a badly stale 5h snapshot for hours.
+    The CSRF token lives in memory only — never logged, cached, or passed via argv."""
     try:
         proc = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=timeout)
     except Exception:
         return None, None, None
+    fallback = None
     for line in (proc.stdout or "").splitlines():
         lower = line.lower()
         if "antigravity" not in lower or "server installation script" in lower:
@@ -2172,9 +2207,11 @@ def _antigravity_local_process(timeout=3.0):
         if not any(
             signal in line
             for signal in (
+                "language_server",
                 "language-server",
                 "lsp",
                 "--csrf_token",
+                "--https_server_port",
                 "--extension_server_port",
                 "exa.language_server_pb",
             )
@@ -2188,12 +2225,16 @@ def _antigravity_local_process(timeout=3.0):
         except ValueError:
             continue
         cmdline = " ".join(parts[10:])
-        return (
-            pid,
-            _antigravity_extract_arg(cmdline, "--csrf_token"),
-            _antigravity_extract_arg(cmdline, "--extension_server_port"),
-        )
-    return None, None, None
+        raw_csrf = _antigravity_extract_arg(cmdline, "--csrf_token")
+        port = _antigravity_server_port(cmdline)
+        if _antigravity_valid_csrf(raw_csrf):
+            return pid, raw_csrf, port
+        # No usable token on this line — remember the first live pid as a last
+        # resort (lsof can still find its port), but keep scanning for the real
+        # server rather than returning junk here.
+        if fallback is None:
+            fallback = (pid, None, port)
+    return fallback if fallback is not None else (None, None, None)
 
 
 def _antigravity_listen_ports(pid, timeout=3.0):
