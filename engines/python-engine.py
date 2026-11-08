@@ -892,8 +892,31 @@ def _mins_until_next_peak(now, peak_days, start_local_hour):
 seg_promo_2x = seg_peak_hours
 
 
+# Python-engine only: pretty names for Kimi K-series model ids (node/bash engines untouched).
+_KIMI_MODEL_NAMES = {
+    "k3[1m]": "Kimi K3 (1M)",
+    "k3": "Kimi K3",
+    "kimi-for-coding": "Kimi K2.7",
+}
+
+
+def _prettify_kimi_model(name):
+    pretty = _KIMI_MODEL_NAMES.get(str(name or "").strip().lower())
+    if not pretty:
+        return ""
+    effort = os.environ.get("CLAUDE_CODE_EFFORT_LEVEL", "").strip()
+    return f"{pretty} ⚡{effort}" if effort else pretty
+
+
 def seg_model(ctx):
-    name = ctx["stdin"].get("model", {}).get("display_name", "")
+    model = ctx["stdin"].get("model", {})
+    name = model.get("display_name", "")
+    # Kimi check runs BEFORE the empty-name guard: a foreign model can have an
+    # empty display_name but a usable id (e.g. "k3[1m]"), so fall back to id.
+    if (ctx.get("gateway") or {}).get("label") == "Kimi":
+        pretty = _prettify_kimi_model(name) or _prettify_kimi_model(model.get("id", ""))
+        if pretty:
+            return f"{BLUE}{pretty}{RST}"
     if not name:
         return ""
     short = name.split("(")[0].strip()
